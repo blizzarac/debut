@@ -33,6 +33,7 @@ pub fn run() {
             ipc::open_sequence,
             ipc::add_clip,
             ipc::add_title,
+            ipc::title_templates,
             ipc::add_multicam,
             ipc::switch_angle,
             ipc::set_title,

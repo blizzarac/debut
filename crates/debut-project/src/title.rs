@@ -29,6 +29,10 @@ pub struct TitleStyle {
     /// Box behind the text; alpha 0 = none.
     pub background: [u8; 4],
     pub padding_px: f32,
+    /// Widen the raster (and its box) to at least this many pixels; text aligns
+    /// inside per `align`. 0 = fit the text.
+    #[serde(default)]
+    pub min_width_px: f32,
 }
 
 impl Default for TitleStyle {
@@ -46,6 +50,7 @@ impl Default for TitleStyle {
             shadow_color: [0, 0, 0, 160],
             background: [0, 0, 0, 0],
             padding_px: 0.0,
+            min_width_px: 0.0,
         }
     }
 }

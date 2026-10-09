@@ -766,7 +766,30 @@ impl Session {
     /// Add a 5 s title clip at `at` seconds on the topmost video track with room
     /// for it, adding a video track above the others when none has (GFX-01).
     pub fn add_title(&mut self, at: f64, text: String) -> Result<String, String> {
-        let (seq_id, fr, free_track, above_video) = {
+        self.add_title_from(at, text, None)
+    }
+
+    /// Title templates (GFX-02) the app can offer.
+    pub fn title_templates(&self) -> Vec<TemplateDto> {
+        debut_graphics::TEMPLATES
+            .iter()
+            .map(|t| TemplateDto {
+                id: t.id.to_string(),
+                name: t.name.to_string(),
+                description: t.description.to_string(),
+            })
+            .collect()
+    }
+
+    /// `add_title` with a template: style and animated Transform sized for
+    /// this sequence. `None` is the plain default title.
+    pub fn add_title_from(
+        &mut self,
+        at: f64,
+        text: String,
+        template: Option<String>,
+    ) -> Result<String, String> {
+        let (seq_id, fr, free_track, above_video, size) = {
             let seq = self.first_sequence()?;
             let start = frames_of(at, fr_of(seq));
             let end = start + Rational::from_int(TITLE_SECONDS);
@@ -788,19 +811,39 @@ impl Session {
                 .iter()
                 .rposition(|t| t.kind == TrackKind::Video)
                 .map_or(seq.tracks.len(), |i| i + 1);
-            (seq.id, seq.frame_rate, free, above_video)
+            (
+                seq.id,
+                seq.frame_rate,
+                free,
+                above_video,
+                (seq.width, seq.height),
+            )
         };
         let start = frames_of(at, fr);
-        let clip = Clip::new(
+        let duration = Rational::from_int(TITLE_SECONDS);
+        let (title, effects) = match template.as_deref() {
+            None => (
+                Title {
+                    text,
+                    style: TitleStyle::default(),
+                },
+                Vec::new(),
+            ),
+            Some(id) => {
+                let built =
+                    debut_graphics::build_title_template(id, &text, size.0, size.1, duration)
+                        .ok_or_else(|| format!("unknown title template {id}"))?;
+                (built.title, built.effects)
+            }
+        };
+        let mut clip = Clip::new(
             self.ids.fresh(),
-            ClipSource::Title(Title {
-                text,
-                style: TitleStyle::default(),
-            }),
+            ClipSource::Title(title),
             start,
-            Rational::from_int(TITLE_SECONDS),
+            duration,
             Rational::ZERO,
         );
+        clip.effects = effects;
         let clip_id = clip.id;
         let mut cmds = Vec::new();
         let track_id = match free_track {
@@ -2150,9 +2193,26 @@ pub fn switch_angle(
     lock(&state).switch_angle(&track, &clip, angle, cut)
 }
 
+#[derive(Serialize)]
+pub struct TemplateDto {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+}
+
 #[tauri::command]
-pub fn add_title(state: State<'_, Shared>, at: f64, text: String) -> Result<String, String> {
-    lock(&state).add_title(at, text)
+pub fn add_title(
+    state: State<'_, Shared>,
+    at: f64,
+    text: String,
+    template: Option<String>,
+) -> Result<String, String> {
+    lock(&state).add_title_from(at, text, template)
+}
+
+#[tauri::command]
+pub fn title_templates(state: State<'_, Shared>) -> Vec<TemplateDto> {
+    lock(&state).title_templates()
 }
 
 #[tauri::command]
@@ -2498,6 +2558,42 @@ mod tests {
             s.set_title(&v, &clip_id, edited).is_err(),
             "media clips have no title"
         );
+        // A lower-third template lands with its animated Transform; at the clip's
+        // start it is still off screen (frame unchanged), parked by 1 s in.
+        assert!(s.title_templates().iter().any(|t| t.id == "lower_third"));
+        assert!(s
+            .add_title_from(0.0, "x".into(), Some("nope".into()))
+            .is_err());
+        s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+        let (_, _, no_lt) = s.frame_pixels().unwrap();
+        let lt = s
+            .add_title_from(1.0, "Name".into(), Some("lower_third".into()))
+            .unwrap();
+        let after = sequence_dto(s.first_sequence().unwrap());
+        let (lt_track, lt_clip) = after
+            .tracks
+            .iter()
+            .find_map(|t| {
+                t.clips
+                    .iter()
+                    .find(|c| c.id == lt)
+                    .map(|c| (t.id.clone(), c))
+            })
+            .unwrap();
+        assert_eq!(lt_clip.title.as_ref().unwrap().style.min_width_px, 32.0);
+        let fx = s.clip_effects(&lt_track, &lt).unwrap();
+        assert_eq!(fx[0].kind, "transform");
+        let (_, _, at_start) = s.frame_pixels().unwrap();
+        assert_eq!(at_start, no_lt, "slides in from off screen");
+        s.transport(TransportAction::Seek { t: 2.0 }).unwrap();
+        let (_, _, parked) = s.frame_pixels().unwrap();
+        assert_ne!(parked, no_lt, "visible once parked");
+        s.edit(EditOp::Lift {
+            track: lt_track.clone(),
+            start: 1.0,
+            end: 6.0,
+        })
+        .unwrap();
         // Captions (GFX-05/06): burned in near the bottom while active, SRT round trip.
         s.transport(TransportAction::Seek { t: 1.4 }).unwrap();
         let (_, _, bare) = s.frame_pixels().unwrap();
@@ -2639,7 +2735,11 @@ mod tests {
             (v1[1].timeline_in, v1[1].duration, v1[1].nested.is_some()),
             (1.0, 1.0, true)
         );
-        assert!(dto.tracks[2].clips.iter().any(|c| c.nested.is_some()));
+        assert!(dto
+            .tracks
+            .iter()
+            .filter(|t| t.kind == "audio")
+            .any(|t| t.clips.iter().any(|c| c.nested.is_some())));
         let (_, _, nested_px) = s.frame_pixels().unwrap();
         let worst = flat
             .iter()
@@ -2804,8 +2904,9 @@ mod tests {
         .unwrap();
         s.add_insert(&a, "limiter").unwrap();
         let dto = sequence_dto(s.first_sequence().unwrap());
-        assert_eq!(dto.tracks[2].mix.gain_db, -6.0);
-        assert_eq!(dto.tracks[2].inserts, vec!["Limiter".to_string()]);
+        let a_track = dto.tracks.iter().find(|t| t.id == a).unwrap();
+        assert_eq!(a_track.mix.gain_db, -6.0);
+        assert_eq!(a_track.inserts, vec!["Limiter".to_string()]);
         assert!(s.add_insert(&a, "nope").is_err());
 
         // Export through the queue worker, normalized to -14 LUFS.

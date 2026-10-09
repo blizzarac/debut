@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import type { ClipInfo, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, TrackInfo } from "./engine";
+import { useEffect, useRef, useState } from "react";
+import type { ClipInfo, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, TitleTemplate, TrackInfo } from "./engine";
 
 const TRACK_H = 44;
 const RULER_H = 22;
@@ -36,6 +36,11 @@ export function Timeline({
   onOpenNested?: (sequence: string) => void;
 }) {
   const [pxPerSec, setPxPerSec] = useState(120);
+  const [templates, setTemplates] = useState<TitleTemplate[]>([{ id: "title", name: "Title", description: "" }]);
+  const [template, setTemplate] = useState("title");
+  useEffect(() => {
+    media.titleTemplates().then(setTemplates).catch(() => {});
+  }, [media]);
   const setSelected = onSelect;
   const [drag, setDrag] = useState<Drag | null>(null);
   const svg = useRef<SVGSVGElement>(null);
@@ -117,14 +122,21 @@ export function Timeline({
           Nest
         </button>
         <button
-          title="Add a 5 s title at the playhead on a free video track"
+          title="Add a 5 s title of the chosen template at the playhead on a free video track"
           onClick={async () => {
-            const id = await media.addTitle(snap(position), "Title").catch(() => null);
+            const id = await media.addTitle(snap(position), template === "lower_third" ? "Name" : "Title", template).catch(() => null);
             if (id) onEdited();
           }}
         >
           + Title
         </button>
+        <select value={template} onChange={(e) => setTemplate(e.target.value)} title="Title template">
+          {templates.map((t) => (
+            <option key={t.id} value={t.id} title={t.description}>
+              {t.name}
+            </option>
+          ))}
+        </select>
         <span style={{ flex: 1 }} />
         <label style={{ fontSize: 12 }}>
           zoom <input type="range" min={20} max={600} value={pxPerSec} onChange={(e) => setPxPerSec(Number(e.target.value))} />

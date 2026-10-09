@@ -52,6 +52,14 @@ export interface TitleStyle {
   shadow_color: [number, number, number, number];
   background: [number, number, number, number];
   padding_px: number;
+  /** Widen the raster to at least this many pixels (lower-third bars). */
+  min_width_px?: number;
+}
+
+export interface TitleTemplate {
+  id: string;
+  name: string;
+  description: string;
 }
 
 export interface TitleInfo {
@@ -272,7 +280,8 @@ export interface MediaApi {
   openSequence(id: string): Promise<SequenceInfo>;
   addClip(track: string, media: string, at: number): Promise<void>;
   /** Adds a 5 s title at `at` on a free video track (adds a track if needed); returns the clip id. */
-  addTitle(at: number, text: string): Promise<string>;
+  addTitle(at: number, text: string, template?: string): Promise<string>;
+  titleTemplates(): Promise<TitleTemplate[]>;
   setTitle(track: string, clip: string, title: TitleInfo): Promise<void>;
   /** Inserts a multicam clip of two or more media at `at` (shortest angle sets the length). */
   addMulticam(at: number, media: string[]): Promise<void>;

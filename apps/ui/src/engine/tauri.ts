@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  TitleTemplate,
   SequenceListItem,
   CaptionInfo,
   CaptionEdit,
@@ -52,8 +53,11 @@ class TauriMedia implements MediaApi {
   addClip(track: string, media: string, at: number) {
     return invoke<void>("add_clip", { track, media, at });
   }
-  addTitle(at: number, text: string) {
-    return invoke<string>("add_title", { at, text });
+  addTitle(at: number, text: string, template?: string) {
+    return invoke<string>("add_title", { at, text, template: template ?? null });
+  }
+  titleTemplates() {
+    return invoke<TitleTemplate[]>("title_templates");
   }
   setTitle(track: string, clip: string, title: TitleInfo) {
     return invoke<void>("set_title", { track, clip, title });

@@ -149,9 +149,14 @@ pub fn render(text: &str, style: &TitleStyle) -> Result<Raster> {
         }
         laid.push((glyphs, x.max(0.0)));
     }
-    let text_w = laid.iter().map(|l| l.1).fold(0.0f32, f32::max).ceil();
     let text_h = (line_h * lines.len() as f32).ceil();
     let pad = (style.stroke_px + style.shadow_px.abs() + style.padding_px).ceil() + 2.0;
+    let text_w = laid
+        .iter()
+        .map(|l| l.1)
+        .fold(0.0f32, f32::max)
+        .max(style.min_width_px - 2.0 * pad)
+        .ceil();
     let width = (text_w + 2.0 * pad) as u32;
     let height = (text_h + 2.0 * pad) as u32;
     let (wu, hu) = (width as usize, height as usize);
