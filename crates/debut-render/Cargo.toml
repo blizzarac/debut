@@ -9,4 +9,7 @@ repository.workspace = true
 [dependencies]
 debut-core.workspace = true
 debut-platform.workspace = true
+debut-project.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true

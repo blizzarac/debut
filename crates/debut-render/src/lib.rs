@@ -1,15 +1,29 @@
-//! GPU render graph (FX-01 .. FX-15, PB-01, PB-03, PB-06, PB-08, PLT-04).
+//! Render graph (FX-01 .. FX-15, PB-01, PB-03, PB-06, PB-08, PLT-04).
 //!
-//! Pull-based: the viewer or exporter requests a frame at time `t`; nodes evaluate
-//! lazily upstream. All math is 16-bit float linear light under OCIO (FX-08).
-//! Shaders are WGSL in `/shaders`, shared with the browser build; preview and export
-//! run the same graph so output matches pixel for pixel.
+//! Pull-based: the viewer or exporter asks for a frame at time `t`; `compose` turns
+//! the sequence into a [`Graph`] for that instant and [`Graph::render`] evaluates it
+//! lazily, memoizing each node. All math is linear-light `f32` RGBA, premultiplied.
+//!
+//! Nodes don't touch pixels themselves: they call a [`Backend`]. The CPU backend is
+//! the reference implementation and runs in tests; the wgpu backend executes the
+//! same ops with WGSL shaders from `/shaders`. Preview and export share this graph,
+//! so output matches the viewer pixel for pixel.
 
-pub mod cache; // PB-06 content-hash keyed render cache
-pub mod color; // FX-08 .. FX-12 OCIO pipeline, LUT I/O
-pub mod graph; // node graph, pull evaluation
-pub mod keyframe; // FX-01 curves and interpolation
-pub mod nodes; // transform, blend, transition, key, mask, LUT, color wheels
-pub mod ofx;
-pub mod scopes; // PB-08 waveform, vectorscope, parade, histogram, false color
-pub mod tracking; // FX-04, FX-06 point/planar tracking, stabilization // FX-15 OpenFX bridge over PluginHost
+pub mod backend;
+pub mod cache;
+pub mod compose;
+pub mod cpu;
+pub mod graph;
+pub mod keyframe;
+
+pub mod color; // FX-08 .. FX-12 OCIO pipeline, LUT I/O (pending)
+pub mod nodes; // further node kinds: masks, keys, LUTs, color wheels (pending)
+pub mod ofx; // FX-15 OpenFX bridge over PluginHost (pending)
+pub mod scopes; // PB-08 (pending)
+pub mod tracking; // FX-04, FX-06 (pending)
+
+pub use backend::{Backend, BlendMode, FrameProvider, Rgba, Transform2D};
+pub use cache::RenderCache;
+pub use cpu::CpuBackend;
+pub use graph::{Graph, Node, NodeId};
+pub use keyframe::{Curve, Interp, Keyframe};

@@ -135,6 +135,9 @@ version = "0.1.0"
 dependencies = [
  "debut-core",
  "debut-platform",
+ "debut-project",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 
