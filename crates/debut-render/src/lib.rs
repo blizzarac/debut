@@ -23,7 +23,7 @@ pub mod ofx; // FX-15 OpenFX bridge over PluginHost (pending)
 pub mod scopes; // PB-08 waveform, vectorscope, histogram
 pub mod tracking; // FX-04, FX-06 (pending)
 
-pub use backend::{Backend, BlendMode, FrameProvider, Rgba, Transform2D};
+pub use backend::{encode_rgba8, Backend, BlendMode, FrameProvider, Rgba, Transform2D};
 pub use cache::RenderCache;
 pub use cpu::CpuBackend;
 pub use gpu::GpuBackend;
@@ -32,19 +32,41 @@ pub use gpu::GpuBackend;
 /// the CPU reference. Lets callers that only need pixels out stay generic-free.
 pub enum AnyBackend {
     Cpu(CpuBackend),
-    Gpu(GpuBackend),
+    Gpu(Box<GpuBackend>),
 }
 
 impl AnyBackend {
     pub fn detect() -> Self {
         match GpuBackend::new() {
-            Some(g) => AnyBackend::Gpu(g),
+            Some(g) => AnyBackend::Gpu(Box::new(g)),
             None => AnyBackend::Cpu(CpuBackend),
         }
     }
 
     pub fn is_gpu(&self) -> bool {
         matches!(self, AnyBackend::Gpu(_))
+    }
+
+    /// Render `graph` and read it back as straight, `transfer`-encoded RGBA8:
+    /// the output transform runs on the GPU when there is one.
+    pub fn render_rgba8(
+        &mut self,
+        graph: &Graph,
+        frames: &mut dyn FrameProvider,
+        transfer: Transfer,
+    ) -> debut_core::Result<(u32, u32, Vec<u8>)> {
+        match self {
+            AnyBackend::Cpu(b) => {
+                let img = graph.render(b, frames)?;
+                let (w, h) = b.size(&img);
+                Ok((w, h, b.download_rgba8(&img, transfer)))
+            }
+            AnyBackend::Gpu(b) => {
+                let img = graph.render(b.as_mut(), frames)?;
+                let (w, h) = b.size(&img);
+                Ok((w, h, b.download_rgba8(&img, transfer)))
+            }
+        }
     }
 
     /// Render `graph` and read the pixels back as linear premultiplied RGBA.
@@ -60,7 +82,7 @@ impl AnyBackend {
                 Ok((w, h, b.download(&img)))
             }
             AnyBackend::Gpu(b) => {
-                let img = graph.render(b, frames)?;
+                let img = graph.render(b.as_mut(), frames)?;
                 let (w, h) = b.size(&img);
                 Ok((w, h, b.download(&img)))
             }

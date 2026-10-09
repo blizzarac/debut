@@ -5,7 +5,7 @@
 //! up to float rounding.
 
 use crate::backend::{Backend, BlendMode, Rgba, Transform2D};
-use crate::color::{ColorTransform, Grade};
+use crate::color::{ColorTransform, Grade, Transfer};
 use crate::lut::Lut3d;
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
@@ -20,6 +20,7 @@ const COLOR_TRANSFORM: &str = include_str!("../../../shaders/color_transform.wgs
 const LUT3D: &str = include_str!("../../../shaders/lut3d.wgsl");
 const GRADE: &str = include_str!("../../../shaders/grade.wgsl");
 const PREMULTIPLY: &str = include_str!("../../../shaders/premultiply.wgsl");
+const OUTPUT: &str = include_str!("../../../shaders/output.wgsl");
 
 #[derive(Clone)]
 pub struct GpuImage {
@@ -78,6 +79,7 @@ struct GradeParams {
 struct Pass {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
+    target: wgpu::TextureFormat,
 }
 
 pub struct GpuBackend {
@@ -90,6 +92,7 @@ pub struct GpuBackend {
     lut3d: Pass,
     grade: Pass,
     premultiply: Pass,
+    output: Pass,
 }
 
 impl GpuBackend {
@@ -167,6 +170,16 @@ impl GpuBackend {
             std::mem::size_of::<GradeParams>(),
         );
         let premultiply = Self::pass(&device, "premultiply", "", PREMULTIPLY, 1, false, 16);
+        let output = Self::pass_to(
+            &device,
+            "output",
+            COLOR,
+            OUTPUT,
+            1,
+            false,
+            16,
+            wgpu::TextureFormat::Rgba8Unorm,
+        );
         Some(Self {
             device,
             queue,
@@ -177,6 +190,7 @@ impl GpuBackend {
             lut3d,
             grade,
             premultiply,
+            output,
         })
     }
 
@@ -190,6 +204,29 @@ impl GpuBackend {
         textures: u32,
         lut: bool,
         uniform_size: usize,
+    ) -> Pass {
+        Self::pass_to(
+            device,
+            name,
+            prelude,
+            fs,
+            textures,
+            lut,
+            uniform_size,
+            FORMAT,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn pass_to(
+        device: &wgpu::Device,
+        name: &str,
+        prelude: &str,
+        fs: &str,
+        textures: u32,
+        lut: bool,
+        uniform_size: usize,
+        target: wgpu::TextureFormat,
     ) -> Pass {
         let source = format!("{COMMON}\n{prelude}\n{fs}");
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -256,7 +293,7 @@ impl GpuBackend {
                 entry_point: Some("fs_main"),
                 compilation_options: Default::default(),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
+                    format: target,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -264,7 +301,11 @@ impl GpuBackend {
             multiview: None,
             cache: None,
         });
-        Pass { pipeline, layout }
+        Pass {
+            pipeline,
+            layout,
+            target,
+        }
     }
 
     fn texture(&self, w: u32, h: u32, label: &str) -> wgpu::Texture {
@@ -321,7 +362,7 @@ impl GpuBackend {
         h: u32,
         label: &str,
     ) -> GpuImage {
-        let out = self.texture(w, h, label);
+        let out = self.texture_with(w, h, pass.target, label);
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: uniforms.len() as u64,
@@ -390,13 +431,67 @@ impl GpuBackend {
     }
 }
 
-const BYTES_PER_PIXEL: u32 = 16;
-
-fn padded_bytes_per_row(w: u32) -> u32 {
-    let unpadded = w * BYTES_PER_PIXEL;
-    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    unpadded.div_ceil(align) * align
+impl GpuBackend {
+    /// Copy a texture to the CPU as tightly packed rows of `bpp` bytes per pixel.
+    fn read_back(&self, img: &GpuImage, bpp: u32) -> Vec<u8> {
+        let unpadded = img.w * bpp;
+        let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let bpr = unpadded.div_ceil(align) * align;
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("read_back"),
+            size: (bpr * img.h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("read_back"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &img.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bpr),
+                    rows_per_image: Some(img.h),
+                },
+            },
+            wgpu::Extent3d {
+                width: img.w,
+                height: img.h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("device poll");
+        rx.recv().expect("map callback").expect("map read");
+        let data = slice.get_mapped_range();
+        let mut out = Vec::with_capacity((unpadded * img.h) as usize);
+        for row in 0..img.h {
+            let start = (row * bpr) as usize;
+            out.extend_from_slice(&data[start..start + unpadded as usize]);
+        }
+        drop(data);
+        buffer.unmap();
+        out
+    }
 }
+
+const BYTES_PER_PIXEL: u32 = 16;
 
 impl Backend for GpuBackend {
     type Image = GpuImage;
@@ -627,60 +722,22 @@ impl Backend for GpuBackend {
         )
     }
 
-    fn download(&mut self, img: &GpuImage) -> Vec<Rgba> {
-        let bpr = padded_bytes_per_row(img.w);
-        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("download"),
-            size: (bpr * img.h) as u64,
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("download"),
-            });
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: &img.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(bpr),
-                    rows_per_image: Some(img.h),
-                },
-            },
-            wgpu::Extent3d {
-                width: img.w,
-                height: img.h,
-                depth_or_array_layers: 1,
-            },
+    fn download_rgba8(&mut self, img: &GpuImage, transfer: Transfer) -> Vec<u8> {
+        let p = [transfer as u32, 0, 0, 0];
+        let out = self.run(
+            &self.output,
+            bytemuck::bytes_of(&p),
+            &[img],
+            img.w,
+            img.h,
+            "output",
         );
-        self.queue.submit(Some(encoder.finish()));
-        let slice = buffer.slice(..);
-        let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
-            let _ = tx.send(r);
-        });
-        self.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .expect("device poll");
-        rx.recv().expect("map callback").expect("map read");
-        let data = slice.get_mapped_range();
-        let mut out = Vec::with_capacity((img.w * img.h) as usize);
-        for row in 0..img.h {
-            let start = (row * bpr) as usize;
-            let end = start + (img.w * BYTES_PER_PIXEL) as usize;
-            out.extend_from_slice(bytemuck::cast_slice::<u8, Rgba>(&data[start..end]));
-        }
-        drop(data);
-        buffer.unmap();
-        out
+        self.read_back(&out, 4)
+    }
+
+    fn download(&mut self, img: &GpuImage) -> Vec<Rgba> {
+        let bytes = self.read_back(img, BYTES_PER_PIXEL);
+        bytemuck::cast_slice::<u8, Rgba>(&bytes).to_vec()
     }
 }
 
@@ -847,6 +904,16 @@ mod tests {
         let c = cpu.grade(&ca, &grade);
         let d = max_diff(&gpu.download(&g), &cpu.download(&c));
         assert!(d < 1e-4, "grade differs by {d}");
+
+        let g8 = gpu.download_rgba8(&ga, Transfer::Srgb);
+        let c8 = cpu.download_rgba8(&ca, Transfer::Srgb);
+        let worst = g8
+            .iter()
+            .zip(&c8)
+            .map(|(x, y)| (*x as i32 - *y as i32).abs())
+            .max()
+            .unwrap();
+        assert!(worst <= 1, "rgba8 output differs by {worst}/255");
 
         let xf = Transform2D::from_srt((9, 7), (w, h), (2.5, 1.75), 0.4, (3.0, -2.0));
         let g = gpu.transform(&gs, &xf, w, h);

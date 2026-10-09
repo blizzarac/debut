@@ -57,27 +57,10 @@ impl Control {
     }
 }
 
-fn linear_to_srgb(v: f32) -> f32 {
-    let v = v.clamp(0.0, 1.0);
-    if v <= 0.003_130_8 {
-        v * 12.92
-    } else {
-        1.055 * v.powf(1.0 / 2.4) - 0.055
-    }
-}
-
-/// Linear premultiplied f32 -> display-encoded straight RGBA8 (the encoder's input).
+/// Linear premultiplied f32 -> display-encoded straight RGBA8 (the CPU reference
+/// for the GPU output pass).
 pub fn to_rgba8(px: &[Rgba]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(px.len() * 4);
-    for p in px {
-        let a = p[3];
-        let un = |c: f32| if a > 0.0 { c / a } else { 0.0 };
-        out.push((linear_to_srgb(un(p[0])) * 255.0 + 0.5) as u8);
-        out.push((linear_to_srgb(un(p[1])) * 255.0 + 0.5) as u8);
-        out.push((linear_to_srgb(un(p[2])) * 255.0 + 0.5) as u8);
-        out.push((a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
-    }
-    out
+    debut_render::encode_rgba8(px, debut_render::Transfer::Srgb)
 }
 
 /// Run `job` to completion (or cancellation) on the calling thread. `on_progress`
@@ -122,7 +105,7 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
         let graph = compose(&job.sequence, t, frames);
         let img = graph.render(backend, frames)?;
         let (w, h) = backend.size(&img);
-        let rgba8 = to_rgba8(&backend.download(&img));
+        let rgba8 = backend.download_rgba8(&img, debut_render::Transfer::Srgb);
         encoder.push_video(&VideoFrame {
             pts: t,
             width: w,

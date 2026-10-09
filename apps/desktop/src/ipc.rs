@@ -5,7 +5,6 @@ use debut_audio::normalize_gain;
 use debut_command::{Command, Target};
 use debut_core::{ClipId, FrameRate, IdGen, MediaId, Rational, TrackId};
 use debut_engine::{Player, Stats, Workspace};
-use debut_export::job::to_rgba8;
 use debut_export::{export, measure_loudness, ExportJob, ExportQueue, JobId, JobState, Preset};
 use debut_platform::audio_out::AudioOut;
 
@@ -693,10 +692,9 @@ impl Session {
         } = self;
         let p = player.as_mut().ok_or("no sequence")?;
         let graph = p.current_graph();
-        let (w, h, px) = backend
-            .render_pixels(&graph, &mut p.frames)
+        let (w, h, out) = backend
+            .render_rgba8(&graph, &mut p.frames, debut_render::Transfer::Srgb)
             .map_err(|e| e.to_string())?;
-        let out = to_rgba8(&px);
         let cost = started.elapsed();
         // Exponential moving average so one slow frame doesn't flip the mode.
         self.frame_cost = Some(match self.frame_cost {
@@ -1139,7 +1137,7 @@ impl Session {
                             ),
                             AnyBackend::Gpu(b) => export(
                                 &job,
-                                b,
+                                b.as_mut(),
                                 &mut frames,
                                 &mut samples,
                                 &mut encoder,

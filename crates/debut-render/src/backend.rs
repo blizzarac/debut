@@ -1,7 +1,7 @@
 //! The op set every backend implements. Kept deliberately small: nodes are built
 //! from these, so a new backend (or a conformance test between two) is bounded.
 
-use crate::color::{ColorTransform, Grade};
+use crate::color::{encode, ColorTransform, Grade, Transfer};
 use crate::lut::Lut3d;
 use debut_core::{MediaId, Rational, Result};
 use serde::{Deserialize, Serialize};
@@ -118,4 +118,24 @@ pub trait Backend {
     /// Primary grade on un-premultiplied scene-linear RGB (FX-09).
     fn grade(&mut self, src: &Self::Image, grade: &Grade) -> Self::Image;
     fn download(&mut self, img: &Self::Image) -> Vec<Rgba>;
+    /// Read back as straight-alpha 8-bit, encoded with `transfer` (the viewer's
+    /// and the encoder's input). Backends override this to do it on the GPU.
+    fn download_rgba8(&mut self, img: &Self::Image, transfer: Transfer) -> Vec<u8> {
+        encode_rgba8(&self.download(img), transfer)
+    }
+}
+
+/// Premultiplied linear-ish f32 -> straight, `transfer`-encoded RGBA8.
+pub fn encode_rgba8(px: &[Rgba], transfer: Transfer) -> Vec<u8> {
+    let mut out = Vec::with_capacity(px.len() * 4);
+    for p in px {
+        let a = p[3];
+        let un = |c: f32| if a > 0.0 { c / a } else { 0.0 };
+        let q = |c: f32| (encode(transfer, un(c)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+        out.push(q(p[0]));
+        out.push(q(p[1]));
+        out.push(q(p[2]));
+        out.push((a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+    }
+    out
 }
