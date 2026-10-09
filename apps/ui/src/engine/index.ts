@@ -137,7 +137,7 @@ export interface ExportStatus {
 export interface ExportApi {
   presets(): Promise<ExportPreset[]>;
   /** Queue an export of the whole sequence; `normalize` is a LUFS target or null. */
-  start(output: string, preset: string, normalize: number | null): Promise<number>;
+  start(output: string, preset: string, normalize: number | null, captionSidecar?: boolean): Promise<number>;
   status(): Promise<ExportStatus[]>;
   pause(id: number): Promise<void>;
   resume(id: number): Promise<void>;
@@ -254,8 +254,22 @@ export interface CaptionEdit {
   text?: string;
 }
 
+export type CaptionPosition = "bottom" | "top";
+
+/** Burn-in look of a sequence's captions; sizes are for 1080 lines and scale. */
+export interface CaptionSettings {
+  burn_in: boolean;
+  position: CaptionPosition;
+  font: string;
+  size_px: number;
+  color: [number, number, number, number];
+  background: [number, number, number, number];
+}
+
 export interface CaptionsApi {
   list(): Promise<CaptionInfo[]>;
+  settings(): Promise<CaptionSettings>;
+  setSettings(settings: CaptionSettings): Promise<void>;
   add(start: number, end: number, text: string): Promise<string>;
   update(id: string, edit: CaptionEdit): Promise<void>;
   remove(id: string): Promise<void>;

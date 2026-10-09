@@ -8,6 +8,6 @@ pub mod templates; // GFX-02 title / lower-third templates
 pub mod text; // GFX-01 text layout and rasterization
 pub mod transcribe; // GFX-04 speech-to-text, speaker labels (feeds TL-13, MED-08) // GFX-07 .. GFX-10, FX-14, AUD-07 model host and opt-in policy
 
-pub use captions::{format_srt, parse_srt, Cue};
+pub use captions::{format_srt, format_vtt, parse_srt, Cue};
 pub use templates::{build as build_title_template, Built as BuiltTitle, Template, TEMPLATES};
 pub use text::{find_font, render as render_title, Raster};

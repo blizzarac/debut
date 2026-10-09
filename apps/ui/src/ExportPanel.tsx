@@ -8,6 +8,7 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
   const [preset, setPreset] = useState("");
   const [output, setOutput] = useState("");
   const [normalize, setNormalize] = useState(true);
+  const [sidecar, setSidecar] = useState(true);
   const [jobs, setJobs] = useState<ExportStatus[]>([]);
   const [error, setError] = useState("");
 
@@ -28,7 +29,7 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
   async function start() {
     setError("");
     try {
-      await exporter.start(output, preset, normalize ? target : null);
+      await exporter.start(output, preset, normalize ? target : null, sidecar);
     } catch (e) {
       setError(String(e));
     }
@@ -46,6 +47,9 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
         </select>
         <label>
           <input type="checkbox" checked={normalize} onChange={(e) => setNormalize(e.target.checked)} /> normalize to {target} LUFS
+        </label>
+        <label title="Also write the captions as an .srt next to the movie">
+          <input type="checkbox" checked={sidecar} onChange={(e) => setSidecar(e.target.checked)} /> .srt sidecar
         </label>
         <input value={output} onChange={(e) => setOutput(e.target.value)} placeholder="/path/to/output.mp4" style={{ flex: 1, minWidth: 160 }} />
         <button onClick={start} disabled={!output || !preset}>

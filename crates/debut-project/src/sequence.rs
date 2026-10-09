@@ -20,6 +20,9 @@ pub struct Sequence {
     /// Captions, kept sorted by start (GFX-05).
     #[serde(default)]
     pub captions: Vec<crate::caption::Caption>,
+    /// How captions are burned in (GFX-06).
+    #[serde(default)]
+    pub caption_settings: crate::caption::CaptionSettings,
 }
 
 impl Sequence {
@@ -39,6 +42,7 @@ impl Sequence {
             tracks: Vec::new(),
             markers: Vec::new(),
             captions: Vec::new(),
+            caption_settings: Default::default(),
         }
     }
 

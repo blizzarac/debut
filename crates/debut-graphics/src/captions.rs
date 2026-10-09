@@ -25,15 +25,35 @@ fn parse_time(s: &str) -> Option<Rational> {
     ))
 }
 
-fn format_time(t: Rational) -> String {
+fn format_time_sep(t: Rational, sep: char) -> String {
     let ms = (t * Rational::from_int(1000)).round().max(0);
     format!(
-        "{:02}:{:02}:{:02},{:03}",
+        "{:02}:{:02}:{:02}{sep}{:03}",
         ms / 3_600_000,
         ms / 60_000 % 60,
         ms / 1000 % 60,
         ms % 1000
     )
+}
+
+fn format_time(t: Rational) -> String {
+    format_time_sep(t, ',')
+}
+
+/// Format cues as WebVTT (GFX-06).
+pub fn format_vtt<'a>(cues: impl IntoIterator<Item = (Rational, Rational, &'a str)>) -> String {
+    let mut rows: Vec<(Rational, Rational, &str)> = cues.into_iter().collect();
+    rows.sort_by_key(|c| c.0);
+    let mut out = String::from("WEBVTT\n\n");
+    for (start, end, text) in rows {
+        out.push_str(&format!(
+            "{} --> {}\n{}\n\n",
+            format_time_sep(start, '.'),
+            format_time_sep(end, '.'),
+            text.trim()
+        ));
+    }
+    out
 }
 
 /// Parse SRT text. Cue numbers are optional; malformed blocks are errors so a
@@ -42,6 +62,10 @@ pub fn parse_srt(text: &str) -> Result<Vec<Cue>> {
     let text = text.trim_start_matches('\u{feff}').replace("\r\n", "\n");
     let mut cues = Vec::new();
     for block in text.split("\n\n").map(str::trim).filter(|b| !b.is_empty()) {
+        // WebVTT header and comment blocks carry no cue.
+        if block.starts_with("WEBVTT") || block.starts_with("NOTE") || block.starts_with("STYLE") {
+            continue;
+        }
         let mut lines = block.lines();
         let mut first = lines.next().unwrap_or("");
         // Optional index line.
@@ -113,5 +137,9 @@ mod tests {
         assert_eq!(parse_srt(&out).unwrap(), cues);
         assert!(parse_srt("00:00:02,000 --> 00:00:01,000\nbackwards").is_err());
         assert!(parse_srt("not a cue").is_err());
+        // VTT round trip through the same parser.
+        let vtt = format_vtt(cues.iter().map(|c| (c.0, c.1, c.2.as_str())));
+        assert!(vtt.starts_with("WEBVTT\n\n00:00:01.500 --> 00:00:03.000\nHello\nworld\n\n"));
+        assert_eq!(parse_srt(&vtt).unwrap(), cues);
     }
 }

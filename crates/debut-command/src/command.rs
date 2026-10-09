@@ -17,7 +17,7 @@ use debut_project::{
     AudioEffect, Clip, ClipSource, Effect, Marker, Param, Project, Sequence, Track, TrackMix,
     Transition,
 };
-use debut_project::{Bin, Caption};
+use debut_project::{Bin, Caption, CaptionSettings};
 use serde::{Deserialize, Serialize};
 
 /// Where a marker lives: on the sequence, or on one clip (clip-local time).
@@ -170,6 +170,10 @@ pub enum Command {
     UpdateCaption {
         sequence: SequenceId,
         caption: Caption,
+    },
+    SetCaptionSettings {
+        sequence: SequenceId,
+        settings: CaptionSettings,
     },
     /// Set or clear the transition into `clip` from its predecessor (FX-03).
     SetTransition {
@@ -523,6 +527,13 @@ impl Command {
                     .ok_or_else(|| Error::NotFound(format!("caption {:?}", caption.id)))?;
                 *slot = caption.clone();
                 list.sort_by_key(|c| c.start);
+                Ok(())
+            }
+            Command::SetCaptionSettings { sequence, settings } => {
+                project
+                    .sequence_mut(*sequence)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {sequence:?}")))?
+                    .caption_settings = settings.clone();
                 Ok(())
             }
             Command::UpdateMarker { target, marker } => {
@@ -927,6 +938,14 @@ impl Command {
                     },
                 })
             }
+            Command::SetCaptionSettings { sequence, .. } => Ok(Command::SetCaptionSettings {
+                sequence: *sequence,
+                settings: project
+                    .sequence(*sequence)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {sequence:?}")))?
+                    .caption_settings
+                    .clone(),
+            }),
             Command::SetTransition { target, clip, .. } => Ok(Command::SetTransition {
                 target: *target,
                 clip: *clip,

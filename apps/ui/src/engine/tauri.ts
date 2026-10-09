@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  CaptionSettings,
   BinInfo,
   TitleTemplate,
   SequenceListItem,
@@ -152,8 +153,8 @@ class TauriExport implements ExportApi {
   presets() {
     return invoke<ExportPreset[]>("export_presets");
   }
-  start(output: string, preset: string, normalize: number | null) {
-    return invoke<number>("export_start", { output, preset, normalize });
+  start(output: string, preset: string, normalize: number | null, captionSidecar = false) {
+    return invoke<number>("export_start", { output, preset, normalize, captionSidecar });
   }
   status() {
     return invoke<ExportStatus[]>("export_status");
@@ -190,6 +191,12 @@ class TauriMarkers implements MarkersApi {
 class TauriCaptions implements CaptionsApi {
   list() {
     return invoke<CaptionInfo[]>("captions");
+  }
+  settings() {
+    return invoke<CaptionSettings>("caption_settings");
+  }
+  setSettings(settings: CaptionSettings) {
+    return invoke<void>("set_caption_settings", { settings });
   }
   add(start: number, end: number, text: string) {
     return invoke<string>("add_caption", { start, end, text });

@@ -73,6 +73,8 @@ pub fn run() {
             ipc::update_caption,
             ipc::remove_caption,
             ipc::import_srt,
+            ipc::caption_settings,
+            ipc::set_caption_settings,
             ipc::export_srt,
         ])
         .run(tauri::generate_context!())

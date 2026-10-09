@@ -9,9 +9,7 @@ use crate::lut::Lut3d;
 use crate::nodes::{ChromaKey, Mask, MaskShape};
 use debut_core::color::ColorSpace;
 use debut_core::{Rational, SequenceId};
-use debut_project::{
-    Clip, ClipSource, Effect, Layer, Param, Sequence, Title, TitleStyle, TrackKind,
-};
+use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, Title, TrackKind};
 use std::sync::Arc;
 
 /// Source frame dimensions are needed to fit a clip onto the canvas; the caller
@@ -108,11 +106,13 @@ fn compose_into(
             opacity,
         });
     }
-    // Burn-in captions (GFX-05): centred near the bottom, authored in sequence pixels.
-    if let Some(cap) = seq.caption_at(t) {
+    // Burn-in captions (GFX-05/06): centred at the bottom or top, authored in
+    // sequence pixels, per the sequence's caption settings.
+    let settings = &seq.caption_settings;
+    if let Some(cap) = seq.caption_at(t).filter(|_| settings.burn_in) {
         let title = Title {
             text: cap.text.clone(),
-            style: TitleStyle::captions_for_height(seq.height),
+            style: settings.style_for_height(seq.height),
         };
         if let Some(image) = info.title(&title) {
             let (iw, ih) = (image.width, image.height);
@@ -126,6 +126,10 @@ fn compose_into(
             }
             let margin = caption_margin(seq.height) * px_scale;
             let dy = h as f32 * 0.5 - ih as f32 * px_scale * 0.5 - margin;
+            let dy = match settings.position {
+                debut_project::CaptionPosition::Bottom => dy,
+                debut_project::CaptionPosition::Top => -dy,
+            };
             let xf = Transform2D::from_srt((iw, ih), (w, h), (px_scale, px_scale), 0.0, (0.0, dy));
             let layer = g.add(Node::Transform {
                 input: src,
@@ -439,6 +443,16 @@ mod tests {
         };
         let (_, sy) = xf.apply(50.0, 50.0 - margin * 0.5 - 1.0);
         assert!((sy - 2.0).abs() < 1e-3, "{sy}");
+        // Top placement mirrors; burn-in off leaves the base alone.
+        seq.caption_settings.position = debut_project::CaptionPosition::Top;
+        let g = compose(&seq, Rational::new(3, 2), &info);
+        let Node::Transform { xf, .. } = g.node(NodeId(3)) else {
+            panic!()
+        };
+        let (_, sy) = xf.apply(100.0, margin + 2.0);
+        assert!((sy - 2.0).abs() < 1e-3, "{sy}");
+        seq.caption_settings.burn_in = false;
+        assert_eq!(compose(&seq, Rational::new(3, 2), &info).len(), 1);
     }
 
     #[test]

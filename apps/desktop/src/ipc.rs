@@ -17,9 +17,9 @@ use debut_platform_native::codec::{AudioEncodeSettings, EncodeSettings, FfmpegEn
 use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
-    schema, AudioEffect, Bin, Caption, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, KeyFx,
-    Marker, MaskFx, MaskShape, Param, Project, Sequence, Title, TitleStyle, Track, TrackKind,
-    TrackMix, TransformFx, Transition, TransitionKind,
+    schema, AudioEffect, Bin, Caption, CaptionSettings, Clip, ClipSource, Effect, EqBand, EqKind,
+    GradeFx, KeyFx, Marker, MaskFx, MaskShape, Param, Project, Sequence, Title, TitleStyle, Track,
+    TrackKind, TrackMix, TransformFx, Transition, TransitionKind,
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
@@ -1598,6 +1598,7 @@ impl Session {
         output: String,
         preset: &str,
         normalize: Option<f32>,
+        caption_sidecar: bool,
     ) -> Result<u64, String> {
         let preset = Preset::all()
             .into_iter()
@@ -1606,6 +1607,15 @@ impl Session {
         let seq = self.first_sequence()?.clone();
         if seq.duration() <= Rational::ZERO {
             return Err("the sequence is empty".into());
+        }
+        // Captions as a sidecar next to the movie (GFX-06), written up front:
+        // they do not depend on the render.
+        if caption_sidecar && !seq.captions.is_empty() {
+            let stem = match output.rfind('.') {
+                Some(i) if !output[i..].contains('/') => &output[..i],
+                _ => output.as_str(),
+            };
+            self.export_srt(&format!("{stem}.srt"))?;
         }
         let job = ExportJob {
             sequence: seq,
@@ -1815,8 +1825,9 @@ pub fn export_start(
     output: String,
     preset: String,
     normalize: Option<f32>,
+    caption_sidecar: Option<bool>,
 ) -> Result<u64, String> {
-    lock(&state).export_start(output, &preset, normalize)
+    lock(&state).export_start(output, &preset, normalize, caption_sidecar.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -2109,14 +2120,28 @@ impl Session {
         Ok(n)
     }
 
-    /// Write the sequence's captions as .srt; returns the count.
+    pub fn caption_settings(&self) -> Result<CaptionSettings, String> {
+        Ok(self.first_sequence()?.caption_settings.clone())
+    }
+
+    pub fn set_caption_settings(&mut self, settings: CaptionSettings) -> Result<(), String> {
+        let sequence = self.first_sequence()?.id;
+        self.exec(Command::SetCaptionSettings { sequence, settings })
+    }
+
+    /// Write the sequence's captions to `path`: WebVTT for a `.vtt` extension,
+    /// SubRip otherwise; returns the count.
     pub fn export_srt(&self, path: &str) -> Result<usize, String> {
         let seq = self.first_sequence()?;
-        let text = debut_graphics::format_srt(
-            seq.captions
-                .iter()
-                .map(|c| (c.start, c.end, c.text.as_str())),
-        );
+        let cues = seq
+            .captions
+            .iter()
+            .map(|c| (c.start, c.end, c.text.as_str()));
+        let text = if path.to_lowercase().ends_with(".vtt") {
+            debut_graphics::format_vtt(cues)
+        } else {
+            debut_graphics::format_srt(cues)
+        };
         self.store
             .write(path, text.as_bytes())
             .map_err(|e| e.to_string())?;
@@ -2151,6 +2176,19 @@ pub fn update_caption(
 #[tauri::command]
 pub fn remove_caption(state: State<'_, Shared>, id: String) -> Result<(), String> {
     lock(&state).remove_caption(&id)
+}
+
+#[tauri::command]
+pub fn caption_settings(state: State<'_, Shared>) -> Result<CaptionSettings, String> {
+    lock(&state).caption_settings()
+}
+
+#[tauri::command]
+pub fn set_caption_settings(
+    state: State<'_, Shared>,
+    settings: CaptionSettings,
+) -> Result<(), String> {
+    lock(&state).set_caption_settings(settings)
 }
 
 #[tauri::command]
@@ -2798,6 +2836,31 @@ mod tests {
             (0.2, 2.0, "Hi there")
         );
         s.remove_caption(&caps[1].id).unwrap();
+        // Settings: top placement moves the change to the upper part; burn-in off
+        // leaves the frame untouched; VTT export carries the header.
+        s.transport(TransportAction::Seek { t: 1.4 }).unwrap();
+        let mut cs = s.caption_settings().unwrap();
+        assert!(cs.burn_in);
+        cs.position = debut_project::CaptionPosition::Top;
+        s.set_caption_settings(cs.clone()).unwrap();
+        let (_, _, top) = s.frame_pixels().unwrap();
+        assert!(
+            changed(&bare[..split], &top[..split]) > 20,
+            "caption at the top"
+        );
+        cs.burn_in = false;
+        s.set_caption_settings(cs).unwrap();
+        let (_, _, off) = s.frame_pixels().unwrap();
+        assert_eq!(changed(&bare, &off), 0, "burn-in off");
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.sync_player().unwrap();
+        assert_eq!(s.caption_settings().unwrap(), CaptionSettings::default());
+        let vtt = dir.join("c.vtt").to_string_lossy().into_owned();
+        assert_eq!(s.export_srt(&vtt).unwrap(), 1);
+        assert!(std::fs::read_to_string(&vtt)
+            .unwrap()
+            .starts_with("WEBVTT\n"));
         s.remove_caption(&cap).unwrap();
         assert!(s.captions().unwrap().is_empty());
 
@@ -3099,11 +3162,18 @@ mod tests {
         assert_eq!(a_track.inserts, vec!["Limiter".to_string()]);
         assert!(s.add_insert(&a, "nope").is_err());
 
-        // Export through the queue worker, normalized to -14 LUFS.
+        // Export through the queue worker, normalized to -14 LUFS, with a caption
+        // sidecar written next to the movie.
         let out = dir.join("out.mp4").to_string_lossy().into_owned();
+        s.add_caption(0.6, 1.6, "Bye".into()).unwrap();
         let job_id = s
-            .export_start(out.clone(), "YouTube 1080p", Some(-14.0))
+            .export_start(out.clone(), "YouTube 1080p", Some(-14.0), true)
             .unwrap();
+        let sidecar = std::fs::read_to_string(dir.join("out.srt")).unwrap();
+        assert!(
+            sidecar.contains("00:00:00,600 --> 00:00:01,600\nBye"),
+            "{sidecar}"
+        );
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         let final_state = loop {
             let st = s.export_status();
