@@ -9,15 +9,15 @@
 //!
 //! Insert and extract are groups built by the constructors at the bottom.
 
-use debut_core::id::{CaptionId, MarkerId};
+use debut_core::id::{BinId, CaptionId, MarkerId};
 use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
-use debut_project::Caption;
 use debut_project::{
     AudioEffect, Clip, ClipSource, Effect, Marker, Param, Project, Sequence, Track, TrackMix,
     Transition,
 };
+use debut_project::{Bin, Caption};
 use serde::{Deserialize, Serialize};
 
 /// Where a marker lives: on the sequence, or on one clip (clip-local time).
@@ -176,6 +176,19 @@ pub enum Command {
         target: Target,
         clip: ClipId,
         transition: Option<Transition>,
+    },
+    // ---- bins (MED-07) ----
+    AddBin(Bin),
+    RemoveBin(BinId),
+    RenameBin {
+        id: BinId,
+        name: String,
+    },
+    /// Put `media` in `bin` (a manual one), removing it from every other manual
+    /// bin; `None` leaves it in no bin.
+    AssignMedia {
+        media: MediaId,
+        bin: Option<BinId>,
     },
     // ---- project structure (MED-07, TL-01) ----------------------------------
     AddMedia(MediaRef),
@@ -561,6 +574,54 @@ impl Command {
                 tr.clips[i].transition_in = *transition;
                 Ok(())
             }
+            Command::AddBin(b) => {
+                if project.bins.iter().any(|x| x.id == b.id) {
+                    return Err(Error::InvalidArgument("bin id already exists".into()));
+                }
+                project.bins.push(b.clone());
+                Ok(())
+            }
+            Command::RemoveBin(id) => {
+                let i = project
+                    .bins
+                    .iter()
+                    .position(|b| b.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("bin {id:?}")))?;
+                project.bins.remove(i);
+                Ok(())
+            }
+            Command::RenameBin { id, name } => {
+                let b = project
+                    .bins
+                    .iter_mut()
+                    .find(|b| b.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("bin {id:?}")))?;
+                b.name = name.clone();
+                Ok(())
+            }
+            Command::AssignMedia { media, bin } => {
+                if !project.media.iter().any(|m| m.id == *media) {
+                    return Err(Error::NotFound(format!("media {media:?}")));
+                }
+                if let Some(b) = bin {
+                    match project.bins.iter().find(|x| x.id == *b) {
+                        None => return Err(Error::NotFound(format!("bin {b:?}"))),
+                        Some(x) if x.is_smart() => {
+                            return Err(Error::InvalidArgument(
+                                "smart bins are rule-based; media cannot be assigned".into(),
+                            ))
+                        }
+                        _ => {}
+                    }
+                }
+                for b in project.bins.iter_mut().filter(|b| !b.is_smart()) {
+                    b.items.retain(|m| m != media);
+                    if Some(b.id) == *bin {
+                        b.items.push(*media);
+                    }
+                }
+                Ok(())
+            }
             Command::AddMedia(m) => {
                 if project.media.iter().any(|x| x.id == m.id) {
                     return Err(Error::InvalidArgument("media id already exists".into()));
@@ -870,6 +931,30 @@ impl Command {
                 target: *target,
                 clip: *clip,
                 transition: find_clip(project, *target, *clip)?.transition_in,
+            }),
+            Command::AddBin(b) => Ok(Command::RemoveBin(b.id)),
+            Command::RemoveBin(id) => project
+                .bins
+                .iter()
+                .find(|b| b.id == *id)
+                .map(|b| Command::AddBin(b.clone()))
+                .ok_or_else(|| Error::NotFound(format!("bin {id:?}"))),
+            Command::RenameBin { id, .. } => project
+                .bins
+                .iter()
+                .find(|b| b.id == *id)
+                .map(|b| Command::RenameBin {
+                    id: *id,
+                    name: b.name.clone(),
+                })
+                .ok_or_else(|| Error::NotFound(format!("bin {id:?}"))),
+            Command::AssignMedia { media, .. } => Ok(Command::AssignMedia {
+                media: *media,
+                bin: project
+                    .bins
+                    .iter()
+                    .find(|b| !b.is_smart() && b.items.contains(media))
+                    .map(|b| b.id),
             }),
             Command::AddMedia(m) => Ok(Command::RemoveMedia(m.id)),
             Command::RemoveMedia(id) => {

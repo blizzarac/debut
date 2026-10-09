@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  BinInfo,
   TitleTemplate,
   SequenceListItem,
   CaptionInfo,
@@ -37,6 +38,24 @@ import type {
 class TauriMedia implements MediaApi {
   importMedia(path: string) {
     return invoke<MediaInfo>("import_media", { path });
+  }
+  mediaList() {
+    return invoke<MediaInfo[]>("media_list");
+  }
+  bins() {
+    return invoke<BinInfo[]>("bins");
+  }
+  addBin(name: string, filter?: string) {
+    return invoke<string>("add_bin", { name, filter: filter ?? null });
+  }
+  renameBin(id: string, name: string) {
+    return invoke<void>("rename_bin", { id, name });
+  }
+  removeBin(id: string) {
+    return invoke<void>("remove_bin", { id });
+  }
+  assignMedia(media: string, bin: string | null) {
+    return invoke<void>("assign_media", { media, bin });
   }
   ensureSequence() {
     return invoke<SequenceInfo>("ensure_sequence");

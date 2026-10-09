@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { detectTarget, loadEngine, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type Tick } from "./engine";
+import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type Tick } from "./engine";
 import { Captions } from "./Captions";
+import { MediaPanel } from "./MediaPanel";
 import { ExportPanel } from "./ExportPanel";
 import { Inspector, TitleEditor } from "./Inspector";
 import { Markers } from "./Markers";
@@ -16,8 +17,8 @@ export default function App() {
   const [status, setStatus] = useState("starting engine");
   const [seq, setSeq] = useState<SequenceInfo | null>(null);
   const [mediaList, setMediaList] = useState<MediaInfo[]>([]);
+  const [binList, setBinList] = useState<BinInfo[]>([]);
   const [tick, setTick] = useState<Tick | null>(null);
-  const [path, setPath] = useState("");
   const [canUndo, setCanUndo] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [selected, setSelected] = useState<Selection>(null);
@@ -31,6 +32,8 @@ export default function App() {
     if (e.media) {
       setSeq(await e.media.sequence().catch(() => null));
       setSequences(await e.media.sequences().catch(() => []));
+      setMediaList(await e.media.mediaList().catch(() => []));
+      setBinList(await e.media.bins().catch(() => []));
     }
     if (e.fileStatus) setFile(await e.fileStatus().catch(() => null));
     if (e.markers) setMarkerList(await e.markers.list().catch(() => []));
@@ -91,22 +94,10 @@ export default function App() {
     }
   }
 
-  async function addMulticam() {
-    if (!engine?.media || mediaList.length < 2) return;
-    await engine.media.addMulticam(tick?.position ?? 0, mediaList.map((m) => m.id)).catch((err) => setStatus(`multicam failed: ${err}`));
+  async function addMulticam(ids: string[]) {
+    if (!engine?.media || ids.length < 2) return;
+    await engine.media.addMulticam(tick?.position ?? 0, ids).catch((err) => setStatus(`multicam failed: ${err}`));
     await refresh(engine);
-  }
-
-  async function importMedia() {
-    if (!engine?.media || !path) return;
-    try {
-      const m = await engine.media.importMedia(path);
-      setMediaList((l) => [...l, m]);
-      setPath("");
-      await refresh(engine);
-    } catch (err) {
-      setStatus(`import failed: ${err}`);
-    }
   }
 
   async function addToTimeline(m: MediaInfo) {
@@ -138,7 +129,6 @@ export default function App() {
     try {
       const f = await engine.openProjectFile(filePath);
       setFile(f);
-      setMediaList([]);
       setSelected(null);
       await refresh(engine);
       setStatus(f.recovered > 0 ? `opened, recovered ${f.recovered} unsaved edits` : "opened");
@@ -184,27 +174,7 @@ export default function App() {
         {engine?.media ? (
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Media</h2>
-            <div style={{ display: "flex", gap: 4 }}>
-              <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/clip.mp4" style={{ flex: 1 }} onKeyDown={(e) => e.key === "Enter" && importMedia()} />
-              <button onClick={importMedia}>Import</button>
-            </div>
-            <ul style={{ listStyle: "none", padding: 0, margin: 0, fontSize: 12 }}>
-              {mediaList.map((m) => (
-                <li key={m.id} style={{ padding: "6px 4px", borderBottom: "1px solid #eee", display: "flex", justifyContent: "space-between", gap: 6 }}>
-                  <span title={m.path}>
-                    {m.path.split("/").pop()} · {m.width}×{m.height} · {m.duration.toFixed(2)}s
-                  </span>
-                  <button onClick={() => addToTimeline(m)} title="Insert at playhead">
-                    +
-                  </button>
-                </li>
-              ))}
-            </ul>
-            {mediaList.length >= 2 && (
-              <button onClick={addMulticam} title="Insert all imported media as one multicam clip at the playhead; keys 1–9 switch angles" style={{ marginTop: 4 }}>
-                Multicam from all ({mediaList.length})
-              </button>
-            )}
+            <MediaPanel media={engine.media} list={mediaList} bins={binList} onChanged={() => refresh(engine)} onInsert={addToTimeline} onMulticam={addMulticam} onStatus={setStatus} />
           </>
         ) : (
           <p style={{ fontSize: 12, color: "#999" }}>Media import and playback are not available on this target yet.</p>

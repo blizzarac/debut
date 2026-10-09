@@ -34,6 +34,16 @@ export interface MediaInfo {
   duration: number;
   frame_rate: [number, number];
   has_audio: boolean;
+  /** Ids of the bins this media is in (manual and smart). */
+  bins: string[];
+}
+
+export interface BinInfo {
+  id: string;
+  name: string;
+  smart: boolean;
+  filter: string | null;
+  count: number;
 }
 
 export type TextAlign = "left" | "center" | "right";
@@ -272,6 +282,14 @@ export interface MarkersApi {
 
 export interface MediaApi {
   importMedia(path: string): Promise<MediaInfo>;
+  /** Every media in the project (also after opening a file). */
+  mediaList(): Promise<MediaInfo[]>;
+  bins(): Promise<BinInfo[]>;
+  /** With `filter`, a smart bin matching file names containing it. */
+  addBin(name: string, filter?: string): Promise<string>;
+  renameBin(id: string, name: string): Promise<void>;
+  removeBin(id: string): Promise<void>;
+  assignMedia(media: string, bin: string | null): Promise<void>;
   ensureSequence(): Promise<SequenceInfo>;
   sequence(): Promise<SequenceInfo>;
   /** Every sequence in the project; one is active (shown in the timeline). */

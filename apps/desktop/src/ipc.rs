@@ -3,7 +3,7 @@
 
 use debut_audio::normalize_gain;
 use debut_command::{Command, MarkerTarget, Target};
-use debut_core::id::{CaptionId, MarkerId};
+use debut_core::id::{BinId, CaptionId, MarkerId};
 use debut_core::{ClipId, FrameRate, IdGen, MediaId, Rational, SequenceId, TrackId};
 use debut_engine::{Player, Stats, Workspace};
 use debut_export::{export, measure_loudness, ExportJob, ExportQueue, JobId, JobState, Preset};
@@ -17,9 +17,9 @@ use debut_platform_native::codec::{AudioEncodeSettings, EncodeSettings, FfmpegEn
 use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
-    schema, AudioEffect, Caption, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, KeyFx, Marker,
-    MaskFx, MaskShape, Param, Project, Sequence, Title, TitleStyle, Track, TrackKind, TrackMix,
-    TransformFx, Transition, TransitionKind,
+    schema, AudioEffect, Bin, Caption, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, KeyFx,
+    Marker, MaskFx, MaskShape, Param, Project, Sequence, Title, TitleStyle, Track, TrackKind,
+    TrackMix, TransformFx, Transition, TransitionKind,
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
@@ -471,6 +471,19 @@ pub struct MediaDto {
     pub duration: f64,
     pub frame_rate: [i64; 2],
     pub has_audio: bool,
+    /// Bins this media is in (manual membership and smart matches).
+    #[serde(default)]
+    pub bins: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct BinDto {
+    pub id: String,
+    pub name: String,
+    pub smart: bool,
+    /// The smart bin's file-name filter, if that is what it is.
+    pub filter: Option<String>,
+    pub count: usize,
 }
 
 #[derive(Serialize)]
@@ -599,6 +612,106 @@ impl Session {
             duration: secs(v.duration),
             frame_rate: [v.frame_rate.0.num, v.frame_rate.0.den],
             has_audio,
+            bins: Vec::new(),
+        })
+    }
+
+    /// Every media in the project with its bins; probes files not seen yet in
+    /// this session (after opening a project) and caches the result.
+    pub fn media_list(&mut self) -> Result<Vec<MediaDto>, String> {
+        let media: Vec<MediaRef> = self.project().map(|p| p.media.clone()).unwrap_or_default();
+        for m in &media {
+            if self.probed.contains_key(&m.id) {
+                continue;
+            }
+            if let Ok(dec) = FfmpegDecoder::open(&m.path) {
+                if let Some(v) = dec.video_info() {
+                    self.probed.insert(
+                        m.id,
+                        (v.width, v.height, v.duration, dec.audio_info().is_some()),
+                    );
+                }
+            }
+        }
+        let bins = self.project().map(|p| p.bins.clone()).unwrap_or_default();
+        Ok(media
+            .iter()
+            .map(|m| {
+                let (w, h, d, a) =
+                    self.probed
+                        .get(&m.id)
+                        .copied()
+                        .unwrap_or((0, 0, Rational::ZERO, false));
+                let fr = m.metadata.frame_rate.unwrap_or(FrameRate::FPS_25);
+                MediaDto {
+                    id: id_str(m.id.0),
+                    path: m.path.clone(),
+                    width: w,
+                    height: h,
+                    duration: secs(d),
+                    frame_rate: [fr.0.num, fr.0.den],
+                    has_audio: a,
+                    bins: bins
+                        .iter()
+                        .filter(|b| b.contains(m))
+                        .map(|b| id_str(b.id.0))
+                        .collect(),
+                }
+            })
+            .collect())
+    }
+
+    pub fn bins(&self) -> Result<Vec<BinDto>, String> {
+        let p = self.project().ok_or("no project open")?;
+        Ok(p.bins
+            .iter()
+            .map(|b| BinDto {
+                id: id_str(b.id.0),
+                name: b.name.clone(),
+                smart: b.is_smart(),
+                filter: match &b.kind {
+                    debut_project::BinKind::Smart { rules } => rules
+                        .iter()
+                        .find(|r| r.field == "name" && r.op == "contains")
+                        .map(|r| r.value.clone()),
+                    _ => None,
+                },
+                count: p.media.iter().filter(|m| b.contains(m)).count(),
+            })
+            .collect())
+    }
+
+    /// New bin; with `filter` it is a smart bin matching file names containing it.
+    pub fn add_bin(&mut self, name: String, filter: Option<String>) -> Result<String, String> {
+        let id: BinId = self.ids.fresh();
+        let bin = match filter.filter(|f| !f.trim().is_empty()) {
+            Some(f) => Bin::name_contains(id, name, f.trim()),
+            None => Bin::manual(id, name),
+        };
+        self.exec(Command::AddBin(bin))?;
+        Ok(id_str(id.0))
+    }
+
+    pub fn rename_bin(&mut self, id: &str, name: String) -> Result<(), String> {
+        self.exec(Command::RenameBin {
+            id: BinId(parse_id(id)?),
+            name,
+        })
+    }
+
+    pub fn remove_bin(&mut self, id: &str) -> Result<(), String> {
+        self.exec(Command::RemoveBin(BinId(parse_id(id)?)))
+    }
+
+    /// Put media in a manual bin (or in none).
+    pub fn assign_media(&mut self, media: &str, bin: Option<String>) -> Result<(), String> {
+        let bin = match bin {
+            Some(b) => Some(BinId(parse_id(&b)?)),
+            None => None,
+        };
+        self.exec(Command::AssignMedia {
+            media: MediaId(parse_id(media)?),
+            bin,
         })
     }
 
@@ -2086,6 +2199,44 @@ pub fn import_media(state: State<'_, Shared>, path: String) -> Result<MediaDto, 
 }
 
 #[tauri::command]
+pub fn media_list(state: State<'_, Shared>) -> Result<Vec<MediaDto>, String> {
+    lock(&state).media_list()
+}
+
+#[tauri::command]
+pub fn bins(state: State<'_, Shared>) -> Result<Vec<BinDto>, String> {
+    lock(&state).bins()
+}
+
+#[tauri::command]
+pub fn add_bin(
+    state: State<'_, Shared>,
+    name: String,
+    filter: Option<String>,
+) -> Result<String, String> {
+    lock(&state).add_bin(name, filter)
+}
+
+#[tauri::command]
+pub fn rename_bin(state: State<'_, Shared>, id: String, name: String) -> Result<(), String> {
+    lock(&state).rename_bin(&id, name)
+}
+
+#[tauri::command]
+pub fn remove_bin(state: State<'_, Shared>, id: String) -> Result<(), String> {
+    lock(&state).remove_bin(&id)
+}
+
+#[tauri::command]
+pub fn assign_media(
+    state: State<'_, Shared>,
+    media: String,
+    bin: Option<String>,
+) -> Result<(), String> {
+    lock(&state).assign_media(&media, bin)
+}
+
+#[tauri::command]
 pub fn ensure_sequence(state: State<'_, Shared>) -> Result<SequenceDto, String> {
     lock(&state).ensure_sequence()
 }
@@ -2706,6 +2857,45 @@ mod tests {
         s.workspace_mut().unwrap().undo().unwrap();
         s.sync_player().unwrap();
         assert_eq!(sequence_dto(s.first_sequence().unwrap()).tracks[0].id, v);
+
+        // Bins (MED-07): a manual bin takes an assignment, a smart bin matches by
+        // name, the media list reports both, and removing a bin is undoable.
+        let selects = s.add_bin("Selects".into(), None).unwrap();
+        let tests = s.add_bin("Tests".into(), Some("test_".into())).unwrap();
+        s.assign_media(&m.id, Some(selects.clone())).unwrap();
+        assert!(
+            s.assign_media(&m.id, Some(tests.clone())).is_err(),
+            "smart bins refuse assignment"
+        );
+        let list = s.media_list().unwrap();
+        assert_eq!(list.len(), 2);
+        let first = list.iter().find(|x| x.id == m.id).unwrap();
+        assert!(first.bins.contains(&selects) && first.bins.contains(&tests));
+        assert_eq!((first.width, first.has_audio), (64, true));
+        let bins = s.bins().unwrap();
+        let by = |id: &str| bins.iter().find(|b| b.id == id).unwrap();
+        assert_eq!((by(&selects).count, by(&selects).smart), (1, false));
+        assert_eq!(
+            (by(&tests).count, by(&tests).filter.as_deref()),
+            (2, Some("test_"))
+        );
+        s.rename_bin(&selects, "Keepers".into()).unwrap();
+        s.assign_media(&m.id, None).unwrap();
+        assert_eq!(
+            s.bins()
+                .unwrap()
+                .iter()
+                .find(|b| b.id == selects)
+                .unwrap()
+                .name,
+            "Keepers"
+        );
+        s.remove_bin(&selects).unwrap();
+        assert_eq!(s.bins().unwrap().len(), 1);
+        s.workspace_mut().unwrap().undo().unwrap();
+        assert_eq!(s.bins().unwrap().len(), 2);
+        s.remove_bin(&selects).unwrap();
+        s.remove_bin(&tests).unwrap();
 
         // Lift the title again so the export below covers the original 2.4 s.
         s.edit(EditOp::Lift {
