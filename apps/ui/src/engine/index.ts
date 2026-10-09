@@ -1,9 +1,9 @@
-// The UI talks to the engine only through this interface (PLT-01). The Tauri
+// The UI talks to the engine only through these interfaces (PLT-01). The Tauri
 // transport forwards to native Rust over IPC; the wasm transport calls the same
-// Rust compiled to WebAssembly. Feature differences arrive as capabilities, never
-// as runtime failures (PLT-05).
+// Rust compiled to WebAssembly. Optional parts (`media`, `player`) are capability
+// flags: a target that lacks them shows the difference instead of failing (PLT-05).
 
-export interface Engine {
+export interface ProjectApi {
   version(): Promise<string>;
   newProject(name: string): Promise<void>;
   openProject(json: string): Promise<void>;
@@ -13,6 +13,92 @@ export interface Engine {
   undo(): Promise<boolean>;
   redo(): Promise<boolean>;
   canUndo(): Promise<boolean>;
+}
+
+export interface MediaInfo {
+  id: string;
+  path: string;
+  width: number;
+  height: number;
+  duration: number;
+  frame_rate: [number, number];
+  has_audio: boolean;
+}
+
+export interface ClipInfo {
+  id: string;
+  media: string | null;
+  timeline_in: number;
+  duration: number;
+  source_in: number;
+}
+
+export interface TrackInfo {
+  id: string;
+  kind: "video" | "audio" | "adjustment";
+  clips: ClipInfo[];
+}
+
+export interface SequenceInfo {
+  id: string;
+  name: string;
+  width: number;
+  height: number;
+  frame_rate: [number, number];
+  duration: number;
+  tracks: TrackInfo[];
+}
+
+export type EditOp =
+  | { kind: "ripple_head"; track: string; clip: string; delta: number }
+  | { kind: "ripple_tail"; track: string; clip: string; delta: number }
+  | { kind: "roll"; track: string; clip: string; delta: number }
+  | { kind: "slip"; track: string; clip: string; delta: number }
+  | { kind: "slide"; track: string; clip: string; delta: number }
+  | { kind: "move"; track: string; clip: string; delta: number }
+  | { kind: "blade"; track: string; at: number }
+  | { kind: "extract"; track: string; start: number; end: number }
+  | { kind: "lift"; track: string; start: number; end: number };
+
+export interface MediaApi {
+  importMedia(path: string): Promise<MediaInfo>;
+  ensureSequence(): Promise<SequenceInfo>;
+  sequence(): Promise<SequenceInfo>;
+  addClip(track: string, media: string, at: number): Promise<void>;
+  edit(op: EditOp): Promise<void>;
+}
+
+export type TransportAction =
+  | { kind: "play" }
+  | { kind: "pause" }
+  | { kind: "toggle" }
+  | { kind: "seek"; t: number }
+  | { kind: "step"; n: number }
+  | { kind: "shuttle"; forward: boolean };
+
+export interface Tick {
+  frame: number;
+  position: number;
+  playing: boolean;
+  changed: boolean;
+  dropped: number;
+}
+
+export interface Frame {
+  width: number;
+  height: number;
+  rgba: Uint8ClampedArray<ArrayBuffer>;
+}
+
+export interface PlayerApi {
+  transport(action: TransportAction): Promise<void>;
+  tick(): Promise<Tick>;
+  framePixels(): Promise<Frame>;
+}
+
+export interface Engine extends ProjectApi {
+  media?: MediaApi;
+  player?: PlayerApi;
 }
 
 export type Target = "desktop" | "browser";

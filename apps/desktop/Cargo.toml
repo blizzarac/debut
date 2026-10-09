@@ -22,3 +22,7 @@ debut-platform-native.workspace = true
 tauri.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+debut-timeline.workspace = true
+debut-export.workspace = true
+debut-render.workspace = true
+debut-platform.workspace = true

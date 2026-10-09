@@ -9,8 +9,9 @@
 //!
 //! Insert and extract are groups built by the constructors at the bottom.
 
-use debut_core::{ClipId, Error, IdGen, Rational, Result, SequenceId, TrackId};
-use debut_project::{Clip, Project, Track};
+use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
+use debut_project::media_ref::MediaRef;
+use debut_project::{Clip, Project, Sequence, Track};
 use serde::{Deserialize, Serialize};
 
 /// Which track a primitive operates on.
@@ -47,7 +48,10 @@ pub enum Command {
     },
     /// Merge the two clips meeting at `at` if the second continues the first. No-op
     /// otherwise. The first clip's ID survives.
-    Join { target: Target, at: Rational },
+    Join {
+        target: Target,
+        at: Rational,
+    },
     /// Move a clip's head by `delta` keeping its tail and source in sync
     /// (positive shortens). The clip must stay non-empty and non-overlapping.
     TrimHead {
@@ -72,6 +76,20 @@ pub enum Command {
         target: Target,
         clip: ClipId,
         delta: Rational,
+    },
+    // ---- project structure (MED-07, TL-01) ----------------------------------
+    AddMedia(MediaRef),
+    RemoveMedia(MediaId),
+    AddSequence(Sequence),
+    RemoveSequence(SequenceId),
+    AddTrack {
+        sequence: SequenceId,
+        track: Track,
+        index: Option<usize>,
+    },
+    RemoveTrack {
+        sequence: SequenceId,
+        track: TrackId,
     },
     /// One undo step made of several commands, applied in order.
     Group(Vec<Command>),
@@ -243,6 +261,65 @@ impl Command {
                 c.timeline_in += *delta;
                 Ok(())
             }),
+            Command::AddMedia(m) => {
+                if project.media.iter().any(|x| x.id == m.id) {
+                    return Err(Error::InvalidArgument("media id already exists".into()));
+                }
+                project.media.push(m.clone());
+                Ok(())
+            }
+            Command::RemoveMedia(id) => {
+                let i = project
+                    .media
+                    .iter()
+                    .position(|m| m.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("media {id:?}")))?;
+                project.media.remove(i);
+                Ok(())
+            }
+            Command::AddSequence(seq) => {
+                if project.sequence(seq.id).is_some() {
+                    return Err(Error::InvalidArgument("sequence id already exists".into()));
+                }
+                project.sequences.push(seq.clone());
+                Ok(())
+            }
+            Command::RemoveSequence(id) => {
+                let i = project
+                    .sequences
+                    .iter()
+                    .position(|s| s.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {id:?}")))?;
+                project.sequences.remove(i);
+                Ok(())
+            }
+            Command::AddTrack {
+                sequence,
+                track,
+                index,
+            } => {
+                let seq = project
+                    .sequence_mut(*sequence)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {sequence:?}")))?;
+                if seq.track(track.id).is_some() {
+                    return Err(Error::InvalidArgument("track id already exists".into()));
+                }
+                let at = index.unwrap_or(seq.tracks.len()).min(seq.tracks.len());
+                seq.tracks.insert(at, track.clone());
+                Ok(())
+            }
+            Command::RemoveTrack { sequence, track } => {
+                let seq = project
+                    .sequence_mut(*sequence)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {sequence:?}")))?;
+                let i = seq
+                    .tracks
+                    .iter()
+                    .position(|t| t.id == *track)
+                    .ok_or_else(|| Error::NotFound(format!("track {track:?}")))?;
+                seq.tracks.remove(i);
+                Ok(())
+            }
             Command::Group(cmds) => {
                 for c in cmds {
                     c.apply(project)?;
@@ -347,6 +424,43 @@ impl Command {
                 clip: *clip,
                 delta: -*delta,
             }),
+            Command::AddMedia(m) => Ok(Command::RemoveMedia(m.id)),
+            Command::RemoveMedia(id) => {
+                let m = project
+                    .media
+                    .iter()
+                    .find(|m| m.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("media {id:?}")))?;
+                Ok(Command::AddMedia(m.clone()))
+            }
+            Command::AddSequence(seq) => Ok(Command::RemoveSequence(seq.id)),
+            Command::RemoveSequence(id) => {
+                let s = project
+                    .sequence(*id)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {id:?}")))?;
+                Ok(Command::AddSequence(s.clone()))
+            }
+            Command::AddTrack {
+                sequence, track, ..
+            } => Ok(Command::RemoveTrack {
+                sequence: *sequence,
+                track: track.id,
+            }),
+            Command::RemoveTrack { sequence, track } => {
+                let seq = project
+                    .sequence(*sequence)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {sequence:?}")))?;
+                let i = seq
+                    .tracks
+                    .iter()
+                    .position(|t| t.id == *track)
+                    .ok_or_else(|| Error::NotFound(format!("track {track:?}")))?;
+                Ok(Command::AddTrack {
+                    sequence: *sequence,
+                    track: seq.tracks[i].clone(),
+                    index: Some(i),
+                })
+            }
             Command::Group(cmds) => {
                 let mut scratch = project.clone();
                 let mut inverses = Vec::with_capacity(cmds.len());
@@ -686,6 +800,55 @@ mod tests {
         assert!(Command::overwrite(fx.target, big, &mut fx.ids)
             .apply(&mut fx.project)
             .is_err());
+        assert_eq!(fx.project, before);
+    }
+
+    #[test]
+    fn structure_commands_round_trip_through_undo() {
+        let mut fx = fixture();
+        let before = fx.project.clone();
+        let media = MediaRef {
+            id: fx.ids.fresh(),
+            path: "a.mp4".into(),
+            online: true,
+            metadata: Default::default(),
+            proxies: vec![],
+        };
+        let seq = Sequence::new(fx.ids.fresh(), "second", FrameRate::FPS_25, 16, 9);
+        let track = Track::new(fx.ids.fresh(), TrackKind::Audio);
+        let cmds = [
+            Command::AddMedia(media.clone()),
+            Command::AddSequence(seq.clone()),
+            Command::AddTrack {
+                sequence: fx.target.sequence,
+                track: track.clone(),
+                index: Some(0),
+            },
+        ];
+        let mut inverses = Vec::new();
+        for c in &cmds {
+            inverses.push(c.invert(&fx.project).unwrap());
+            c.apply(&mut fx.project).unwrap();
+        }
+        assert_eq!(fx.project.media.len(), 1);
+        assert_eq!(fx.project.sequences.len(), 2);
+        assert_eq!(fx.project.sequences[0].tracks[0].id, track.id);
+        // Removing the middle track and undoing restores its position.
+        let rm = Command::RemoveTrack {
+            sequence: fx.target.sequence,
+            track: track.id,
+        };
+        let undo_rm = rm.invert(&fx.project).unwrap();
+        rm.apply(&mut fx.project).unwrap();
+        undo_rm.apply(&mut fx.project).unwrap();
+        assert_eq!(fx.project.sequences[0].tracks[0].id, track.id);
+        assert!(
+            Command::AddMedia(media).apply(&mut fx.project).is_err(),
+            "duplicate id"
+        );
+        for inv in inverses.iter().rev() {
+            inv.apply(&mut fx.project).unwrap();
+        }
         assert_eq!(fx.project, before);
     }
 
