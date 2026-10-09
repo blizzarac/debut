@@ -455,8 +455,13 @@ dependencies = [
 name = "debut-web"
 version = "0.1.0"
 dependencies = [
+ "debut-command",
+ "debut-core",
  "debut-engine",
  "debut-platform-web",
+ "debut-project",
+ "serde_json",
+ "wasm-bindgen",
 ]
 
 [[package]]

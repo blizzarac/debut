@@ -10,6 +10,10 @@ repository.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+debut-core.workspace = true
+debut-project.workspace = true
+debut-command.workspace = true
 debut-engine.workspace = true
 debut-platform-web.workspace = true
-# wasm-bindgen = "0.2"
+wasm-bindgen.workspace = true
+serde_json.workspace = true

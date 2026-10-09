@@ -13,7 +13,7 @@ pub struct NativePlatform;
 
 impl Platform for NativePlatform {
     type Decoder = codec::FfmpegDecoder;
-    type Encoder = codec::UnimplementedEncoder;
+    type Encoder = codec::FfmpegEncoder;
     type FileStore = file_store::NativeFileStore;
     type AudioOut = audio_out::CpalAudioOut;
     type Threads = threads::NativeThreads;
