@@ -4,17 +4,24 @@ pub mod audio_out; // cpal: CoreAudio / WASAPI / ALSA real-time callback
 pub mod codec; // FFmpeg; NVENC / VideoToolbox / Quick Sync / AMF encoders
 pub mod display; // native window, SDI/HDMI output (PB-09) — pending
 pub mod file_store; // native FS
+pub mod fonts; // system font discovery
 pub mod plugin_host; // OpenFX, VST3, AU, out-of-process (NFR-07) — pending
 pub mod threads; // native pool
 
 use debut_platform::{
     AudioOut, Capabilities, Decoder, EncodeSettings, Encoder, FileStore, HwEncoder, Platform,
 };
-use std::sync::Arc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
-/// The desktop platform: FFmpeg codecs, cpal audio, the native file system.
+/// The desktop platform: FFmpeg codecs, cpal audio, the native file system,
+/// OS threads and system fonts.
 pub struct NativePlatform {
     store: Arc<file_store::NativeFileStore>,
+    origin: Instant,
+    /// Font bytes by requested family (`None`: nothing found).
+    fonts: Mutex<HashMap<String, Option<Arc<[u8]>>>>,
 }
 
 impl NativePlatform {
@@ -22,6 +29,8 @@ impl NativePlatform {
     pub fn new() -> Self {
         Self {
             store: Arc::new(file_store::NativeFileStore::new("/")),
+            origin: Instant::now(),
+            fonts: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -73,5 +82,29 @@ impl Platform for NativePlatform {
 
     fn hardware_decoders(&self) -> Vec<String> {
         codec::hardware_decoders()
+    }
+
+    fn now(&self) -> Duration {
+        self.origin.elapsed()
+    }
+
+    fn spawn(&self, name: &str, job: Box<dyn FnOnce() + Send>) -> debut_core::Result<()> {
+        std::thread::Builder::new()
+            .name(name.to_string())
+            .spawn(job)
+            .map(|_| ())
+            .map_err(|e| debut_core::Error::Other(format!("spawn {name}: {e}")))
+    }
+
+    fn font(&self, family: &str) -> Option<Arc<[u8]>> {
+        let mut cache = self.fonts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = cache.get(family) {
+            return hit.clone();
+        }
+        let bytes = fonts::find_font(family)
+            .and_then(|p| std::fs::read(p).ok())
+            .map(Arc::from);
+        cache.insert(family.to_string(), bytes.clone());
+        bytes
     }
 }

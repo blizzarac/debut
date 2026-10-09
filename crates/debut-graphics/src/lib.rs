@@ -10,4 +10,4 @@ pub mod transcribe; // GFX-04 speech-to-text, speaker labels (feeds TL-13, MED-0
 
 pub use captions::{format_srt, format_vtt, parse_srt, Cue};
 pub use templates::{build as build_title_template, Built as BuiltTitle, Template, TEMPLATES};
-pub use text::{find_font, render as render_title, Raster};
+pub use text::{render as render_title, Font, Raster};

@@ -35,6 +35,10 @@ pub struct FrameSource {
     titles: Mutex<HashMap<u64, Arc<debut_render::Image8>>>,
     /// Every sequence of the project, for compound clips (TL-07).
     sequences: HashMap<SequenceId, Arc<debut_project::Sequence>>,
+    /// Where title fonts come from; without it titles are left out.
+    platform: Option<Arc<dyn debut_platform::Platform>>,
+    /// Parsed fonts by family (`None`: the platform had none).
+    fonts: Mutex<HashMap<String, Option<debut_graphics::Font>>>,
 }
 
 impl FrameSource {
@@ -44,7 +48,28 @@ impl FrameSource {
             cache_depth: cache_depth.max(1),
             titles: Mutex::new(HashMap::new()),
             sequences: HashMap::new(),
+            platform: None,
+            fonts: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The platform title fonts are requested from.
+    pub fn set_platform(&mut self, platform: Arc<dyn debut_platform::Platform>) {
+        self.platform = Some(platform);
+    }
+
+    fn font(&self, family: &str) -> Option<debut_graphics::Font> {
+        let mut fonts = self.fonts.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hit) = fonts.get(family) {
+            return hit.clone();
+        }
+        let font = self
+            .platform
+            .as_ref()?
+            .font(family)
+            .and_then(|b| debut_graphics::Font::from_bytes(&b).ok());
+        fonts.insert(family.to_string(), font.clone());
+        font
     }
 
     /// Replace the set of sequences compound clips can refer to.
@@ -64,7 +89,8 @@ impl FrameSource {
         if let Some(img) = cache.get(&hash) {
             return Some(Arc::clone(img));
         }
-        let raster = debut_graphics::render_title(&title.text, &title.style).ok()?;
+        let font = self.font(&title.style.font)?;
+        let raster = debut_graphics::render_title(&title.text, &title.style, &font).ok()?;
         let img = Arc::new(debut_render::Image8 {
             hash,
             width: raster.width,

@@ -1,0 +1,29 @@
+# Architecture rule (PLT-02): engine-side crates reach the OS only through
+# `debut_platform::Platform`, so the same code runs natively and in the browser.
+# Platform implementations and shells opt out with their own clippy.toml.
+# Tests may touch the OS directly; they say so with
+# `#[allow(clippy::disallowed_methods, clippy::disallowed_types)]`.
+
+disallowed-methods = [
+    { path = "std::fs::read", reason = "files go through Platform::file_store" },
+    { path = "std::fs::read_to_string", reason = "files go through Platform::file_store" },
+    { path = "std::fs::read_dir", reason = "files go through Platform::file_store" },
+    { path = "std::fs::write", reason = "files go through Platform::file_store" },
+    { path = "std::fs::copy", reason = "files go through Platform::file_store" },
+    { path = "std::fs::rename", reason = "files go through Platform::file_store" },
+    { path = "std::fs::remove_file", reason = "files go through Platform::file_store" },
+    { path = "std::fs::remove_dir_all", reason = "files go through Platform::file_store" },
+    { path = "std::fs::create_dir_all", reason = "files go through Platform::file_store" },
+    { path = "std::fs::metadata", reason = "files go through Platform::file_store" },
+    { path = "std::path::Path::exists", reason = "files go through Platform::file_store" },
+    { path = "std::path::Path::is_file", reason = "files go through Platform::file_store" },
+    { path = "std::path::Path::is_dir", reason = "files go through Platform::file_store" },
+    { path = "std::thread::spawn", reason = "background work goes through Platform::spawn (Web Workers in the browser)" },
+]
+
+disallowed-types = [
+    { path = "std::fs::File", reason = "files go through Platform::file_store" },
+    { path = "std::time::Instant", reason = "time comes from Platform::now (no Instant on wasm32)" },
+    { path = "std::time::SystemTime", reason = "time comes from Platform::now (no SystemTime on wasm32)" },
+    { path = "std::thread::Builder", reason = "background work goes through Platform::spawn" },
+]

@@ -1,4 +1,5 @@
 //! Export a sequence built on the fixture to an MP4 and decode it back.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)] // tests use the OS directly
 
 use debut_audio::normalize_gain;
 use debut_core::{FrameRate, IdGen, MediaId, Rational};

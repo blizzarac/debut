@@ -685,6 +685,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "debut-arch"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
+]
+
+[[package]]
 name = "debut-audio"
 version = "0.1.0"
 dependencies = [
@@ -773,6 +780,8 @@ name = "debut-graphics"
 version = "0.1.0"
 dependencies = [
  "debut-core",
+ "debut-platform",
+ "debut-platform-native",
  "debut-project",
  "fontdue",
  "thiserror 2.0.21",

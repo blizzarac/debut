@@ -22,7 +22,6 @@ use debut_project::{
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 mod captions;
 mod effects;
@@ -325,7 +324,8 @@ impl Session {
             .map(|p| p.media.iter().map(|m| (m.id, m.path.clone())).collect())
             .unwrap_or_default();
         if self.player.is_none() {
-            let (player, sink) = Player::new(seq.clone());
+            let (mut player, sink) = Player::new(seq.clone());
+            player.frames.set_platform(Arc::clone(&self.platform));
             let mut out: Box<dyn AudioOut> = self.platform.open_audio_out();
             out.start(Box::new(sink)).map_err(|e| e.to_string())?;
             self.audio_out = Some(out);

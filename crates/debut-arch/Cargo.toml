@@ -1,0 +1,11 @@
+[package]
+name = "debut-arch"
+description = "Architecture checks: the crate layering rules from docs/ARCHITECTURE.md, tested against cargo metadata"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+serde_json.workspace = true

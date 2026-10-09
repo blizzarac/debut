@@ -170,9 +170,10 @@ impl Session {
         let specs = std::mem::take(&mut self.export_specs);
         let specs = Arc::new(Mutex::new(specs));
         self.export_specs_shared = Some(Arc::clone(&specs));
-        std::thread::Builder::new()
-            .name("debut-export".into())
-            .spawn(move || {
+        let spawner = Arc::clone(&self.platform);
+        let spawned = spawner.spawn(
+            "debut-export",
+            Box::new(move || {
                 loop {
                     let next = queue.lock().unwrap_or_else(|e| e.into_inner()).take_next();
                     let Some((id, mut job, output, control)) = next else {
@@ -183,6 +184,7 @@ impl Session {
                         let (preset, normalize, media, sequences, encoder) =
                             spec.ok_or("missing export spec")?;
                         let mut frames = crate::FrameSource::new(4);
+                        frames.set_platform(Arc::clone(&platform));
                         let mut samples = crate::SampleCache::new(48_000);
                         frames.set_sequences(&sequences);
                         samples.set_sequences(&sequences);
@@ -272,8 +274,13 @@ impl Session {
                         .finish(id, result);
                 }
                 running.store(false, std::sync::atomic::Ordering::Release);
-            })
-            .expect("spawn export worker");
+            }),
+        );
+        if spawned.is_err() {
+            // No worker: let the next export try again; queued jobs stay queued.
+            self.export_worker
+                .store(false, std::sync::atomic::Ordering::Release);
+        }
     }
 
     pub fn export_status(&self) -> Vec<ExportStatusDto> {

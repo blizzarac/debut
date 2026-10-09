@@ -65,4 +65,16 @@ pub trait Platform: Send + Sync + 'static {
     fn hardware_decoders(&self) -> Vec<String> {
         Vec::new()
     }
+
+    /// Monotonic time since an arbitrary origin, for autosave intervals and
+    /// frame timing. (The browser has no `std::time::Instant`.)
+    fn now(&self) -> std::time::Duration;
+
+    /// Run a long job (an export) on its own background thread: an OS thread
+    /// natively, a Web Worker in the browser.
+    fn spawn(&self, name: &str, job: Box<dyn FnOnce() + Send>) -> debut_core::Result<()>;
+
+    /// Bytes of a TrueType/OpenType font for `family` (or a font file path), or
+    /// of a fallback face; `None` when the platform has no usable font (GFX-01).
+    fn font(&self, family: &str) -> Option<std::sync::Arc<[u8]>>;
 }

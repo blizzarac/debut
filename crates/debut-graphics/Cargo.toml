@@ -11,3 +11,7 @@ debut-core.workspace = true
 debut-project.workspace = true
 fontdue.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+debut-platform.workspace = true
+debut-platform-native.workspace = true

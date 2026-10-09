@@ -12,7 +12,7 @@ use debut_core::{Error, Result};
 use debut_platform::FileStore;
 use debut_project::{schema, Project};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Append-only JSON-lines journal in a [`FileStore`]. Each append rewrites the
 /// whole file through the store's atomic write, which is fine for the journal
@@ -80,7 +80,9 @@ pub struct Workspace {
     pub history: History,
     journal: FileJournal,
     dirty: bool,
-    last_save: Instant,
+    /// Monotonic time of the last save as seen by `maybe_autosave`; `None`
+    /// until the next check after creation, opening or a save.
+    last_save: Option<Duration>,
     pub autosave_interval: Duration,
 }
 
@@ -104,7 +106,7 @@ impl Workspace {
             history: History::default(),
             journal,
             dirty: false,
-            last_save: Instant::now(),
+            last_save: None,
             autosave_interval: Duration::from_secs(120),
         })
     }
@@ -128,7 +130,7 @@ impl Workspace {
             history: History::default(),
             journal,
             dirty: recovered > 0,
-            last_save: Instant::now(),
+            last_save: None,
             autosave_interval: Duration::from_secs(120),
         };
         Ok((ws, Opened { recovered }))
@@ -174,13 +176,16 @@ impl Workspace {
             .write(&self.path, schema::to_json(&self.project)?.as_bytes())?;
         self.journal.clear()?;
         self.dirty = false;
-        self.last_save = Instant::now();
+        self.last_save = None;
         Ok(())
     }
 
-    /// Save if dirty and the interval has passed. Returns whether it saved.
-    pub fn maybe_autosave(&mut self, now: Instant) -> Result<bool> {
-        if self.dirty && now.duration_since(self.last_save) >= self.autosave_interval {
+    /// Save if dirty and the interval has passed since the last save. `now` is
+    /// the platform's monotonic time; the interval starts at the first check
+    /// after creation, opening or a save. Returns whether it saved.
+    pub fn maybe_autosave(&mut self, now: Duration) -> Result<bool> {
+        let since = *self.last_save.get_or_insert(now);
+        if self.dirty && now.saturating_sub(since) >= self.autosave_interval {
             self.save()?;
             return Ok(true);
         }
@@ -313,19 +318,24 @@ mod tests {
         )
         .unwrap();
         ws.autosave_interval = Duration::from_secs(10);
-        let t0 = Instant::now();
+        let s = Duration::from_secs;
         assert!(
-            !ws.maybe_autosave(t0 + Duration::from_secs(60)).unwrap(),
+            !ws.maybe_autosave(s(100)).unwrap(),
+            "first check starts the interval"
+        );
+        assert!(
+            !ws.maybe_autosave(s(160)).unwrap(),
             "clean: nothing to save"
         );
         ws.execute(add_sequence(&mut ids, "s")).unwrap();
-        assert!(
-            !ws.maybe_autosave(t0 + Duration::from_secs(5)).unwrap(),
-            "dirty but not due"
-        );
-        assert!(ws.maybe_autosave(t0 + Duration::from_secs(11)).unwrap());
+        assert!(ws.maybe_autosave(s(170)).unwrap(), "dirty and due");
         assert!(store.exists("c.debut"));
         assert!(!ws.is_dirty());
+        // After a save the interval restarts at the next check.
+        ws.execute(add_sequence(&mut ids, "t")).unwrap();
+        assert!(!ws.maybe_autosave(s(171)).unwrap(), "restarted");
+        assert!(!ws.maybe_autosave(s(175)).unwrap(), "dirty but not due");
+        assert!(ws.maybe_autosave(s(181)).unwrap());
     }
 
     #[test]

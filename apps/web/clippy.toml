@@ -1,0 +1,2 @@
+# Platform implementation / shell: OS access is this crate's job, so the
+# workspace bans in ../../clippy.toml do not apply here.

@@ -1,5 +1,6 @@
 //! Session API tests over the native platform (FFmpeg fixture): one focused
 //! test per area, each starting from the same small project.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)] // tests use the OS directly
 use super::*;
 use debut_platform_native::NativePlatform;
 

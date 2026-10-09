@@ -60,7 +60,7 @@ impl Session {
 
     pub fn tick(&mut self) -> Result<TickDto, String> {
         if let Some(ws) = self.workspace.as_mut() {
-            ws.maybe_autosave(Instant::now())
+            ws.maybe_autosave(self.platform.now())
                 .map_err(|e| e.to_string())?;
         }
         if self.player.is_none() {
@@ -120,7 +120,7 @@ impl Session {
 
     /// The current frame as `(width, height, RGBA8 bytes)` at the preview size.
     pub fn frame_pixels(&mut self) -> Result<(u32, u32, Vec<u8>), String> {
-        let started = Instant::now();
+        let started = self.platform.now();
         let Session {
             player, backend, ..
         } = self;
@@ -129,7 +129,7 @@ impl Session {
         let (w, h, out) = backend
             .render_rgba8(&graph, &mut p.frames, debut_render::Transfer::Srgb)
             .map_err(|e| e.to_string())?;
-        let cost = started.elapsed();
+        let cost = self.platform.now().saturating_sub(started);
         // Exponential moving average so one slow frame doesn't flip the mode.
         self.frame_cost = Some(match self.frame_cost {
             Some(prev) => prev.mul_f32(0.7) + cost.mul_f32(0.3),

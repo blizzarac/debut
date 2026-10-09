@@ -1,13 +1,12 @@
-//! Text rasterization for titles (GFX-01): a system TrueType font through
+//! Text rasterization for titles (GFX-01): a TrueType font (bytes from the
+//! platform) through
 //! `fontdue`, simple multi-line layout, fill colour, optional stroke-like outline
 //! (dilated alpha), drop shadow and background box. Output is straight-alpha
 //! RGBA8 in sRGB, sized to the text, for the render graph's `Image` node.
 
 use debut_core::{Error, Result};
 use debut_project::title::{TextAlign, TitleStyle};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::Arc;
 
 /// A rasterized title.
 #[derive(Clone, Debug, PartialEq)]
@@ -17,90 +16,23 @@ pub struct Raster {
     pub rgba8: Vec<u8>,
 }
 
-/// Where fonts are looked for, in order, when a style names a family.
-const FONT_DIRS: &[&str] = &[
-    "/usr/share/fonts",
-    "/usr/local/share/fonts",
-    "/Library/Fonts",
-    "/System/Library/Fonts",
-    "C:\\Windows\\Fonts",
-];
-const FALLBACKS: &[&str] = &[
-    "DejaVuSans.ttf",
-    "LiberationSans-Regular.ttf",
-    "Arial.ttf",
-    "arial.ttf",
-    "Helvetica.ttc",
-    "NotoSans-Regular.ttf",
-];
+/// A parsed font face, cheap to clone. The platform supplies the bytes
+/// (`Platform::font`); this crate never touches the file system.
+#[derive(Clone)]
+pub struct Font(Arc<fontdue::Font>);
 
-fn find_file(dir: &Path, name: &str, depth: u32) -> Option<PathBuf> {
-    let entries = std::fs::read_dir(dir).ok()?;
-    let mut subdirs = Vec::new();
-    for e in entries.flatten() {
-        let p = e.path();
-        if p.is_dir() {
-            subdirs.push(p);
-        } else if p
-            .file_name()
-            .and_then(|n| n.to_str())
-            .is_some_and(|n| n.eq_ignore_ascii_case(name))
-        {
-            return Some(p);
-        }
+impl Font {
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
+            .map(|f| Font(Arc::new(f)))
+            .map_err(|e| Error::Other(format!("font: {e}")))
     }
-    if depth > 0 {
-        for d in subdirs {
-            if let Some(p) = find_file(&d, name, depth - 1) {
-                return Some(p);
-            }
-        }
-    }
-    None
 }
 
-/// Resolve a font: an explicit path, else `<family>.ttf` in the font dirs, else
-/// the first fallback found.
-pub fn find_font(family: &str) -> Option<PathBuf> {
-    let p = Path::new(family);
-    if p.is_file() {
-        return Some(p.to_path_buf());
+impl std::fmt::Debug for Font {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Font")
     }
-    let candidates: Vec<String> = [
-        format!("{family}.ttf"),
-        format!("{}.ttf", family.replace(' ', "")),
-    ]
-    .into_iter()
-    .chain(FALLBACKS.iter().map(|s| s.to_string()))
-    .collect();
-    for name in candidates {
-        for dir in FONT_DIRS {
-            if let Some(p) = find_file(Path::new(dir), &name, 3) {
-                return Some(p);
-            }
-        }
-    }
-    None
-}
-
-fn font_cache() -> &'static Mutex<HashMap<PathBuf, Arc<fontdue::Font>>> {
-    static CACHE: OnceLock<Mutex<HashMap<PathBuf, Arc<fontdue::Font>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn load_font(family: &str) -> Result<Arc<fontdue::Font>> {
-    let path = find_font(family)
-        .ok_or_else(|| Error::NotFound(format!("font {family:?} (and no fallback font found)")))?;
-    let mut cache = font_cache().lock().unwrap_or_else(|e| e.into_inner());
-    if let Some(f) = cache.get(&path) {
-        return Ok(Arc::clone(f));
-    }
-    let bytes = std::fs::read(&path).map_err(|e| Error::Other(e.to_string()))?;
-    let font = fontdue::Font::from_bytes(bytes, fontdue::FontSettings::default())
-        .map_err(|e| Error::Other(e.to_string()))?;
-    let font = Arc::new(font);
-    cache.insert(path, Arc::clone(&font));
-    Ok(font)
 }
 
 struct Glyph {
@@ -113,8 +45,8 @@ struct Glyph {
 
 /// Rasterize `text` with `style`. Lines are split on `\n`; the image is sized to
 /// the text plus padding for stroke, shadow and background.
-pub fn render(text: &str, style: &TitleStyle) -> Result<Raster> {
-    let font = load_font(&style.font)?;
+pub fn render(text: &str, style: &TitleStyle, font: &Font) -> Result<Raster> {
+    let font = &font.0;
     let size = style.size_px.max(4.0);
     let metrics = font
         .horizontal_line_metrics(size)
@@ -322,6 +254,15 @@ fn blur(mask: &[u8], w: usize, h: usize, r: f32) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use debut_platform::Platform;
+
+    /// The system font through the native platform, as the engine gets it.
+    fn render(text: &str, style: &TitleStyle) -> Result<Raster> {
+        let bytes = debut_platform_native::NativePlatform::new()
+            .font(&style.font)
+            .expect("a system or fallback font");
+        super::render(text, style, &Font::from_bytes(&bytes)?)
+    }
 
     #[test]
     fn renders_text_with_alpha_only_where_glyphs_are() {

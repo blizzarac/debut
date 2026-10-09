@@ -24,9 +24,14 @@ platform-native   platform-web       FFmpeg/CoreAudio/OpenFX   WebCodecs/OPFS/Au
 Rules enforced by the crate graph:
 
 - `debut-core` and `debut-platform` have no OS, GPU or codec dependencies and compile on every target (PLT-01).
-- Engine crates depend on `debut-platform` traits only, never on an implementation crate (PLT-02).
+- Engine crates depend on `debut-platform` traits only, never on an implementation crate (PLT-02). They reach files, threads, time and fonts only through `Platform`.
 - The project is mutated only through `debut-command`, so every edit is undoable, journaled and syncable (TL-11, NFR-05, COL).
 - Playback and export run the same `debut-render` graph; the audio clock in `debut-audio` is the master (PB-02).
+
+These are checked on every `cargo test` and `cargo clippy` run, not just written down:
+
+- **Layering** (`crates/debut-arch`): reads `cargo metadata` and fails when a crate depends on a higher layer, an engine-side crate depends on a platform implementation, a shell uses a feature crate instead of `debut-engine` or the other target's platform, the foundation picks up anything beyond serde/thiserror, or an OS / codec / GPU / UI-runtime crate (FFmpeg, cpal, Tauri, wasm-bindgen, wgpu, fontdue) appears outside its one home. A new crate fails until it is placed in a layer in `debut_arch::layer_of`. A second test proves each rule catches its violation.
+- **No direct OS access** (`clippy.toml`): engine-side crates may not call `std::fs`, `std::path::Path::exists`/`is_file`/`is_dir`, spawn threads or read `Instant`/`SystemTime`; use `Platform::file_store`, `spawn` and `now`. The platform implementations and shells opt out with their own `clippy.toml`; test code that needs the OS says so with `#[allow(clippy::disallowed_methods, clippy::disallowed_types)]`. Clippy caches results, so after editing `clippy.toml` touch a source file (CI starts clean).
 
 ## Code layout
 
@@ -57,6 +62,7 @@ Where new code goes, so the shells stay thin:
 | `debut-platform-native` | FFmpeg + VideoToolbox/NVDEC/QSV/AMF, native FS, CoreAudio/WASAPI, native threads, OpenFX/VST3/AU out-of-process, SDI/HDMI | NFR-07 – NFR-09, NFR-12, PB-09, AUD-09 |
 | `debut-platform-web` | WebCodecs + WASM fallback, OPFS, AudioWorklet, Web Workers, sandboxed WASM plugins, WebGPU canvas | PLT-06 – PLT-09 |
 | `apps/desktop` | Tauri shell: command forwards to `Session` over `NativePlatform` | PLT-10 |
+| `crates/debut-arch` | Architecture tests: the layering rules over `cargo metadata` | PLT-01, PLT-02 |
 | `apps/web` | wasm-bindgen entry | PLT-01 |
 | `apps/ui` | Shared TypeScript/React app | NFR-16 – NFR-18 |
 | `shaders/` | Shared WGSL | NFR-09, PLT-04 |
