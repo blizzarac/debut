@@ -1,19 +1,24 @@
 //! IPC commands. All project mutation goes through the command history; the
 //! player is rebuilt from the project's sequence after every edit.
 
+use debut_audio::normalize_gain;
 use debut_command::{Command, Target};
 use debut_core::{ClipId, FrameRate, IdGen, MediaId, Rational, TrackId};
 use debut_engine::{Player, Stats, Workspace};
 use debut_export::job::to_rgba8;
+use debut_export::{export, measure_loudness, ExportJob, ExportQueue, JobId, JobState, Preset};
 use debut_platform::audio_out::AudioOut;
+
+use debut_platform::Encoder;
 use debut_platform::{Decoder, FileStore};
 use debut_platform_native::audio_out::{CpalAudioOut, SilentAudioOut};
 use debut_platform_native::codec::FfmpegDecoder;
+use debut_platform_native::codec::{AudioEncodeSettings, EncodeSettings, FfmpegEncoder};
 use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
-    schema, Clip, ClipSource, Effect, GradeFx, Param, Project, Sequence, Track, TrackKind,
-    TransformFx,
+    schema, AudioEffect, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, Param, Project,
+    Sequence, Track, TrackKind, TrackMix, TransformFx,
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
@@ -32,7 +37,14 @@ pub struct Session {
     backend: AnyBackend,
     /// Media probed so far: id -> (width, height, duration, has_audio).
     probed: std::collections::HashMap<MediaId, (u32, u32, Rational, bool)>,
+    exports: Arc<Mutex<ExportQueue>>,
+    export_worker: Arc<std::sync::atomic::AtomicBool>,
+    /// Per-job preset, normalization target and media paths (shared with the worker).
+    export_specs: std::collections::HashMap<JobId, ExportSpec>,
+    export_specs_shared: Option<Arc<Mutex<std::collections::HashMap<JobId, ExportSpec>>>>,
 }
+
+type ExportSpec = (Preset, Option<f32>, Vec<(MediaId, String)>);
 
 impl Default for Session {
     fn default() -> Self {
@@ -51,6 +63,10 @@ impl Session {
             audio_out: None,
             backend: AnyBackend::detect(),
             probed: Default::default(),
+            exports: Arc::new(Mutex::new(ExportQueue::default())),
+            export_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            export_specs: Default::default(),
+            export_specs_shared: None,
         }
     }
 
@@ -336,6 +352,8 @@ pub struct TrackDto {
     pub id: String,
     pub kind: String,
     pub clips: Vec<ClipDto>,
+    pub mix: TrackMix,
+    pub inserts: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -363,6 +381,8 @@ fn sequence_dto(seq: &Sequence) -> SequenceDto {
             .map(|t| TrackDto {
                 id: id_str(t.id.0),
                 kind: format!("{:?}", t.kind).to_lowercase(),
+                mix: t.mix,
+                inserts: t.audio_effects.iter().map(insert_name).collect(),
                 clips: t
                     .clips
                     .iter()
@@ -781,6 +801,379 @@ pub fn set_param(
     lock(&state).set_param(&track, &clip, effect, param, value, keyframe)
 }
 
+fn insert_name(e: &AudioEffect) -> String {
+    match e {
+        AudioEffect::Eq { bands } if bands.iter().all(|b| matches!(b.kind, EqKind::HighPass)) => {
+            "Low cut".into()
+        }
+        AudioEffect::Eq { .. } => "EQ".into(),
+        AudioEffect::Compressor { .. } => "Compressor".into(),
+        AudioEffect::Limiter { .. } => "Limiter".into(),
+        AudioEffect::Gate { .. } => "Gate".into(),
+        AudioEffect::DeEsser { .. } => "De-esser".into(),
+        AudioEffect::Reverb { .. } => "Reverb".into(),
+    }
+}
+
+fn insert_preset(kind: &str) -> Option<AudioEffect> {
+    Some(match kind {
+        "eq_lowcut" => AudioEffect::Eq {
+            bands: vec![EqBand {
+                kind: EqKind::HighPass,
+                frequency_hz: 80.0,
+                gain_db: 0.0,
+                q: 0.707,
+            }],
+        },
+        "eq_presence" => AudioEffect::Eq {
+            bands: vec![EqBand {
+                kind: EqKind::Peak,
+                frequency_hz: 3000.0,
+                gain_db: 3.0,
+                q: 1.0,
+            }],
+        },
+        "compressor" => AudioEffect::Compressor {
+            threshold_db: -18.0,
+            ratio: 3.0,
+            attack_ms: 10.0,
+            release_ms: 100.0,
+            makeup_db: 3.0,
+        },
+        "limiter" => AudioEffect::Limiter {
+            ceiling_db: -1.0,
+            release_ms: 50.0,
+        },
+        "gate" => AudioEffect::Gate {
+            threshold_db: -45.0,
+            attack_ms: 1.0,
+            release_ms: 50.0,
+        },
+        "de_esser" => AudioEffect::DeEsser {
+            frequency_hz: 6000.0,
+            threshold_db: -24.0,
+            ratio: 6.0,
+        },
+        "reverb" => AudioEffect::Reverb {
+            room: 0.6,
+            damping: 0.4,
+            mix: 0.25,
+        },
+        _ => return None,
+    })
+}
+
+#[derive(Serialize)]
+pub struct PresetDto {
+    pub name: String,
+    pub loudness_lufs: f32,
+}
+
+#[derive(Serialize)]
+pub struct ExportStatusDto {
+    pub id: u64,
+    pub name: String,
+    pub output: String,
+    pub state: String,
+    pub frames_done: u64,
+    pub frames_total: u64,
+    pub loudness_lufs: Option<f32>,
+    pub true_peak_db: f32,
+    pub error: Option<String>,
+}
+
+impl Session {
+    fn track_target(&self, track: &str) -> Result<Target, String> {
+        let seq = self.first_sequence()?;
+        let track_id = TrackId(parse_id(track)?);
+        seq.track(track_id).ok_or("track not found")?;
+        Ok(Target {
+            sequence: seq.id,
+            track: track_id,
+        })
+    }
+
+    pub fn set_track_mix(&mut self, track: &str, mix: TrackMix) -> Result<(), String> {
+        let target = self.track_target(track)?;
+        self.exec(Command::SetTrackMix { target, mix })
+    }
+
+    fn track_inserts(&self, track: &str) -> Result<(Target, Vec<AudioEffect>), String> {
+        let target = self.track_target(track)?;
+        let effects = self
+            .first_sequence()?
+            .track(target.track)
+            .unwrap()
+            .audio_effects
+            .clone();
+        Ok((target, effects))
+    }
+
+    pub fn add_insert(&mut self, track: &str, kind: &str) -> Result<(), String> {
+        let (target, mut effects) = self.track_inserts(track)?;
+        effects.push(insert_preset(kind).ok_or_else(|| format!("unknown insert {kind}"))?);
+        self.exec(Command::SetTrackAudio { target, effects })
+    }
+
+    pub fn remove_insert(&mut self, track: &str, index: usize) -> Result<(), String> {
+        let (target, mut effects) = self.track_inserts(track)?;
+        if index >= effects.len() {
+            return Err(format!("no insert {index}"));
+        }
+        effects.remove(index);
+        self.exec(Command::SetTrackAudio { target, effects })
+    }
+
+    pub fn export_presets(&self) -> Vec<PresetDto> {
+        Preset::all()
+            .into_iter()
+            .map(|p| PresetDto {
+                name: p.name,
+                loudness_lufs: p.loudness_lufs,
+            })
+            .collect()
+    }
+
+    /// Queue an export of the whole sequence and make sure a worker is running.
+    pub fn export_start(
+        &mut self,
+        output: String,
+        preset: &str,
+        normalize: Option<f32>,
+    ) -> Result<u64, String> {
+        let preset = Preset::all()
+            .into_iter()
+            .find(|p| p.name == preset)
+            .ok_or_else(|| format!("unknown preset {preset}"))?;
+        let seq = self.first_sequence()?.clone();
+        if seq.duration() <= Rational::ZERO {
+            return Err("the sequence is empty".into());
+        }
+        let job = ExportJob {
+            sequence: seq,
+            range: (Rational::ZERO, self.first_sequence()?.duration()),
+            sample_rate: 48_000,
+            gain_db: 0.0,
+        };
+        let media: Vec<(MediaId, String)> = self
+            .project()
+            .map(|p| p.media.iter().map(|m| (m.id, m.path.clone())).collect())
+            .unwrap_or_default();
+        let id = self
+            .exports
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .submit(preset.name.clone(), job, output, 0);
+        let spec = (preset, normalize, media);
+        if self
+            .export_worker
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            if let Some(shared) = &self.export_specs_shared {
+                shared
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(id, spec);
+            }
+        } else {
+            self.export_specs.insert(id, spec);
+            self.spawn_export_worker();
+        }
+        Ok(id.0)
+    }
+
+    fn spawn_export_worker(&mut self) {
+        if self
+            .export_worker
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let queue = Arc::clone(&self.exports);
+        let running = Arc::clone(&self.export_worker);
+        let specs = std::mem::take(&mut self.export_specs);
+        let specs = Arc::new(Mutex::new(specs));
+        self.export_specs_shared = Some(Arc::clone(&specs));
+        std::thread::Builder::new()
+            .name("debut-export".into())
+            .spawn(move || {
+                loop {
+                    let next = queue.lock().unwrap_or_else(|e| e.into_inner()).take_next();
+                    let Some((id, mut job, output, control)) = next else {
+                        break;
+                    };
+                    let spec = specs.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                    let result = (|| -> Result<debut_export::Progress, String> {
+                        let (preset, normalize, media) = spec.ok_or("missing export spec")?;
+                        let mut frames = debut_engine::FrameSource::new(4);
+                        let mut samples = debut_engine::SampleCache::new(48_000);
+                        for (mid, path) in &media {
+                            let dec = FfmpegDecoder::open(path).map_err(|e| e.to_string())?;
+                            let has_audio = dec.audio_info().is_some();
+                            frames.add(*mid, Box::new(dec)).map_err(|e| e.to_string())?;
+                            if has_audio {
+                                samples
+                                    .add(
+                                        *mid,
+                                        Box::new(
+                                            FfmpegDecoder::open(path).map_err(|e| e.to_string())?,
+                                        ),
+                                    )
+                                    .map_err(|e| e.to_string())?;
+                            }
+                        }
+                        if let Some(target) = normalize {
+                            let (lufs, tp) =
+                                measure_loudness(&job, &mut samples).map_err(|e| e.to_string())?;
+                            if let Some(lufs) = lufs {
+                                job.gain_db = 20.0 * normalize_gain(lufs, target, tp, -1.0).log10();
+                            }
+                        }
+                        let (w, h) = (job.sequence.width, job.sequence.height);
+                        let mut encoder = FfmpegEncoder::create(
+                            &output,
+                            EncodeSettings {
+                                width: w,
+                                height: h,
+                                frame_rate: job.sequence.frame_rate,
+                                crf: preset.quality.max(1),
+                                audio: Some(AudioEncodeSettings {
+                                    channels: 2,
+                                    sample_rate: 48_000,
+                                    bitrate: preset.audio_bitrate.max(96_000),
+                                }),
+                            },
+                        )
+                        .map_err(|e| e.to_string())?;
+                        let mut backend = AnyBackend::detect();
+                        let q = Arc::clone(&queue);
+                        let progress = match &mut backend {
+                            AnyBackend::Cpu(b) => export(
+                                &job,
+                                b,
+                                &mut frames,
+                                &mut samples,
+                                &mut encoder,
+                                &control,
+                                |p| {
+                                    q.lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .report_progress(id, p)
+                                },
+                            ),
+                            AnyBackend::Gpu(b) => export(
+                                &job,
+                                b,
+                                &mut frames,
+                                &mut samples,
+                                &mut encoder,
+                                &control,
+                                |p| {
+                                    q.lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .report_progress(id, p)
+                                },
+                            ),
+                        }
+                        .map_err(|e| e.to_string())?;
+                        Box::new(encoder).finish().map_err(|e| e.to_string())?;
+                        Ok(progress)
+                    })();
+                    queue
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .finish(id, result);
+                }
+                running.store(false, std::sync::atomic::Ordering::Release);
+            })
+            .expect("spawn export worker");
+    }
+
+    pub fn export_status(&self) -> Vec<ExportStatusDto> {
+        let q = self.exports.lock().unwrap_or_else(|e| e.into_inner());
+        q.entries()
+            .map(|e| ExportStatusDto {
+                id: e.id.0,
+                name: e.name.clone(),
+                output: e.output.clone(),
+                state: match e.state {
+                    JobState::Queued => "queued",
+                    JobState::Running => "running",
+                    JobState::Paused => "paused",
+                    JobState::Done => "done",
+                    JobState::Failed => "failed",
+                    JobState::Cancelled => "cancelled",
+                }
+                .into(),
+                frames_done: e.progress.frames_done,
+                frames_total: e.progress.frames_total,
+                loudness_lufs: e.progress.loudness_lufs,
+                true_peak_db: e.progress.true_peak_db,
+                error: e.error.clone(),
+            })
+            .collect()
+    }
+
+    pub fn export_control(&self, id: u64, action: &str) {
+        let mut q = self.exports.lock().unwrap_or_else(|e| e.into_inner());
+        match action {
+            "pause" => q.pause(JobId(id)),
+            "resume" => q.resume(JobId(id)),
+            _ => q.cancel(JobId(id)),
+        }
+    }
+}
+
+#[tauri::command]
+pub fn set_track_mix(state: State<'_, Shared>, track: String, mix: TrackMix) -> Result<(), String> {
+    lock(&state).set_track_mix(&track, mix)
+}
+
+#[tauri::command]
+pub fn add_insert(state: State<'_, Shared>, track: String, kind: String) -> Result<(), String> {
+    lock(&state).add_insert(&track, &kind)
+}
+
+#[tauri::command]
+pub fn remove_insert(state: State<'_, Shared>, track: String, index: usize) -> Result<(), String> {
+    lock(&state).remove_insert(&track, index)
+}
+
+#[tauri::command]
+pub fn export_presets(state: State<'_, Shared>) -> Vec<PresetDto> {
+    lock(&state).export_presets()
+}
+
+#[tauri::command]
+pub fn export_start(
+    state: State<'_, Shared>,
+    output: String,
+    preset: String,
+    normalize: Option<f32>,
+) -> Result<u64, String> {
+    lock(&state).export_start(output, &preset, normalize)
+}
+
+#[tauri::command]
+pub fn export_status(state: State<'_, Shared>) -> Vec<ExportStatusDto> {
+    lock(&state).export_status()
+}
+
+#[tauri::command]
+pub fn export_pause(state: State<'_, Shared>, id: u64) {
+    lock(&state).export_control(id, "pause")
+}
+
+#[tauri::command]
+pub fn export_resume(state: State<'_, Shared>, id: u64) {
+    lock(&state).export_control(id, "resume")
+}
+
+#[tauri::command]
+pub fn export_cancel(state: State<'_, Shared>, id: u64) {
+    lock(&state).export_control(id, "cancel")
+}
+
 #[tauri::command]
 pub fn import_media(state: State<'_, Shared>, path: String) -> Result<MediaDto, String> {
     lock(&state).import_media(path)
@@ -1053,6 +1446,56 @@ mod tests {
             2.0
         );
         assert_eq!(s.player.as_ref().unwrap().sequence.duration().as_f64(), 2.4);
+
+        // Mixer: fader and an insert go through the command log.
+        s.set_track_mix(
+            &a,
+            TrackMix {
+                gain_db: -6.0,
+                pan: 0.25,
+                mute: false,
+                solo: false,
+            },
+        )
+        .unwrap();
+        s.add_insert(&a, "limiter").unwrap();
+        let dto = sequence_dto(s.first_sequence().unwrap());
+        assert_eq!(dto.tracks[1].mix.gain_db, -6.0);
+        assert_eq!(dto.tracks[1].inserts, vec!["Limiter".to_string()]);
+        assert!(s.add_insert(&a, "nope").is_err());
+
+        // Export through the queue worker, normalized to -14 LUFS.
+        let out = dir.join("out.mp4").to_string_lossy().into_owned();
+        let job_id = s
+            .export_start(out.clone(), "YouTube 1080p", Some(-14.0))
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        let final_state = loop {
+            let st = s.export_status();
+            let e = st.iter().find(|e| e.id == job_id).unwrap();
+            if e.state == "done" || e.state == "failed" || std::time::Instant::now() > deadline {
+                break (
+                    e.state.clone(),
+                    e.error.clone(),
+                    e.frames_done,
+                    e.frames_total,
+                    e.loudness_lufs,
+                    e.true_peak_db,
+                );
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        };
+        assert_eq!(final_state.0, "done", "{:?}", final_state.1);
+        assert_eq!((final_state.2, final_state.3), (60, 60), "2.4 s at 25 fps");
+        let lufs = final_state.4.expect("loudness measured");
+        assert!(
+            (lufs + 14.0).abs() < 1.0 || final_state.5 > -1.1,
+            "normalized: {lufs} LUFS, {} dBTP",
+            final_state.5
+        );
+        assert!(std::fs::metadata(&out)
+            .map(|m| m.len() > 1000)
+            .unwrap_or(false));
 
         // Persistence: save, keep editing, "crash", reopen: the unsaved edit is recovered.
         assert!(s.file_status().dirty);

@@ -24,6 +24,17 @@ impl Default for TrackMix {
     }
 }
 
+impl From<debut_project::TrackMix> for TrackMix {
+    fn from(m: debut_project::TrackMix) -> Self {
+        Self {
+            gain: db_to_gain(m.gain_db),
+            pan: m.pan,
+            mute: m.mute,
+            solo: m.solo,
+        }
+    }
+}
+
 impl TrackMix {
     /// Left/right multipliers for a mono signal: equal-power pan law.
     pub fn pan_gains(&self) -> (f32, f32) {

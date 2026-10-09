@@ -12,7 +12,7 @@
 use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
-use debut_project::{AudioEffect, Clip, Effect, Param, Project, Sequence, Track};
+use debut_project::{AudioEffect, Clip, Effect, Param, Project, Sequence, Track, TrackMix};
 use serde::{Deserialize, Serialize};
 
 /// Which track a primitive operates on.
@@ -111,6 +111,11 @@ pub enum Command {
     SetTrackAudio {
         target: Target,
         effects: Vec<AudioEffect>,
+    },
+    /// Set a track's fader/pan/mute/solo (AUD-02).
+    SetTrackMix {
+        target: Target,
+        mix: TrackMix,
     },
     // ---- project structure (MED-07, TL-01) ----------------------------------
     AddMedia(MediaRef),
@@ -359,6 +364,10 @@ impl Command {
                 track_mut(project, *target)?.audio_effects = effects.clone();
                 Ok(())
             }
+            Command::SetTrackMix { target, mix } => {
+                track_mut(project, *target)?.mix = *mix;
+                Ok(())
+            }
             Command::AddMedia(m) => {
                 if project.media.iter().any(|x| x.id == m.id) {
                     return Err(Error::InvalidArgument("media id already exists".into()));
@@ -585,6 +594,10 @@ impl Command {
             Command::SetTrackAudio { target, .. } => Ok(Command::SetTrackAudio {
                 target: *target,
                 effects: track(project, *target)?.audio_effects.clone(),
+            }),
+            Command::SetTrackMix { target, .. } => Ok(Command::SetTrackMix {
+                target: *target,
+                mix: track(project, *target)?.mix,
             }),
             Command::AddMedia(m) => Ok(Command::RemoveMedia(m.id)),
             Command::RemoveMedia(id) => {

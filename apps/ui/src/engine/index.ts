@@ -44,10 +44,54 @@ export interface ClipInfo {
   source_in: number;
 }
 
+export interface TrackMix {
+  gain_db: number;
+  pan: number;
+  mute: boolean;
+  solo: boolean;
+}
+
+export type InsertKind = "eq_presence" | "eq_lowcut" | "compressor" | "limiter" | "gate" | "de_esser" | "reverb";
+
 export interface TrackInfo {
   id: string;
   kind: "video" | "audio" | "adjustment";
   clips: ClipInfo[];
+  mix: TrackMix;
+  inserts: string[];
+}
+
+export interface MixerApi {
+  setTrackMix(track: string, mix: TrackMix): Promise<void>;
+  addInsert(track: string, kind: InsertKind): Promise<void>;
+  removeInsert(track: string, index: number): Promise<void>;
+}
+
+export interface ExportPreset {
+  name: string;
+  loudness_lufs: number;
+}
+
+export interface ExportStatus {
+  id: number;
+  name: string;
+  output: string;
+  state: "queued" | "running" | "paused" | "done" | "failed" | "cancelled";
+  frames_done: number;
+  frames_total: number;
+  loudness_lufs: number | null;
+  true_peak_db: number;
+  error: string | null;
+}
+
+export interface ExportApi {
+  presets(): Promise<ExportPreset[]>;
+  /** Queue an export of the whole sequence; `normalize` is a LUFS target or null. */
+  start(output: string, preset: string, normalize: number | null): Promise<number>;
+  status(): Promise<ExportStatus[]>;
+  pause(id: number): Promise<void>;
+  resume(id: number): Promise<void>;
+  cancel(id: number): Promise<void>;
 }
 
 export interface SequenceInfo {
@@ -143,6 +187,8 @@ export interface Engine extends ProjectApi {
   media?: MediaApi;
   player?: PlayerApi;
   effects?: EffectsApi;
+  mixer?: MixerApi;
+  exporter?: ExportApi;
 }
 
 export type Target = "desktop" | "browser";

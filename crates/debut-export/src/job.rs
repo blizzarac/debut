@@ -2,13 +2,12 @@
 //! the audio mixer into an [`Encoder`] (EXP-01, EXP-04). Playback and export share
 //! `compose`/`render`/`render_span`, so the file matches the viewer.
 
-use debut_audio::{render_span, Inserts, LoudnessMeter, SampleSource, TrackMix, CHANNELS};
-use debut_core::{Rational, Result, TrackId};
+use debut_audio::{render_span, Inserts, LoudnessMeter, SampleSource, CHANNELS};
+use debut_core::{Rational, Result};
 use debut_platform::codec::{AudioBlock, Encoder, VideoFrame};
 use debut_project::Sequence;
 use debut_render::compose::{compose, SourceInfo};
 use debut_render::{Backend, FrameProvider, Rgba};
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
@@ -18,7 +17,6 @@ pub struct ExportJob {
     /// Inclusive start, exclusive end on the timeline.
     pub range: (Rational, Rational),
     pub sample_rate: u32,
-    pub mixes: HashMap<TrackId, TrackMix>,
     /// Master gain applied to the mixed audio (loudness normalization, AUD-06).
     pub gain_db: f32,
 }
@@ -143,7 +141,6 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
             bus.resize(count * CHANNELS, 0.0);
             render_span(
                 &job.sequence,
-                &job.mixes,
                 &mut inserts,
                 samples,
                 audio_cursor,
@@ -194,7 +191,6 @@ pub fn measure_loudness(
         bus.resize(n * CHANNELS, 0.0);
         render_span(
             &job.sequence,
-            &job.mixes,
             &mut inserts,
             samples,
             cursor,

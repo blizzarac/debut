@@ -1,5 +1,25 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EditOp, EffectInfo, EffectsApi, Engine, FileStatus, Frame, MediaApi, MediaInfo, ParamName, PlayerApi, SequenceInfo, Tick, TransportAction } from "./index";
+import type {
+  EditOp,
+  EffectInfo,
+  EffectsApi,
+  Engine,
+  ExportApi,
+  ExportPreset,
+  ExportStatus,
+  FileStatus,
+  Frame,
+  InsertKind,
+  MediaApi,
+  MediaInfo,
+  MixerApi,
+  ParamName,
+  PlayerApi,
+  SequenceInfo,
+  Tick,
+  TrackMix,
+  TransportAction,
+} from "./index";
 
 class TauriMedia implements MediaApi {
   importMedia(path: string) {
@@ -50,10 +70,45 @@ class TauriEffects implements EffectsApi {
   }
 }
 
+class TauriMixer implements MixerApi {
+  setTrackMix(track: string, mix: TrackMix) {
+    return invoke<void>("set_track_mix", { track, mix });
+  }
+  addInsert(track: string, kind: InsertKind) {
+    return invoke<void>("add_insert", { track, kind });
+  }
+  removeInsert(track: string, index: number) {
+    return invoke<void>("remove_insert", { track, index });
+  }
+}
+
+class TauriExport implements ExportApi {
+  presets() {
+    return invoke<ExportPreset[]>("export_presets");
+  }
+  start(output: string, preset: string, normalize: number | null) {
+    return invoke<number>("export_start", { output, preset, normalize });
+  }
+  status() {
+    return invoke<ExportStatus[]>("export_status");
+  }
+  pause(id: number) {
+    return invoke<void>("export_pause", { id });
+  }
+  resume(id: number) {
+    return invoke<void>("export_resume", { id });
+  }
+  cancel(id: number) {
+    return invoke<void>("export_cancel", { id });
+  }
+}
+
 export class TauriEngine implements Engine {
   media = new TauriMedia();
   player = new TauriPlayer();
   effects = new TauriEffects();
+  mixer = new TauriMixer();
+  exporter = new TauriExport();
 
   version() {
     return invoke<string>("version");

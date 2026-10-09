@@ -712,6 +712,7 @@ dependencies = [
 name = "debut-desktop"
 version = "0.1.0"
 dependencies = [
+ "debut-audio",
  "debut-command",
  "debut-core",
  "debut-engine",

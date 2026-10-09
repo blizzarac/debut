@@ -171,7 +171,6 @@ mod tests {
     use super::*;
     use debut_core::{FrameRate, IdGen, Rational};
     use debut_project::Sequence;
-    use std::collections::HashMap;
 
     fn job() -> ExportJob {
         let seq = Sequence::new(IdGen::new(1).fresh(), "q", FrameRate::FPS_25, 16, 9);
@@ -179,7 +178,6 @@ mod tests {
             sequence: seq,
             range: (Rational::ZERO, Rational::ONE),
             sample_rate: 48_000,
-            mixes: HashMap::new(),
             gain_db: 0.0,
         }
     }

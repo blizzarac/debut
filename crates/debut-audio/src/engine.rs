@@ -89,7 +89,6 @@ pub struct AudioRenderer {
     write_pos: i64,
     /// Rate the queued audio was rendered at; a change flushes the ring.
     rate: Rational,
-    mixes: HashMap<debut_core::TrackId, TrackMix>,
     inserts: Inserts,
     scratch: Vec<f32>,
     block: Vec<f32>,
@@ -112,7 +111,6 @@ impl AudioRenderer {
             producer,
             write_pos: 0,
             rate: Rational::ONE,
-            mixes: HashMap::new(),
             inserts: Inserts::default(),
             scratch: Vec::new(),
             block: Vec::new(),
@@ -125,10 +123,6 @@ impl AudioRenderer {
                 underruns,
             },
         )
-    }
-
-    pub fn set_track_mix(&mut self, track: debut_core::TrackId, mix: TrackMix) {
-        self.mixes.insert(track, mix);
     }
 
     /// Discard queued audio and continue from the clock's current position.
@@ -192,7 +186,6 @@ impl AudioRenderer {
         self.inserts.sync(seq, sr as u32);
         render_span(
             seq,
-            &self.mixes,
             &mut self.inserts,
             source,
             start,
@@ -234,7 +227,6 @@ impl AudioRenderer {
 #[allow(clippy::too_many_arguments)]
 pub fn render_span(
     seq: &Sequence,
-    mixes: &HashMap<debut_core::TrackId, TrackMix>,
     inserts: &mut Inserts,
     source: &mut dyn SampleSource,
     start: i64,
@@ -248,11 +240,11 @@ pub fn render_span(
     let any_solo = seq
         .tracks
         .iter()
-        .any(|t| mixes.get(&t.id).is_some_and(|m| m.solo));
+        .any(|t| t.kind == TrackKind::Audio && t.mix.solo);
     let mut clip_buf = Vec::new();
     let mut track_buf = vec![0.0f32; frames * CHANNELS];
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio) {
-        let mix = mixes.get(&track.id).copied().unwrap_or_default();
+        let mix = TrackMix::from(track.mix);
         if !mix.audible(any_solo) {
             continue;
         }
@@ -432,19 +424,17 @@ mod tests {
     #[test]
     fn mute_and_gain_apply_and_rate_change_resyncs() {
         let mut ids = IdGen::new(7);
-        let (seq, track) = seq(&mut ids);
+        let (mut seq, track) = seq(&mut ids);
         let clock = Clock::new(48_000);
         let (mut r, mut sink) = AudioRenderer::new(Arc::clone(&clock), 4096);
         clock.seek(Rational::from_int(1));
         clock.play();
-        r.set_track_mix(
-            track,
-            TrackMix {
-                gain: 0.5,
-                pan: -1.0,
-                ..Default::default()
-            },
-        );
+        seq.tracks.iter_mut().find(|t| t.id == track).unwrap().mix = debut_project::TrackMix {
+            gain_db: -6.0206,
+            pan: -1.0,
+            mute: false,
+            solo: false,
+        };
         r.resync();
         r.fill_ahead(&seq, &mut Ramp, 512, 256).unwrap();
         let mut out = vec![0.0; 4];
@@ -501,13 +491,11 @@ mod tests {
                 Ok(1)
             }
         }
-        let mixes = HashMap::new();
         let mut inserts = Inserts::default();
         inserts.sync(&seq, 48_000);
         let mut bus = vec![0.0; 2 * 4800];
         render_span(
             &seq,
-            &mixes,
             &mut inserts,
             &mut Tone,
             48_000 + 24_000,
@@ -524,7 +512,6 @@ mod tests {
         let mut bus = vec![0.0; 2 * 4800];
         render_span(
             &seq,
-            &mixes,
             &mut inserts,
             &mut Tone,
             48_000 + 24_000,

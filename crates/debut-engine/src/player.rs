@@ -5,8 +5,8 @@
 use crate::frames::FrameSource;
 use crate::playback::{Stats, Transport};
 use crate::samples::SampleCache;
-use debut_audio::{AudioRenderer, Clock, RtSink, TrackMix};
-use debut_core::{MediaId, Rational, Result, TrackId};
+use debut_audio::{AudioRenderer, Clock, RtSink};
+use debut_core::{MediaId, Rational, Result};
 use debut_platform::Decoder;
 use debut_project::Sequence;
 use debut_render::compose::{compose, SourceInfo};
@@ -62,10 +62,6 @@ impl Player {
             self.samples.add(media, d)?;
         }
         Ok(())
-    }
-
-    pub fn set_track_mix(&mut self, track: TrackId, mix: TrackMix) {
-        self.audio.set_track_mix(track, mix);
     }
 
     pub fn play(&mut self) {

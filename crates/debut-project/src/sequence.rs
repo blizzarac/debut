@@ -60,6 +60,31 @@ pub struct Track {
     /// Audio inserts, in order (AUD-05). Ignored on video tracks.
     #[serde(default)]
     pub audio_effects: Vec<crate::audio_fx::AudioEffect>,
+    /// Mixer strip state (AUD-02).
+    #[serde(default)]
+    pub mix: TrackMix,
+}
+
+/// Per-track mixer settings (AUD-02, AUD-03).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TrackMix {
+    /// Fader in dB; 0 = unity.
+    pub gain_db: f32,
+    /// -1 = hard left, 0 = centre, +1 = hard right.
+    pub pan: f32,
+    pub mute: bool,
+    pub solo: bool,
+}
+
+impl Default for TrackMix {
+    fn default() -> Self {
+        Self {
+            gain_db: 0.0,
+            pan: 0.0,
+            mute: false,
+            solo: false,
+        }
+    }
 }
 
 impl Track {
@@ -69,6 +94,7 @@ impl Track {
             kind,
             clips: Vec::new(),
             audio_effects: Vec::new(),
+            mix: TrackMix::default(),
         }
     }
 

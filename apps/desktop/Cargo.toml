@@ -26,3 +26,4 @@ debut-timeline.workspace = true
 debut-export.workspace = true
 debut-render.workspace = true
 debut-platform.workspace = true
+debut-audio.workspace = true

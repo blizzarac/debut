@@ -10,7 +10,6 @@ use debut_platform_native::codec::{
 };
 use debut_project::{Clip, ClipSource, Sequence, Track, TrackKind};
 use debut_render::CpuBackend;
-use std::collections::HashMap;
 
 const FIXTURE: &str = concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -55,7 +54,6 @@ fn exports_a_range_with_audio_and_video() {
         sequence: seq,
         range: (Rational::new(1, 5), Rational::new(6, 5)),
         sample_rate: 48_000,
-        mixes: HashMap::new(),
         gain_db: 0.0,
     };
     // Two-pass loudness normalization to the web target: measure, set gain, re-measure.

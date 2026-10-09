@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { detectTarget, loadEngine, type Engine, type FileStatus, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
+import { ExportPanel } from "./ExportPanel";
 import { Inspector } from "./Inspector";
+import { Mixer } from "./Mixer";
 import { Timeline, type Selection } from "./Timeline";
 import { Transport } from "./Transport";
 import { Viewer } from "./Viewer";
@@ -161,6 +163,18 @@ export default function App() {
             <Transport player={engine.player} tick={tick} fps={fps} />
           </>
         ) : null}
+        {engine?.mixer && seq && seq.tracks.some((t) => t.kind === "audio") && (
+          <>
+            <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Mixer</h2>
+            <Mixer seq={seq} mixer={engine.mixer} onChanged={() => refresh(engine)} />
+          </>
+        )}
+        {engine?.exporter && (
+          <>
+            <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Export</h2>
+            <ExportPanel exporter={engine.exporter} />
+          </>
+        )}
         {engine?.media && engine.player && seq ? (
           <Timeline
             seq={seq}
