@@ -48,6 +48,12 @@ class TauriMedia implements MediaApi {
   setTitle(track: string, clip: string, title: TitleInfo) {
     return invoke<void>("set_title", { track, clip, title });
   }
+  addMulticam(at: number, media: string[]) {
+    return invoke<void>("add_multicam", { at, media });
+  }
+  switchAngle(track: string, clip: string, angle: number, cut: boolean) {
+    return invoke<string>("switch_angle", { track, clip, angle, cut });
+  }
   edit(op: EditOp) {
     return invoke<void>("edit", { op });
   }

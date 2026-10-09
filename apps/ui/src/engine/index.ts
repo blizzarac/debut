@@ -66,6 +66,9 @@ export interface ClipInfo {
   title: TitleInfo | null;
   /** Set when this is a compound clip of a nested sequence. */
   nested: string | null;
+  /** Multicam clips: angle count and the active angle. */
+  angles: number | null;
+  angle: number | null;
   timeline_in: number;
   duration: number;
   source_in: number;
@@ -237,6 +240,10 @@ export interface MediaApi {
   /** Adds a 5 s title at `at` on a free video track (adds a track if needed); returns the clip id. */
   addTitle(at: number, text: string): Promise<string>;
   setTitle(track: string, clip: string, title: TitleInfo): Promise<void>;
+  /** Inserts a multicam clip of two or more media at `at` (shortest angle sets the length). */
+  addMulticam(at: number, media: string[]): Promise<void>;
+  /** Switch a multicam clip's angle; with `cut`, blade at the playhead first and switch the tail. Returns the switched clip id. */
+  switchAngle(track: string, clip: string, angle: number, cut: boolean): Promise<string>;
   edit(op: EditOp): Promise<void>;
 }
 

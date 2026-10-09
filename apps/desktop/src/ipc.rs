@@ -439,6 +439,9 @@ pub struct ClipDto {
     pub title: Option<Title>,
     /// Name of the nested sequence when this is a compound clip (TL-07).
     pub nested: Option<String>,
+    /// Multicam clips: number of angles and the active one (MED-11, TL-08).
+    pub angles: Option<usize>,
+    pub angle: Option<usize>,
     pub timeline_in: f64,
     pub duration: f64,
     pub source_in: f64,
@@ -496,6 +499,14 @@ fn sequence_dto(seq: &Sequence) -> SequenceDto {
                         },
                         nested: match &c.source {
                             ClipSource::Sequence(_) => Some("nested".to_string()),
+                            _ => None,
+                        },
+                        angles: match &c.source {
+                            ClipSource::Multicam { angles, .. } => Some(angles.len()),
+                            _ => None,
+                        },
+                        angle: match &c.source {
+                            ClipSource::Multicam { active, .. } => Some(*active),
                             _ => None,
                         },
                         timeline_in: secs(c.timeline_in),
@@ -601,6 +612,105 @@ impl Session {
         };
         let cmd = Command::insert(target, frames_of(at, fr), vec![clip], &mut self.ids);
         self.exec(cmd)
+    }
+
+    /// Insert a multicam clip of `media` (two or more angles, angle 0 active) on
+    /// the first video track and, when every angle has audio, on the first
+    /// audio track, at `at` seconds. Its length is the shortest angle (MED-11).
+    pub fn add_multicam(&mut self, at: f64, media: Vec<String>) -> Result<(), String> {
+        if media.len() < 2 {
+            return Err("a multicam clip needs at least two angles".into());
+        }
+        let angles = media
+            .iter()
+            .map(|m| Ok(MediaId(parse_id(m)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        let (seq_id, fr, video, audio) = {
+            let seq = self.first_sequence()?;
+            let first = |kind| seq.tracks.iter().find(|t| t.kind == kind).map(|t| t.id);
+            (
+                seq.id,
+                seq.frame_rate,
+                first(TrackKind::Video).ok_or("no video track")?,
+                first(TrackKind::Audio),
+            )
+        };
+        let mut duration = Rational::from_int(i64::MAX / 4);
+        let mut all_audio = true;
+        for m in &angles {
+            let p = self.probed.get(m).ok_or("unknown media")?;
+            duration = duration.min(p.2);
+            all_audio &= p.3;
+        }
+        let duration = fr.snap(duration).max(fr.frame_duration());
+        let source = ClipSource::Multicam { angles, active: 0 };
+        let mut cmds = Vec::new();
+        let mut targets = vec![video];
+        if let (Some(a), true) = (audio, all_audio) {
+            targets.push(a);
+        }
+        for track in targets {
+            let clip = Clip::new(
+                self.ids.fresh(),
+                source.clone(),
+                Rational::ZERO,
+                duration,
+                Rational::ZERO,
+            );
+            let target = Target {
+                sequence: seq_id,
+                track,
+            };
+            cmds.push(Command::insert(
+                target,
+                frames_of(at, fr),
+                vec![clip],
+                &mut self.ids,
+            ));
+        }
+        self.exec(Command::Group(cmds))
+    }
+
+    /// Switch a multicam clip to `angle`. With `cut` and the playhead strictly
+    /// inside the clip, blade there first so only the part after the playhead
+    /// switches (the live-switch gesture, TL-08). Returns the clip that switched.
+    pub fn switch_angle(
+        &mut self,
+        track: &str,
+        clip: &str,
+        angle: usize,
+        cut: bool,
+    ) -> Result<String, String> {
+        let (target, clip_id, c) = self.clip_ref(track, clip)?;
+        let ClipSource::Multicam { angles, .. } = &c.source else {
+            return Err("not a multicam clip".into());
+        };
+        if angle >= angles.len() {
+            return Err(format!("no angle {angle}"));
+        }
+        let source = ClipSource::Multicam {
+            angles: angles.clone(),
+            active: angle,
+        };
+        let at = self.playhead();
+        let mut cmds = Vec::new();
+        let mut switched = clip_id;
+        if cut && c.timeline_in < at && at < c.timeline_out() {
+            let tail_id: ClipId = self.ids.fresh();
+            cmds.push(Command::Blade {
+                target,
+                at,
+                tail_id,
+            });
+            switched = tail_id;
+        }
+        cmds.push(Command::SetClipSource {
+            target,
+            clip: switched,
+            source,
+        });
+        self.exec(Command::Group(cmds))?;
+        Ok(id_str(switched.0))
     }
 
     /// Add a 5 s title clip at `at` seconds on the topmost video track with room
@@ -1804,6 +1914,22 @@ pub enum EditOp {
 }
 
 #[tauri::command]
+pub fn add_multicam(state: State<'_, Shared>, at: f64, media: Vec<String>) -> Result<(), String> {
+    lock(&state).add_multicam(at, media)
+}
+
+#[tauri::command]
+pub fn switch_angle(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    angle: usize,
+    cut: bool,
+) -> Result<String, String> {
+    lock(&state).switch_angle(&track, &clip, angle, cut)
+}
+
+#[tauri::command]
 pub fn add_title(state: State<'_, Shared>, at: f64, text: String) -> Result<String, String> {
     lock(&state).add_title(at, text)
 }
@@ -2148,6 +2274,63 @@ mod tests {
             s.set_title(&v, &clip_id, edited).is_err(),
             "media clips have no title"
         );
+        // Multicam (MED-11, TL-08): two angles of the same file on a fresh track
+        // layout; a live switch at 1.0 s blades and switches only the tail.
+        let m2 = s.import_media(FIXTURE.to_string()).unwrap();
+        let mc_track = {
+            let t = Track::new(s.ids.fresh(), TrackKind::Video);
+            let id = t.id;
+            let seq_id = s.first_sequence().unwrap().id;
+            s.exec(Command::AddTrack {
+                sequence: seq_id,
+                track: t,
+                index: Some(0),
+            })
+            .unwrap();
+            id_str(id.0)
+        };
+        // add_multicam targets the first video track, which is now the empty one.
+        s.add_multicam(0.0, vec![m.id.clone(), m2.id.clone()])
+            .unwrap();
+        let dto = sequence_dto(s.first_sequence().unwrap());
+        assert_eq!(dto.tracks[0].id, mc_track);
+        let mc = &dto.tracks[0].clips[0];
+        assert_eq!((mc.angles, mc.angle, mc.duration), (Some(2), Some(0), 2.0));
+        assert!(
+            dto.tracks
+                .iter()
+                .filter(|t| t.kind == "audio")
+                .all(|t| t.clips.iter().any(|c| c.angles == Some(2))),
+            "audio got a multicam clip too"
+        );
+        assert!(s.switch_angle(&mc_track, &mc.id, 5, false).is_err());
+        s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+        let tail = s.switch_angle(&mc_track, &mc.id, 1, true).unwrap();
+        let dto = sequence_dto(s.first_sequence().unwrap());
+        let clips = &dto.tracks[0].clips;
+        assert_eq!(clips.len(), 2);
+        assert_eq!(
+            (clips[0].angle, clips[1].angle, clips[1].id.as_str()),
+            (Some(0), Some(1), tail.as_str())
+        );
+        assert_eq!((clips[1].timeline_in, clips[1].duration), (1.0, 1.0));
+        s.transport(TransportAction::Seek { t: 1.4 }).unwrap();
+        let (_, _, px) = s.frame_pixels().unwrap();
+        assert!(sum(&px) > 0, "angle 1 renders");
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.sync_player().unwrap();
+        assert_eq!(
+            sequence_dto(s.first_sequence().unwrap()).tracks[0]
+                .clips
+                .len(),
+            1
+        );
+        // Clear the multicam material again (and its track) for the checks below.
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.sync_player().unwrap();
+        assert_eq!(sequence_dto(s.first_sequence().unwrap()).tracks[0].id, v);
+
         // Lift the title again so the export below covers the original 2.4 s.
         s.edit(EditOp::Lift {
             track: title_track.id.clone(),

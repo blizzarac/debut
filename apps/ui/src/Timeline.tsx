@@ -195,7 +195,7 @@ export function Timeline({
                         />
                       )}
                       <text x={x + EDGE + 2} y={y + TRACK_H / 2 + 4} fontSize={11} fill="#fff" pointerEvents="none">
-                        {clip.title ? `T “${clip.title.text.slice(0, 18)}”` : clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s
+                        {clip.title ? `T “${clip.title.text.slice(0, 18)}”` : clip.angles != null ? `MC ${(clip.angle ?? 0) + 1}/${clip.angles}` : clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s
                       </text>
                     </g>
                   );

@@ -53,6 +53,32 @@ export default function App() {
     engine.markers.add(tickRef.current?.position ?? 0, "", null).then(() => refresh(engine)).catch((err) => setStatus(`marker failed: ${err}`));
   }, [engine, refresh]);
 
+  const selectedRef = useRef<Selection>(null);
+  selectedRef.current = selected;
+  const seqRef = useRef<SequenceInfo | null>(null);
+  seqRef.current = seq;
+  const switchAngle = useCallback(
+    (angle: number) => {
+      const sel = selectedRef.current;
+      const clip = sel && seqRef.current?.tracks.find((t) => t.id === sel.track)?.clips.find((c) => c.id === sel.clip);
+      if (!engine?.media || !sel || !clip || clip.angles == null || angle >= clip.angles) return;
+      engine.media
+        .switchAngle(sel.track, sel.clip, angle, true)
+        .then((id) => {
+          setSelected({ track: sel.track, clip: id });
+          return refresh(engine);
+        })
+        .catch((err) => setStatus(`switch failed: ${err}`));
+    },
+    [engine, refresh],
+  );
+
+  async function addMulticam() {
+    if (!engine?.media || mediaList.length < 2) return;
+    await engine.media.addMulticam(tick?.position ?? 0, mediaList.map((m) => m.id)).catch((err) => setStatus(`multicam failed: ${err}`));
+    await refresh(engine);
+  }
+
   async function importMedia() {
     if (!engine?.media || !path) return;
     try {
@@ -156,6 +182,11 @@ export default function App() {
                 </li>
               ))}
             </ul>
+            {mediaList.length >= 2 && (
+              <button onClick={addMulticam} title="Insert all imported media as one multicam clip at the playhead; keys 1–9 switch angles" style={{ marginTop: 4 }}>
+                Multicam from all ({mediaList.length})
+              </button>
+            )}
           </>
         ) : (
           <p style={{ fontSize: 12, color: "#999" }}>Media import and playback are not available on this target yet.</p>
@@ -192,7 +223,7 @@ export default function App() {
         {engine?.player ? (
           <>
             <Viewer player={engine.player} onTick={onTick} refreshKey={refreshKey} />
-            <Transport player={engine.player} tick={tick} fps={fps} onMarker={addMarkerAtPlayhead} />
+            <Transport player={engine.player} tick={tick} fps={fps} onMarker={addMarkerAtPlayhead} onAngle={switchAngle} />
             <Scopes player={engine.player} frameKey={(tick?.frame ?? 0) * 1000 + refreshKey} />
           </>
         ) : null}

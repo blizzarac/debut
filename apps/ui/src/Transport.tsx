@@ -9,7 +9,7 @@ export function timecode(t: number, fps: number): string {
   return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}:${pad(f)}`;
 }
 
-export function Transport({ player, tick, fps, onMarker }: { player: PlayerApi; tick: Tick | null; fps: number; onMarker?: () => void }) {
+export function Transport({ player, tick, fps, onMarker, onAngle }: { player: PlayerApi; tick: Tick | null; fps: number; onMarker?: () => void; onAngle?: (angle: number) => void }) {
   const [quality, setQuality] = useState<PreviewQuality>("auto");
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -40,11 +40,14 @@ export function Transport({ player, tick, fps, onMarker }: { player: PlayerApi; 
         case "m":
           onMarker?.();
           break;
+        default:
+          // 1..9 switch the selected multicam clip's angle at the playhead.
+          if (e.key >= "1" && e.key <= "9" && !e.ctrlKey && !e.metaKey && !e.altKey) onAngle?.(Number(e.key) - 1);
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [player, onMarker]);
+  }, [player, onMarker, onAngle]);
 
   const btn = (label: string, action: () => void, title?: string) => (
     <button onClick={action} title={title} style={{ minWidth: 36 }}>
