@@ -14,6 +14,9 @@ pub struct Sequence {
     pub width: u32,
     pub height: u32,
     pub tracks: Vec<Track>,
+    /// Timeline markers in sequence time (TL-10).
+    #[serde(default)]
+    pub markers: Vec<crate::marker::Marker>,
 }
 
 impl Sequence {
@@ -31,6 +34,7 @@ impl Sequence {
             width,
             height,
             tracks: Vec::new(),
+            markers: Vec::new(),
         }
     }
 
@@ -205,6 +209,9 @@ pub struct Clip {
     /// cut (FX-03). Both clips extend by half the duration into their handles.
     #[serde(default)]
     pub transition_in: Option<Transition>,
+    /// Clip markers in clip-local time (TL-10).
+    #[serde(default)]
+    pub markers: Vec<crate::marker::Marker>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -242,6 +249,7 @@ impl Clip {
             speed: Rational::ONE,
             effects: Vec::new(),
             transition_in: None,
+            markers: Vec::new(),
         }
     }
 
@@ -280,7 +288,26 @@ impl Clip {
         tail.id = tail_id;
         tail.trim_head_to(t);
         self.trim_tail_to(t);
+        // Clip markers follow the material they sit on (clip-local times).
+        let cut = t - self.timeline_in;
+        self.markers.retain(|m| m.at < cut);
+        tail.markers.retain(|m| m.at >= cut);
+        for m in &mut tail.markers {
+            m.at -= cut;
+        }
         tail
+    }
+
+    /// Absorb `tail` (its material continues this clip): extend and re-base its
+    /// markers onto this clip's local time.
+    pub fn join(&mut self, tail: Clip) {
+        let offset = self.duration;
+        self.duration += tail.duration;
+        self.markers.extend(tail.markers.into_iter().map(|mut m| {
+            m.at += offset;
+            m
+        }));
+        self.markers.sort_by_key(|m| m.at);
     }
 
     /// Evaluate a parameter of the `effect`-th effect at sequence time `t`.

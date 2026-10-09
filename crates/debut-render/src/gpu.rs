@@ -27,6 +27,9 @@ pub struct GpuImage {
     texture: Arc<wgpu::Texture>,
     w: u32,
     h: u32,
+    /// An 8-bit upload still holding straight alpha; every op that reads it
+    /// premultiplies on the way in (the colour transform does so for free).
+    straight: bool,
 }
 
 #[repr(C)]
@@ -427,11 +430,29 @@ impl GpuBackend {
             texture: Arc::new(out),
             w,
             h,
+            straight: false,
         }
     }
 }
 
 impl GpuBackend {
+    /// Premultiply a straight 8-bit upload into the float format; other images
+    /// pass through untouched.
+    fn premultiplied(&self, img: &GpuImage) -> GpuImage {
+        if img.straight {
+            self.run(
+                &self.premultiply,
+                &[0u8; 16],
+                &[img],
+                img.w,
+                img.h,
+                "premultiply",
+            )
+        } else {
+            img.clone()
+        }
+    }
+
     /// Copy a texture to the CPU as tightly packed rows of `bpp` bytes per pixel.
     fn read_back(&self, img: &GpuImage, bpp: u32) -> Vec<u8> {
         let unpadded = img.w * bpp;
@@ -531,6 +552,7 @@ impl Backend for GpuBackend {
             texture: Arc::new(texture),
             w,
             h,
+            straight: false,
         }
     }
 
@@ -558,15 +580,16 @@ impl Backend for GpuBackend {
                 depth_or_array_layers: 1,
             },
         );
-        let raw = GpuImage {
+        GpuImage {
             texture: Arc::new(texture),
             w,
             h,
-        };
-        self.run(&self.premultiply, &[0u8; 16], &[&raw], w, h, "premultiply")
+            straight: true,
+        }
     }
 
     fn transform(&mut self, src: &GpuImage, xf: &Transform2D, w: u32, h: u32) -> GpuImage {
+        let src = &self.premultiplied(src);
         let p = TransformParams {
             m: [xf.m[0][0], xf.m[0][1], xf.m[1][0], xf.m[1][1]],
             t: xf.t,
@@ -589,6 +612,7 @@ impl Backend for GpuBackend {
         mode: BlendMode,
         opacity: f32,
     ) -> GpuImage {
+        let (bottom, top) = (&self.premultiplied(bottom), &self.premultiplied(top));
         assert_eq!(
             (bottom.w, bottom.h),
             (top.w, top.h),
@@ -616,6 +640,7 @@ impl Backend for GpuBackend {
     }
 
     fn dissolve(&mut self, a: &GpuImage, b: &GpuImage, progress: f32) -> GpuImage {
+        let (a, b) = (&self.premultiplied(a), &self.premultiplied(b));
         assert_eq!((a.w, a.h), (b.w, b.h), "dissolve inputs must match");
         let p = DissolveParams {
             progress: progress.clamp(0.0, 1.0),
@@ -636,7 +661,12 @@ impl Backend for GpuBackend {
         let p = ColorTransformParams {
             m0: [m[0][0], m[0][1], m[0][2], xf.decode as u32 as f32],
             m1: [m[1][0], m[1][1], m[1][2], xf.encode as u32 as f32],
-            m2: [m[2][0], m[2][1], m[2][2], 0.0],
+            m2: [
+                m[2][0],
+                m[2][1],
+                m[2][2],
+                if src.straight { 1.0 } else { 0.0 },
+            ],
         };
         self.run(
             &self.color_transform,
@@ -649,6 +679,7 @@ impl Backend for GpuBackend {
     }
 
     fn lut3d(&mut self, src: &GpuImage, lut: &Lut3d) -> GpuImage {
+        let src = &self.premultiplied(src);
         let n = lut.size as u32;
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("lut3d"),
@@ -706,6 +737,7 @@ impl Backend for GpuBackend {
     }
 
     fn grade(&mut self, src: &GpuImage, g: &Grade) -> GpuImage {
+        let src = &self.premultiplied(src);
         let p = GradeParams {
             lift: [g.lift[0], g.lift[1], g.lift[2], g.exposure],
             gamma: [g.gamma[0], g.gamma[1], g.gamma[2], g.contrast],
@@ -723,6 +755,7 @@ impl Backend for GpuBackend {
     }
 
     fn download_rgba8(&mut self, img: &GpuImage, transfer: Transfer) -> Vec<u8> {
+        let img = &self.premultiplied(img);
         let p = [transfer as u32, 0, 0, 0];
         let out = self.run(
             &self.output,
@@ -736,6 +769,7 @@ impl Backend for GpuBackend {
     }
 
     fn download(&mut self, img: &GpuImage) -> Vec<Rgba> {
+        let img = &self.premultiplied(img);
         let bytes = self.read_back(img, BYTES_PER_PIXEL);
         bytemuck::cast_slice::<u8, Rgba>(&bytes).to_vec()
     }

@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useState } from "react";
-import { detectTarget, loadEngine, type Engine, type FileStatus, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { detectTarget, loadEngine, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
 import { ExportPanel } from "./ExportPanel";
 import { Inspector } from "./Inspector";
+import { Markers } from "./Markers";
 import { Mixer } from "./Mixer";
 import { Scopes } from "./Scopes";
 import { Timeline, type Selection } from "./Timeline";
@@ -20,11 +21,13 @@ export default function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [selected, setSelected] = useState<Selection>(null);
   const [file, setFile] = useState<FileStatus | null>(null);
+  const [markerList, setMarkerList] = useState<MarkerInfo[]>([]);
   const [filePath, setFilePath] = useState("");
 
   const refresh = useCallback(async (e: Engine) => {
     if (e.media) setSeq(await e.media.sequence().catch(() => null));
     if (e.fileStatus) setFile(await e.fileStatus().catch(() => null));
+    if (e.markers) setMarkerList(await e.markers.list().catch(() => []));
     setCanUndo(await e.canUndo());
     setRefreshKey((k) => k + 1);
   }, []);
@@ -43,6 +46,12 @@ export default function App() {
   }, []);
 
   const onTick = useCallback((t: Tick) => setTick(t), []);
+  const tickRef = useRef<Tick | null>(null);
+  tickRef.current = tick;
+  const addMarkerAtPlayhead = useCallback(() => {
+    if (!engine?.markers) return;
+    engine.markers.add(tickRef.current?.position ?? 0, "", null).then(() => refresh(engine)).catch((err) => setStatus(`marker failed: ${err}`));
+  }, [engine, refresh]);
 
   async function importMedia() {
     if (!engine?.media || !path) return;
@@ -156,6 +165,12 @@ export default function App() {
             <Inspector effects={engine.effects} selected={selected} position={Math.round((tick?.position ?? 0) * 25) / 25} onChanged={() => refresh(engine)} />
           </>
         )}
+        {engine?.markers && engine.player && (
+          <>
+            <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Markers</h2>
+            <Markers markers={engine.markers} list={markerList} fps={fps} onSeek={(t) => engine.player!.transport({ kind: "seek", t })} onChanged={() => refresh(engine)} />
+          </>
+        )}
         {engine?.mixer && seq && seq.tracks.some((t) => t.kind === "audio") && (
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Mixer</h2>
@@ -173,7 +188,7 @@ export default function App() {
         {engine?.player ? (
           <>
             <Viewer player={engine.player} onTick={onTick} refreshKey={refreshKey} />
-            <Transport player={engine.player} tick={tick} fps={fps} />
+            <Transport player={engine.player} tick={tick} fps={fps} onMarker={addMarkerAtPlayhead} />
             <Scopes player={engine.player} frameKey={(tick?.frame ?? 0) * 1000 + refreshKey} />
           </>
         ) : null}
@@ -186,6 +201,7 @@ export default function App() {
             selected={selected}
             onSelect={setSelected}
             onEdited={() => refresh(engine)}
+            markers={markerList}
           />
         ) : null}
       </section>

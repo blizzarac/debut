@@ -9,7 +9,7 @@ export function timecode(t: number, fps: number): string {
   return `${pad(Math.floor(s / 3600))}:${pad(Math.floor(s / 60) % 60)}:${pad(s % 60)}:${pad(f)}`;
 }
 
-export function Transport({ player, tick, fps }: { player: PlayerApi; tick: Tick | null; fps: number }) {
+export function Transport({ player, tick, fps, onMarker }: { player: PlayerApi; tick: Tick | null; fps: number; onMarker?: () => void }) {
   const [quality, setQuality] = useState<PreviewQuality>("auto");
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -37,11 +37,14 @@ export function Transport({ player, tick, fps }: { player: PlayerApi; tick: Tick
         case "Home":
           player.transport({ kind: "seek", t: 0 });
           break;
+        case "m":
+          onMarker?.();
+          break;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [player]);
+  }, [player, onMarker]);
 
   const btn = (label: string, action: () => void, title?: string) => (
     <button onClick={action} title={title} style={{ minWidth: 36 }}>

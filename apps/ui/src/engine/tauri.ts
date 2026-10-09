@@ -10,6 +10,9 @@ import type {
   FileStatus,
   Frame,
   InsertKind,
+  MarkerEdit,
+  MarkerInfo,
+  MarkersApi,
   MediaApi,
   MediaInfo,
   MixerApi,
@@ -115,7 +118,26 @@ class TauriExport implements ExportApi {
   }
 }
 
+class TauriMarkers implements MarkersApi {
+  list() {
+    return invoke<MarkerInfo[]>("markers");
+  }
+  add(at: number, note: string, clip: string | null) {
+    return invoke<string>("add_marker", { at, note, clip });
+  }
+  update(id: string, edit: MarkerEdit) {
+    return invoke<void>("update_marker", { id, edit });
+  }
+  remove(id: string) {
+    return invoke<void>("remove_marker", { id });
+  }
+  exportList(path: string) {
+    return invoke<number>("export_markers", { path });
+  }
+}
+
 export class TauriEngine implements Engine {
+  markers = new TauriMarkers();
   media = new TauriMedia();
   player = new TauriPlayer();
   effects = new TauriEffects();

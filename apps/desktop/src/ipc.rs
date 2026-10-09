@@ -2,7 +2,8 @@
 //! player is rebuilt from the project's sequence after every edit.
 
 use debut_audio::normalize_gain;
-use debut_command::{Command, Target};
+use debut_command::{Command, MarkerTarget, Target};
+use debut_core::id::MarkerId;
 use debut_core::{ClipId, FrameRate, IdGen, MediaId, Rational, TrackId};
 use debut_engine::{Player, Stats, Workspace};
 use debut_export::{export, measure_loudness, ExportJob, ExportQueue, JobId, JobState, Preset};
@@ -16,7 +17,7 @@ use debut_platform_native::codec::{AudioEncodeSettings, EncodeSettings, FfmpegEn
 use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
-    schema, AudioEffect, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, Param, Project,
+    schema, AudioEffect, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, Marker, Param, Project,
     Sequence, Track, TrackKind, TrackMix, TransformFx, Transition, TransitionKind,
 };
 use debut_render::AnyBackend;
@@ -1248,6 +1249,199 @@ pub fn export_cancel(state: State<'_, Shared>, id: u64) {
     lock(&state).export_control(id, "cancel")
 }
 
+#[derive(Serialize, Debug)]
+pub struct MarkerDto {
+    pub id: String,
+    /// Absolute sequence time, also for clip markers.
+    pub at: f64,
+    pub duration: f64,
+    pub color: [u8; 3],
+    pub note: String,
+    /// `None` for a timeline marker, else the owning clip.
+    pub clip: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct MarkerEdit {
+    pub note: Option<String>,
+    pub color: Option<[u8; 3]>,
+    pub duration: Option<f64>,
+    pub at: Option<f64>,
+}
+
+impl Session {
+    /// Timeline markers plus every clip marker, in sequence time.
+    pub fn markers(&self) -> Result<Vec<MarkerDto>, String> {
+        let seq = self.first_sequence()?;
+        let mut out: Vec<MarkerDto> = seq
+            .markers
+            .iter()
+            .map(|m| MarkerDto {
+                id: id_str(m.id.0),
+                at: secs(m.at),
+                duration: secs(m.duration),
+                color: m.color,
+                note: m.note.clone(),
+                clip: None,
+            })
+            .collect();
+        for t in &seq.tracks {
+            for c in &t.clips {
+                for m in &c.markers {
+                    out.push(MarkerDto {
+                        id: id_str(m.id.0),
+                        at: secs(c.timeline_in + m.at),
+                        duration: secs(m.duration),
+                        color: m.color,
+                        note: m.note.clone(),
+                        clip: Some(id_str(c.id.0)),
+                    });
+                }
+            }
+        }
+        out.sort_by(|a, b| a.at.total_cmp(&b.at));
+        Ok(out)
+    }
+
+    fn marker_target(&self, id: MarkerId) -> Result<(MarkerTarget, Marker, Rational), String> {
+        let seq = self.first_sequence()?;
+        if let Some(m) = seq.markers.iter().find(|m| m.id == id) {
+            return Ok((
+                MarkerTarget {
+                    sequence: seq.id,
+                    clip: None,
+                },
+                m.clone(),
+                Rational::ZERO,
+            ));
+        }
+        for t in &seq.tracks {
+            for c in &t.clips {
+                if let Some(m) = c.markers.iter().find(|m| m.id == id) {
+                    return Ok((
+                        MarkerTarget {
+                            sequence: seq.id,
+                            clip: Some((t.id, c.id)),
+                        },
+                        m.clone(),
+                        c.timeline_in,
+                    ));
+                }
+            }
+        }
+        Err("marker not found".into())
+    }
+
+    /// Add a timeline marker, or a clip marker when `clip` is given, at `at` seconds.
+    pub fn add_marker(
+        &mut self,
+        at: f64,
+        note: String,
+        clip: Option<String>,
+    ) -> Result<String, String> {
+        let seq = self.first_sequence()?;
+        let (seq_id, fr) = (seq.id, seq.frame_rate);
+        let t = frames_of(at, fr);
+        let (target, local) = match clip {
+            None => (
+                MarkerTarget {
+                    sequence: seq_id,
+                    clip: None,
+                },
+                t,
+            ),
+            Some(cid) => {
+                let cid = ClipId(parse_id(&cid)?);
+                let (track, c) = seq
+                    .tracks
+                    .iter()
+                    .find_map(|tr| tr.clip(cid).map(|c| (tr.id, c)))
+                    .ok_or("clip not found")?;
+                (
+                    MarkerTarget {
+                        sequence: seq_id,
+                        clip: Some((track, cid)),
+                    },
+                    t - c.timeline_in,
+                )
+            }
+        };
+        let marker = Marker::new(self.ids.fresh(), local, note);
+        let id = id_str(marker.id.0);
+        self.exec(Command::AddMarker { target, marker })?;
+        Ok(id)
+    }
+
+    pub fn update_marker(&mut self, id: &str, edit: MarkerEdit) -> Result<(), String> {
+        let fr = self.first_sequence()?.frame_rate;
+        let (target, mut m, base) = self.marker_target(MarkerId(parse_id(id)?))?;
+        if let Some(n) = edit.note {
+            m.note = n;
+        }
+        if let Some(c) = edit.color {
+            m.color = c;
+        }
+        if let Some(d) = edit.duration {
+            m.duration = frames_of(d.max(0.0), fr);
+        }
+        if let Some(a) = edit.at {
+            m.at = frames_of(a, fr) - base;
+        }
+        self.exec(Command::UpdateMarker { target, marker: m })
+    }
+
+    pub fn remove_marker(&mut self, id: &str) -> Result<(), String> {
+        let (target, m, _) = self.marker_target(MarkerId(parse_id(id)?))?;
+        self.exec(Command::RemoveMarker { target, id: m.id })
+    }
+
+    /// Write the marker list (tab-separated timecodes) to `path`.
+    pub fn export_markers(&self, path: &str) -> Result<usize, String> {
+        let seq = self.first_sequence()?;
+        let mut rows: Vec<(Rational, &Marker)> = seq.markers.iter().map(|m| (m.at, m)).collect();
+        for t in &seq.tracks {
+            for c in &t.clips {
+                rows.extend(c.markers.iter().map(|m| (c.timeline_in + m.at, m)));
+            }
+        }
+        let text = debut_project::marker_list(&rows, seq.frame_rate);
+        self.store
+            .write(path, text.as_bytes())
+            .map_err(|e| e.to_string())?;
+        Ok(rows.len())
+    }
+}
+
+#[tauri::command]
+pub fn markers(state: State<'_, Shared>) -> Result<Vec<MarkerDto>, String> {
+    lock(&state).markers()
+}
+
+#[tauri::command]
+pub fn add_marker(
+    state: State<'_, Shared>,
+    at: f64,
+    note: String,
+    clip: Option<String>,
+) -> Result<String, String> {
+    lock(&state).add_marker(at, note, clip)
+}
+
+#[tauri::command]
+pub fn update_marker(state: State<'_, Shared>, id: String, edit: MarkerEdit) -> Result<(), String> {
+    lock(&state).update_marker(&id, edit)
+}
+
+#[tauri::command]
+pub fn remove_marker(state: State<'_, Shared>, id: String) -> Result<(), String> {
+    lock(&state).remove_marker(&id)
+}
+
+#[tauri::command]
+pub fn export_markers(state: State<'_, Shared>, path: String) -> Result<usize, String> {
+    lock(&state).export_markers(&path)
+}
+
 #[tauri::command]
 pub fn import_media(state: State<'_, Shared>, path: String) -> Result<MediaDto, String> {
     lock(&state).import_media(path)
@@ -1558,7 +1752,9 @@ mod tests {
         let (hw, hh, _) = s.frame_pixels().unwrap();
         assert_eq!((hw, hh), (32, 18));
         s.set_preview_quality(PreviewQuality::Auto);
-        assert_eq!(s.tick().unwrap().preview_divisor, 2);
+        // Auto decides from the measured frame cost (software GPU here), so only the
+        // set of divisors is fixed.
+        assert!([1, 2, 4].contains(&s.tick().unwrap().preview_divisor));
         s.set_preview_quality(PreviewQuality::Full);
         let (fw, _, _) = s.frame_pixels().unwrap();
         assert_eq!(fw, 64);
@@ -1614,6 +1810,56 @@ mod tests {
                 .len(),
             1
         );
+
+        // Markers: timeline and clip markers, edit, export, undo.
+        let clip_for_marker = sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[0]
+            .id
+            .clone();
+        let m1 = s.add_marker(1.0, "timeline".into(), None).unwrap();
+        let m2 = s
+            .add_marker(2.0, "on clip".into(), Some(clip_for_marker))
+            .unwrap();
+        let list = s.markers().unwrap();
+        assert_eq!(list.len(), 2, "{list:?}");
+        assert_eq!((list[0].at, list[0].clip.is_none()), (1.0, true));
+        assert_eq!(
+            (list[1].at, list[1].clip.is_some()),
+            (2.0, true),
+            "clip marker reported in sequence time"
+        );
+        s.update_marker(
+            &m1,
+            MarkerEdit {
+                note: Some("renamed".into()),
+                color: Some([255, 0, 0]),
+                duration: Some(0.4),
+                at: None,
+            },
+        )
+        .unwrap();
+        let list = s.markers().unwrap();
+        assert_eq!(
+            (list[0].note.as_str(), list[0].color, list[0].duration),
+            ("renamed", [255, 0, 0], 0.4)
+        );
+        let marker_path = dir.join("markers.tsv").to_string_lossy().into_owned();
+        assert_eq!(s.export_markers(&marker_path).unwrap(), 2);
+        let text = std::fs::read_to_string(&marker_path).unwrap();
+        assert!(
+            text.contains("00:00:01:00\t00:00:01:10\t#ff0000\trenamed"),
+            "{text}"
+        );
+        s.remove_marker(&m2).unwrap();
+        assert_eq!(s.markers().unwrap().len(), 1);
+        s.workspace_mut().unwrap().undo().unwrap();
+        assert_eq!(s.markers().unwrap().len(), 2);
+        s.workspace_mut().unwrap().redo().unwrap();
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.workspace_mut().unwrap().undo().unwrap();
+        assert!(s.markers().unwrap().is_empty());
+        s.sync_player().unwrap();
 
         // Mixer: fader and an insert go through the command log.
         s.set_track_mix(

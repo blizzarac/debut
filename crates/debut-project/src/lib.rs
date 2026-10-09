@@ -14,6 +14,7 @@ pub mod sequence;
 
 pub use audio_fx::{AudioEffect, EqBand, EqKind};
 pub use effect::{Effect, GradeFx, Param, TransformFx};
+pub use marker::{marker_list, Marker};
 pub use sequence::{
     Clip, ClipSource, Layer, Sequence, Track, TrackKind, TrackMix, Transition, TransitionKind,
 };

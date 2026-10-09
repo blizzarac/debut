@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import type { ClipInfo, EditOp, MediaApi, PlayerApi, SequenceInfo, TrackInfo } from "./engine";
+import type { ClipInfo, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, TrackInfo } from "./engine";
 
 const TRACK_H = 44;
 const RULER_H = 22;
@@ -21,6 +21,7 @@ export function Timeline({
   selected,
   onSelect,
   onEdited,
+  markers = [],
 }: {
   seq: SequenceInfo;
   position: number;
@@ -29,6 +30,7 @@ export function Timeline({
   selected: Selection;
   onSelect: (s: Selection) => void;
   onEdited: () => void;
+  markers?: MarkerInfo[];
 }) {
   const [pxPerSec, setPxPerSec] = useState(120);
   const setSelected = onSelect;
@@ -121,6 +123,19 @@ export function Timeline({
               </text>
             </g>
           ))}
+          {/* markers */}
+          {markers.map((m) => {
+            const mx = HEADER_W + m.at * pxPerSec;
+            const mw = Math.max(0, m.duration * pxPerSec);
+            const c = `rgb(${m.color.join(",")})`;
+            return (
+              <g key={m.id} onMouseDown={() => player.transport({ kind: "seek", t: m.at })} style={{ cursor: "pointer" }}>
+                {mw > 0 && <rect x={mx} y={2} width={mw} height={RULER_H - 4} fill={c} opacity={0.35} />}
+                <polygon points={`${mx - 5},2 ${mx + 5},2 ${mx},${RULER_H - 2}`} fill={c} />
+                <title>{m.note || (m.clip ? "clip marker" : "marker")}</title>
+              </g>
+            );
+          })}
           {/* tracks */}
           {seq.tracks.map((track, i) => {
             const y = RULER_H + i * TRACK_H;

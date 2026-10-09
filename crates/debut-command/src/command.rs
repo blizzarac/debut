@@ -9,13 +9,21 @@
 //!
 //! Insert and extract are groups built by the constructors at the bottom.
 
+use debut_core::id::MarkerId;
 use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
 use debut_project::{
-    AudioEffect, Clip, Effect, Param, Project, Sequence, Track, TrackMix, Transition,
+    AudioEffect, Clip, Effect, Marker, Param, Project, Sequence, Track, TrackMix, Transition,
 };
 use serde::{Deserialize, Serialize};
+
+/// Where a marker lives: on the sequence, or on one clip (clip-local time).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarkerTarget {
+    pub sequence: SequenceId,
+    pub clip: Option<(TrackId, ClipId)>,
+}
 
 /// Which track a primitive operates on.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -118,6 +126,20 @@ pub enum Command {
     SetTrackMix {
         target: Target,
         mix: TrackMix,
+    },
+    // ---- markers (TL-10) ----------------------------------------------------------
+    AddMarker {
+        target: MarkerTarget,
+        marker: Marker,
+    },
+    RemoveMarker {
+        target: MarkerTarget,
+        id: MarkerId,
+    },
+    /// Replace a marker's fields (matched by id).
+    UpdateMarker {
+        target: MarkerTarget,
+        marker: Marker,
     },
     /// Set or clear the transition into `clip` from its predecessor (FX-03).
     SetTransition {
@@ -264,7 +286,7 @@ impl Command {
                 let tr = track_mut(project, *target)?;
                 if let Some(i) = joinable_at(tr, *at) {
                     let tail = tr.clips.remove(i + 1);
-                    tr.clips[i].duration += tail.duration;
+                    tr.clips[i].join(tail);
                 }
                 Ok(())
             }
@@ -374,6 +396,34 @@ impl Command {
             }
             Command::SetTrackMix { target, mix } => {
                 track_mut(project, *target)?.mix = *mix;
+                Ok(())
+            }
+            Command::AddMarker { target, marker } => {
+                let list = markers_mut(project, *target)?;
+                if list.iter().any(|m| m.id == marker.id) {
+                    return Err(Error::InvalidArgument("marker id already exists".into()));
+                }
+                list.push(marker.clone());
+                list.sort_by_key(|m| m.at);
+                Ok(())
+            }
+            Command::RemoveMarker { target, id } => {
+                let list = markers_mut(project, *target)?;
+                let i = list
+                    .iter()
+                    .position(|m| m.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("marker {id:?}")))?;
+                list.remove(i);
+                Ok(())
+            }
+            Command::UpdateMarker { target, marker } => {
+                let list = markers_mut(project, *target)?;
+                let slot = list
+                    .iter_mut()
+                    .find(|m| m.id == marker.id)
+                    .ok_or_else(|| Error::NotFound(format!("marker {:?}", marker.id)))?;
+                *slot = marker.clone();
+                list.sort_by_key(|m| m.at);
                 Ok(())
             }
             Command::SetTransition {
@@ -646,6 +696,30 @@ impl Command {
                 target: *target,
                 mix: track(project, *target)?.mix,
             }),
+            Command::AddMarker { target, marker } => Ok(Command::RemoveMarker {
+                target: *target,
+                id: marker.id,
+            }),
+            Command::RemoveMarker { target, id }
+            | Command::UpdateMarker {
+                target,
+                marker: Marker { id, .. },
+            } => {
+                let m = markers(project, *target)?
+                    .iter()
+                    .find(|m| m.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("marker {id:?}")))?;
+                Ok(match self {
+                    Command::RemoveMarker { .. } => Command::AddMarker {
+                        target: *target,
+                        marker: m.clone(),
+                    },
+                    _ => Command::UpdateMarker {
+                        target: *target,
+                        marker: m.clone(),
+                    },
+                })
+            }
             Command::SetTransition { target, clip, .. } => Ok(Command::SetTransition {
                 target: *target,
                 clip: *clip,
@@ -782,6 +856,42 @@ impl Command {
                 by: start - end,
             },
         ])
+    }
+}
+
+fn markers(project: &Project, t: MarkerTarget) -> Result<&Vec<Marker>> {
+    let seq = project
+        .sequence(t.sequence)
+        .ok_or_else(|| Error::NotFound(format!("sequence {:?}", t.sequence)))?;
+    match t.clip {
+        None => Ok(&seq.markers),
+        Some((track, clip)) => Ok(&find_clip(
+            project,
+            Target {
+                sequence: t.sequence,
+                track,
+            },
+            clip,
+        )?
+        .markers),
+    }
+}
+
+fn markers_mut(project: &mut Project, t: MarkerTarget) -> Result<&mut Vec<Marker>> {
+    let seq = project
+        .sequence_mut(t.sequence)
+        .ok_or_else(|| Error::NotFound(format!("sequence {:?}", t.sequence)))?;
+    match t.clip {
+        None => Ok(&mut seq.markers),
+        Some((track, clip)) => {
+            let tr = seq
+                .track_mut(track)
+                .ok_or_else(|| Error::NotFound(format!("track {track:?}")))?;
+            let i = tr
+                .clip_index(clip)
+                .ok_or_else(|| Error::NotFound(format!("clip {clip:?}")))?;
+            Ok(&mut tr.clips[i].markers)
+        }
     }
 }
 
@@ -1232,6 +1342,121 @@ mod tests {
         );
         assert!(matches!(tr.layer_at(sec(12)), Some(debut_project::Layer::Single(c)) if c.id == b));
         inv.apply(&mut fx.project).unwrap();
+        assert_eq!(fx.project, before);
+    }
+
+    #[test]
+    fn blade_splits_clip_markers_and_join_merges_them_back() {
+        let mut fx = fixture();
+        let a = track(&fx.project, fx.target).unwrap().clips[0].id;
+        let t = MarkerTarget {
+            sequence: fx.target.sequence,
+            clip: Some((fx.target.track, a)),
+        };
+        for at in [2, 7] {
+            Command::AddMarker {
+                target: t,
+                marker: Marker::new(fx.ids.fresh(), sec(at), format!("m{at}")),
+            }
+            .apply(&mut fx.project)
+            .unwrap();
+        }
+        let before = fx.project.clone();
+        let blade = Command::Blade {
+            target: fx.target,
+            at: sec(4),
+            tail_id: fx.ids.fresh(),
+        };
+        let join = blade.invert(&fx.project).unwrap();
+        blade.apply(&mut fx.project).unwrap();
+        let clips = &track(&fx.project, fx.target).unwrap().clips;
+        assert_eq!(
+            clips[0].markers.iter().map(|m| m.at).collect::<Vec<_>>(),
+            vec![sec(2)]
+        );
+        assert_eq!(
+            clips[1].markers.iter().map(|m| m.at).collect::<Vec<_>>(),
+            vec![sec(3)],
+            "re-based onto the tail"
+        );
+        join.apply(&mut fx.project).unwrap();
+        assert_eq!(fx.project, before);
+    }
+
+    #[test]
+    fn marker_commands_round_trip_and_stay_sorted() {
+        let mut fx = fixture();
+        let before = fx.project.clone();
+        let seq_t = MarkerTarget {
+            sequence: fx.target.sequence,
+            clip: None,
+        };
+        let b = track(&fx.project, fx.target).unwrap().clips[1].id;
+        let clip_t = MarkerTarget {
+            sequence: fx.target.sequence,
+            clip: Some((fx.target.track, b)),
+        };
+        let m1 = Marker::new(fx.ids.fresh(), sec(8), "late");
+        let m2 = Marker::new(fx.ids.fresh(), sec(2), "early");
+        let m3 = Marker::new(fx.ids.fresh(), sec(1), "on clip B");
+        let cmds = [
+            Command::AddMarker {
+                target: seq_t,
+                marker: m1.clone(),
+            },
+            Command::AddMarker {
+                target: seq_t,
+                marker: m2.clone(),
+            },
+            Command::AddMarker {
+                target: clip_t,
+                marker: m3.clone(),
+            },
+            Command::UpdateMarker {
+                target: seq_t,
+                marker: Marker {
+                    note: "renamed".into(),
+                    at: sec(9),
+                    ..m2.clone()
+                },
+            },
+            Command::RemoveMarker {
+                target: seq_t,
+                id: m1.id,
+            },
+        ];
+        let mut inverses = Vec::new();
+        for c in &cmds {
+            inverses.push(c.invert(&fx.project).unwrap());
+            c.apply(&mut fx.project).unwrap();
+        }
+        let seq = fx.project.sequence(fx.target.sequence).unwrap();
+        assert_eq!(
+            seq.markers
+                .iter()
+                .map(|m| m.note.as_str())
+                .collect::<Vec<_>>(),
+            vec!["renamed"]
+        );
+        assert_eq!(seq.markers[0].at, sec(9));
+        assert_eq!(
+            track(&fx.project, fx.target).unwrap().clips[1]
+                .markers
+                .len(),
+            1
+        );
+        assert!(
+            Command::AddMarker {
+                target: seq_t,
+                marker: m2.clone()
+            }
+            .apply(&mut fx.project)
+            .is_err(),
+            "duplicate id"
+        );
+        for inv in inverses.iter().rev() {
+            inv.apply(&mut fx.project).unwrap();
+        }
         assert_eq!(fx.project, before);
     }
 

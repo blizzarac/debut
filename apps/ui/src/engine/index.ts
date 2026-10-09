@@ -156,6 +156,31 @@ export interface EffectsApi {
   setParam(track: string, clip: string, effect: number, param: ParamName, value: number, keyframe: boolean): Promise<void>;
 }
 
+export interface MarkerInfo {
+  id: string;
+  at: number;
+  duration: number;
+  color: [number, number, number];
+  note: string;
+  clip: string | null;
+}
+
+export interface MarkerEdit {
+  note?: string;
+  color?: [number, number, number];
+  duration?: number;
+  at?: number;
+}
+
+export interface MarkersApi {
+  list(): Promise<MarkerInfo[]>;
+  add(at: number, note: string, clip: string | null): Promise<string>;
+  update(id: string, edit: MarkerEdit): Promise<void>;
+  remove(id: string): Promise<void>;
+  /** Writes a tab-separated timecode list; returns the number of markers. */
+  exportList(path: string): Promise<number>;
+}
+
 export interface MediaApi {
   importMedia(path: string): Promise<MediaInfo>;
   ensureSequence(): Promise<SequenceInfo>;
@@ -204,6 +229,7 @@ export interface Engine extends ProjectApi {
   effects?: EffectsApi;
   mixer?: MixerApi;
   exporter?: ExportApi;
+  markers?: MarkersApi;
 }
 
 export type Target = "desktop" | "browser";

@@ -11,6 +11,6 @@ pub mod command;
 pub mod history;
 pub mod journal;
 
-pub use command::{Command, Target};
+pub use command::{Command, MarkerTarget, Target};
 pub use history::History;
 pub use journal::{Journal, MemoryJournal};

@@ -49,6 +49,11 @@ pub fn run() {
             ipc::frame_pixels,
             ipc::scopes,
             ipc::set_preview_quality,
+            ipc::markers,
+            ipc::add_marker,
+            ipc::update_marker,
+            ipc::remove_marker,
+            ipc::export_markers,
         ])
         .run(tauri::generate_context!())
         .expect("error while running debut");
