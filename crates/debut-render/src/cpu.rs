@@ -2,6 +2,8 @@
 //! yardstick every GPU backend is compared against (PLT-04).
 
 use crate::backend::{Backend, BlendMode, Rgba, Transform2D};
+use crate::color::{ColorTransform, Grade};
+use crate::lut::Lut3d;
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -170,6 +172,39 @@ impl Backend for CpuBackend {
 
     fn download(&mut self, img: &CpuImage) -> Vec<Rgba> {
         img.px.as_ref().clone()
+    }
+
+    fn color_transform(&mut self, src: &CpuImage, xf: &ColorTransform) -> CpuImage {
+        map_rgb(src, |c| xf.apply_rgb(c))
+    }
+
+    fn lut3d(&mut self, src: &CpuImage, lut: &Lut3d) -> CpuImage {
+        map_rgb(src, |c| lut.apply_rgb(c))
+    }
+
+    fn grade(&mut self, src: &CpuImage, grade: &Grade) -> CpuImage {
+        map_rgb(src, |c| grade.apply_rgb(c))
+    }
+}
+
+/// Apply `f` to straight (un-premultiplied) RGB, keeping alpha.
+fn map_rgb(src: &CpuImage, f: impl Fn([f32; 3]) -> [f32; 3]) -> CpuImage {
+    let px = src
+        .px
+        .iter()
+        .map(|p| {
+            let a = p[3];
+            if a <= 0.0 {
+                return [0.0; 4];
+            }
+            let o = f([p[0] / a, p[1] / a, p[2] / a]);
+            [o[0] * a, o[1] * a, o[2] * a, a]
+        })
+        .collect();
+    CpuImage {
+        w: src.w,
+        h: src.h,
+        px: Arc::new(px),
     }
 }
 

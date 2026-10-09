@@ -11,13 +11,14 @@
 
 pub mod backend;
 pub mod cache;
+pub mod color;
 pub mod compose;
 pub mod cpu;
 pub mod gpu;
 pub mod graph;
 pub mod keyframe;
+pub mod lut;
 
-pub mod color; // FX-08 .. FX-12 OCIO pipeline, LUT I/O (pending)
 pub mod nodes; // further node kinds: masks, keys, LUTs, color wheels (pending)
 pub mod ofx; // FX-15 OpenFX bridge over PluginHost (pending)
 pub mod scopes; // PB-08 (pending)
@@ -67,5 +68,7 @@ impl AnyBackend {
         }
     }
 }
-pub use graph::{Graph, Node, NodeId};
+pub use color::{ColorTransform, Grade, Transfer};
+pub use graph::{Graph, LutRef, Node, NodeId};
 pub use keyframe::{Curve, Interp, Keyframe};
+pub use lut::Lut3d;

@@ -1,14 +1,33 @@
 //! The node graph for one output frame, and its pull evaluator.
 
 use crate::backend::{Backend, BlendMode, FrameProvider, Rgba, Transform2D};
+use crate::color::{ColorTransform, Grade};
+use crate::lut::Lut3d;
 use debut_core::{Error, MediaId, Rational, Result};
-use serde::{Deserialize, Serialize};
+use serde::{Serialize, Serializer};
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize)]
 pub struct NodeId(pub u32);
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+/// A LUT shared between graphs; serializes (and so hashes) as its content hash.
+#[derive(Clone, Debug)]
+pub struct LutRef(pub Arc<Lut3d>);
+
+impl PartialEq for LutRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.hash == other.0.hash
+    }
+}
+
+impl Serialize for LutRef {
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_u64(self.0.hash)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Node {
     Solid {
         w: u32,
@@ -40,20 +59,39 @@ pub enum Node {
         b: NodeId,
         progress: f32,
     },
+    /// Color-space conversion (FX-08): input transforms into the working space,
+    /// output transforms for display.
+    ColorTransform {
+        input: NodeId,
+        xf: ColorTransform,
+    },
+    /// 3D LUT (FX-11).
+    Lut3d {
+        input: NodeId,
+        lut: LutRef,
+    },
+    /// Primary correction (FX-09).
+    Grade {
+        input: NodeId,
+        grade: Grade,
+    },
 }
 
 impl Node {
     fn inputs(&self) -> Vec<NodeId> {
         match self {
             Node::Solid { .. } | Node::Source { .. } => vec![],
-            Node::Transform { input, .. } => vec![*input],
+            Node::Transform { input, .. }
+            | Node::ColorTransform { input, .. }
+            | Node::Lut3d { input, .. }
+            | Node::Grade { input, .. } => vec![*input],
             Node::Blend { bottom, top, .. } => vec![*bottom, *top],
             Node::Dissolve { a, b, .. } => vec![*a, *b],
         }
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Graph {
     nodes: Vec<Node>,
     output: Option<NodeId>,
@@ -145,6 +183,11 @@ impl Graph {
                 Node::Dissolve { a, b, progress } => {
                     backend.dissolve(&get(&images, *a), &get(&images, *b), *progress)
                 }
+                Node::ColorTransform { input, xf } => {
+                    backend.color_transform(&get(&images, *input), xf)
+                }
+                Node::Lut3d { input, lut } => backend.lut3d(&get(&images, *input), &lut.0),
+                Node::Grade { input, grade } => backend.grade(&get(&images, *input), grade),
             };
             images[i] = Some(img);
         }

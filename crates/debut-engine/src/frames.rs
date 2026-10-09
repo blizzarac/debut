@@ -2,40 +2,26 @@
 //! [`debut_render::FrameProvider`] over one decoder per media, with a small
 //! per-media cache of linearized frames so scrubbing back a few frames is free.
 //!
-//! Frames arrive as 8-bit display-encoded RGBA and leave as linear-light `f32`
-//! premultiplied RGBA. The transfer function is sRGB for now; the OCIO pipeline
-//! (FX-08) replaces this with the clip's tagged input transform.
+//! Frames arrive as 8-bit display-encoded RGBA and leave as `f32` premultiplied
+//! RGBA in the same encoding; `compose` inserts the input transform for the
+//! media's tagged color space (FX-08), so linearization happens on the GPU.
 
 use debut_core::{Error, MediaId, Rational, Result};
 use debut_platform::Decoder;
 use debut_render::{FrameProvider, Rgba};
 use std::collections::{HashMap, VecDeque};
 
-fn srgb_to_linear(v: u8) -> f32 {
-    let c = v as f32 / 255.0;
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-fn lut() -> &'static [f32; 256] {
-    static LUT: std::sync::OnceLock<[f32; 256]> = std::sync::OnceLock::new();
-    LUT.get_or_init(|| std::array::from_fn(|i| srgb_to_linear(i as u8)))
-}
-
-/// Convert display-encoded RGBA8 to linear premultiplied f32.
-pub fn linearize(rgba8: &[u8]) -> Vec<Rgba> {
-    let lut = lut();
+/// Display-encoded RGBA8 -> `f32` premultiplied RGBA, still display-encoded: the
+/// graph's input transform (from the media's tagged space) linearizes on the GPU.
+pub fn to_f32_rgba(rgba8: &[u8]) -> Vec<Rgba> {
     rgba8
         .chunks_exact(4)
         .map(|p| {
             let a = p[3] as f32 / 255.0;
             [
-                lut[p[0] as usize] * a,
-                lut[p[1] as usize] * a,
-                lut[p[2] as usize] * a,
+                p[0] as f32 / 255.0 * a,
+                p[1] as f32 / 255.0 * a,
+                p[2] as f32 / 255.0 * a,
                 a,
             ]
         })
@@ -124,7 +110,7 @@ impl FrameProvider for FrameSource {
                 pts: f.pts,
                 width: f.width,
                 height: f.height,
-                pixels: linearize(&f.rgba8),
+                pixels: to_f32_rgba(&f.rgba8),
             };
             let done = covers(&c) || f.pts > t;
             if f.pts > t && best.is_some() {
@@ -152,10 +138,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn linearize_uses_srgb_and_premultiplies() {
-        let px = linearize(&[255, 0, 128, 255, 255, 255, 255, 0]);
+    fn to_f32_premultiplies_without_changing_encoding() {
+        let px = to_f32_rgba(&[255, 0, 128, 255, 255, 255, 255, 0]);
         assert_eq!(px[0][0], 1.0);
-        assert!((px[0][2] - 0.2158605).abs() < 1e-5);
+        assert!((px[0][2] - 128.0 / 255.0).abs() < 1e-6);
         assert_eq!(px[1], [0.0, 0.0, 0.0, 0.0]);
     }
 }

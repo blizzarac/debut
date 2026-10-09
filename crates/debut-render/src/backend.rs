@@ -1,6 +1,8 @@
 //! The op set every backend implements. Kept deliberately small: nodes are built
 //! from these, so a new backend (or a conformance test between two) is bounded.
 
+use crate::color::{ColorTransform, Grade};
+use crate::lut::Lut3d;
 use debut_core::{MediaId, Rational, Result};
 use serde::{Deserialize, Serialize};
 
@@ -87,5 +89,11 @@ pub trait Backend {
     ) -> Self::Image;
     /// Cross-dissolve: `a * (1 - p) + b * p`.
     fn dissolve(&mut self, a: &Self::Image, b: &Self::Image, progress: f32) -> Self::Image;
+    /// Color-space conversion on un-premultiplied RGB (FX-08).
+    fn color_transform(&mut self, src: &Self::Image, xf: &ColorTransform) -> Self::Image;
+    /// 3D LUT on un-premultiplied RGB (FX-11).
+    fn lut3d(&mut self, src: &Self::Image, lut: &Lut3d) -> Self::Image;
+    /// Primary grade on un-premultiplied scene-linear RGB (FX-09).
+    fn grade(&mut self, src: &Self::Image, grade: &Grade) -> Self::Image;
     fn download(&mut self, img: &Self::Image) -> Vec<Rgba>;
 }

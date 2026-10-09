@@ -5,6 +5,8 @@
 //! up to float rounding.
 
 use crate::backend::{Backend, BlendMode, Rgba, Transform2D};
+use crate::color::{ColorTransform, Grade};
+use crate::lut::Lut3d;
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 
@@ -13,6 +15,10 @@ const COMMON: &str = include_str!("../../../shaders/common.wgsl");
 const TRANSFORM: &str = include_str!("../../../shaders/transform.wgsl");
 const BLEND: &str = include_str!("../../../shaders/blend.wgsl");
 const DISSOLVE: &str = include_str!("../../../shaders/dissolve.wgsl");
+const COLOR: &str = include_str!("../../../shaders/color.wgsl");
+const COLOR_TRANSFORM: &str = include_str!("../../../shaders/color_transform.wgsl");
+const LUT3D: &str = include_str!("../../../shaders/lut3d.wgsl");
+const GRADE: &str = include_str!("../../../shaders/grade.wgsl");
 
 #[derive(Clone)]
 pub struct GpuImage {
@@ -44,6 +50,30 @@ struct DissolveParams {
     _pad: [f32; 3],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct ColorTransformParams {
+    m0: [f32; 4],
+    m1: [f32; 4],
+    m2: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct LutParams {
+    domain_min: [f32; 4],
+    domain_max: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct GradeParams {
+    lift: [f32; 4],
+    gamma: [f32; 4],
+    gain: [f32; 4],
+    wb: [f32; 4],
+}
+
 struct Pass {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -55,6 +85,9 @@ pub struct GpuBackend {
     transform: Pass,
     blend: Pass,
     dissolve: Pass,
+    color_transform: Pass,
+    lut3d: Pass,
+    grade: Pass,
 }
 
 impl GpuBackend {
@@ -80,23 +113,56 @@ impl GpuBackend {
         let transform = Self::pass(
             &device,
             "transform",
+            "",
             TRANSFORM,
             1,
+            false,
             std::mem::size_of::<TransformParams>(),
         );
         let blend = Self::pass(
             &device,
             "blend",
+            "",
             BLEND,
             2,
+            false,
             std::mem::size_of::<BlendParams>(),
         );
         let dissolve = Self::pass(
             &device,
             "dissolve",
+            "",
             DISSOLVE,
             2,
+            false,
             std::mem::size_of::<DissolveParams>(),
+        );
+        let color_transform = Self::pass(
+            &device,
+            "color_transform",
+            COLOR,
+            COLOR_TRANSFORM,
+            1,
+            false,
+            std::mem::size_of::<ColorTransformParams>(),
+        );
+        let lut3d = Self::pass(
+            &device,
+            "lut3d",
+            COLOR,
+            LUT3D,
+            1,
+            true,
+            std::mem::size_of::<LutParams>(),
+        );
+        let grade = Self::pass(
+            &device,
+            "grade",
+            COLOR,
+            GRADE,
+            1,
+            false,
+            std::mem::size_of::<GradeParams>(),
         );
         Some(Self {
             device,
@@ -104,17 +170,24 @@ impl GpuBackend {
             transform,
             blend,
             dissolve,
+            color_transform,
+            lut3d,
+            grade,
         })
     }
 
+    /// `textures` 2D inputs at bindings 1.., plus a 3D texture after them if `lut`.
+    #[allow(clippy::too_many_arguments)]
     fn pass(
         device: &wgpu::Device,
         name: &str,
+        prelude: &str,
         fs: &str,
         textures: u32,
+        lut: bool,
         uniform_size: usize,
     ) -> Pass {
-        let source = format!("{COMMON}\n{fs}");
+        let source = format!("{COMMON}\n{prelude}\n{fs}");
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some(name),
             source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -136,6 +209,18 @@ impl GpuBackend {
                 ty: wgpu::BindingType::Texture {
                     sample_type: wgpu::TextureSampleType::Float { filterable: false },
                     view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            });
+        }
+        if lut {
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 1 + textures,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D3,
                     multisampled: false,
                 },
                 count: None,
@@ -208,6 +293,20 @@ impl GpuBackend {
         h: u32,
         label: &str,
     ) -> GpuImage {
+        self.run_with(pass, uniforms, inputs, None, w, h, label)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn run_with(
+        &self,
+        pass: &Pass,
+        uniforms: &[u8],
+        inputs: &[&GpuImage],
+        extra: Option<&wgpu::TextureView>,
+        w: u32,
+        h: u32,
+        label: &str,
+    ) -> GpuImage {
         let out = self.texture(w, h, label);
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
@@ -230,6 +329,12 @@ impl GpuBackend {
         for (i, v) in views.iter().enumerate() {
             entries.push(wgpu::BindGroupEntry {
                 binding: 1 + i as u32,
+                resource: wgpu::BindingResource::TextureView(v),
+            });
+        }
+        if let Some(v) = extra {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 1 + views.len() as u32,
                 resource: wgpu::BindingResource::TextureView(v),
             });
         }
@@ -385,6 +490,97 @@ impl Backend for GpuBackend {
         )
     }
 
+    fn color_transform(&mut self, src: &GpuImage, xf: &ColorTransform) -> GpuImage {
+        let m = xf.matrix;
+        let p = ColorTransformParams {
+            m0: [m[0][0], m[0][1], m[0][2], xf.decode as u32 as f32],
+            m1: [m[1][0], m[1][1], m[1][2], xf.encode as u32 as f32],
+            m2: [m[2][0], m[2][1], m[2][2], 0.0],
+        };
+        self.run(
+            &self.color_transform,
+            bytemuck::bytes_of(&p),
+            &[src],
+            src.w,
+            src.h,
+            "color_transform",
+        )
+    }
+
+    fn lut3d(&mut self, src: &GpuImage, lut: &Lut3d) -> GpuImage {
+        let n = lut.size as u32;
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("lut3d"),
+            size: wgpu::Extent3d {
+                width: n,
+                height: n,
+                depth_or_array_layers: n,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D3,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let texels: Vec<Rgba> = lut.data.iter().map(|c| [c[0], c[1], c[2], 1.0]).collect();
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&texels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(n * BYTES_PER_PIXEL),
+                rows_per_image: Some(n),
+            },
+            wgpu::Extent3d {
+                width: n,
+                height: n,
+                depth_or_array_layers: n,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let p = LutParams {
+            domain_min: [
+                lut.domain_min[0],
+                lut.domain_min[1],
+                lut.domain_min[2],
+                lut.size as f32,
+            ],
+            domain_max: [lut.domain_max[0], lut.domain_max[1], lut.domain_max[2], 0.0],
+        };
+        self.run_with(
+            &self.lut3d,
+            bytemuck::bytes_of(&p),
+            &[src],
+            Some(&view),
+            src.w,
+            src.h,
+            "lut3d",
+        )
+    }
+
+    fn grade(&mut self, src: &GpuImage, g: &Grade) -> GpuImage {
+        let p = GradeParams {
+            lift: [g.lift[0], g.lift[1], g.lift[2], g.exposure],
+            gamma: [g.gamma[0], g.gamma[1], g.gamma[2], g.contrast],
+            gain: [g.gain[0], g.gain[1], g.gain[2], g.saturation],
+            wb: [g.temperature, g.tint, 0.0, 0.0],
+        };
+        self.run(
+            &self.grade,
+            bytemuck::bytes_of(&p),
+            &[src],
+            src.w,
+            src.h,
+            "grade",
+        )
+    }
+
     fn download(&mut self, img: &GpuImage) -> Vec<Rgba> {
         let bpr = padded_bytes_per_row(img.w);
         let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
@@ -472,11 +668,17 @@ mod tests {
             .collect()
     }
 
+    /// Largest difference, relative to the magnitude once values exceed 1 (HDR
+    /// transfers like PQ put scene values in the hundreds).
     fn max_diff(a: &[Rgba], b: &[Rgba]) -> f32 {
         assert_eq!(a.len(), b.len());
         a.iter()
             .zip(b)
-            .flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs()))
+            .flat_map(|(x, y)| {
+                x.iter()
+                    .zip(y)
+                    .map(|(p, q)| (p - q).abs() / p.abs().max(1.0))
+            })
             .fold(0.0, f32::max)
     }
 
@@ -522,6 +724,68 @@ mod tests {
             max_diff(&gpu.download(&g), &cpu.download(&c)) < 1e-5,
             "dissolve"
         );
+
+        for xf in [
+            ColorTransform::between(
+                &debut_core::color::ColorSpace::Rec709,
+                &debut_core::color::ColorSpace::Linear709,
+            )
+            .unwrap(),
+            ColorTransform::between(
+                &debut_core::color::ColorSpace::SLog3SGamut3Cine,
+                &debut_core::color::ColorSpace::Linear709,
+            )
+            .unwrap(),
+            ColorTransform::between(
+                &debut_core::color::ColorSpace::Rec2020Pq,
+                &debut_core::color::ColorSpace::Srgb,
+            )
+            .unwrap(),
+            ColorTransform::between(
+                &debut_core::color::ColorSpace::LogC3Awg3,
+                &debut_core::color::ColorSpace::Rec2020Hlg,
+            )
+            .unwrap(),
+            ColorTransform::between(
+                &debut_core::color::ColorSpace::VLogVGamut,
+                &debut_core::color::ColorSpace::AcesCg,
+            )
+            .unwrap(),
+        ] {
+            let g = gpu.color_transform(&ga, &xf);
+            let c = cpu.color_transform(&ca, &xf);
+            let d = max_diff(&gpu.download(&g), &cpu.download(&c));
+            assert!(
+                d < 2e-3,
+                "color transform {:?}->{:?} differs by {d}",
+                xf.decode,
+                xf.encode
+            );
+        }
+        let lut = Lut3d::parse_cube(
+            "LUT_3D_SIZE 2\n0 0 0\n0 0 1\n0 1 0\n0 1 1\n1 0 0\n1 0 1\n1 1 0\n1 1 1\n",
+        )
+        .unwrap();
+        let g = gpu.lut3d(&ga, &lut);
+        let c = cpu.lut3d(&ca, &lut);
+        assert!(
+            max_diff(&gpu.download(&g), &cpu.download(&c)) < 1e-5,
+            "lut3d"
+        );
+        let grade = Grade {
+            exposure: 0.7,
+            temperature: 0.3,
+            tint: -0.2,
+            lift: [0.02, 0.0, -0.01],
+            gamma: [1.1, 0.9, 1.0],
+            gain: [1.2, 1.0, 0.8],
+            contrast: 1.3,
+            saturation: 0.6,
+        };
+        let g = gpu.grade(&ga, &grade);
+        let c = cpu.grade(&ca, &grade);
+        let d = max_diff(&gpu.download(&g), &cpu.download(&c));
+        assert!(d < 1e-4, "grade differs by {d}");
 
         let xf = Transform2D::from_srt((9, 7), (w, h), (2.5, 1.75), 0.4, (3.0, -2.0));
         let g = gpu.transform(&gs, &xf, w, h);
