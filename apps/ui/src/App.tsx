@@ -94,8 +94,8 @@ export default function App() {
   }
 
   return (
-    <main style={{ fontFamily: "system-ui", padding: 16, display: "grid", gridTemplateColumns: "260px 1fr", gap: 16, height: "100vh", boxSizing: "border-box" }}>
-      <aside style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    <main style={{ fontFamily: "system-ui", padding: 16, display: "grid", gridTemplateColumns: "300px 1fr", gap: 16, height: "100vh", boxSizing: "border-box", overflow: "hidden" }}>
+      <aside style={{ display: "flex", flexDirection: "column", gap: 8, overflowY: "auto", minHeight: 0, paddingRight: 4 }}>
         <h1 style={{ margin: 0, fontSize: 20 }}>debut</h1>
         <p style={{ color: "#666", fontSize: 12, margin: 0 }}>
           engine {version} · {detectTarget()} · {status}
@@ -112,7 +112,7 @@ export default function App() {
           <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
             <div style={{ display: "flex", gap: 4 }}>
               <input value={filePath} onChange={(e) => setFilePath(e.target.value)} placeholder={file?.path ?? "/path/to/project.debut"} style={{ flex: 1 }} />
-              <button onClick={save} title="Save (autosaves every 2 min while dirty)">
+              <button onClick={save} title="Save (autosaves every 2 min while dirty)" style={{ whiteSpace: "nowrap" }}>
                 Save{file?.dirty ? " •" : ""}
               </button>
               <button onClick={openFile} disabled={!filePath}>
@@ -156,15 +156,6 @@ export default function App() {
             <Inspector effects={engine.effects} selected={selected} position={Math.round((tick?.position ?? 0) * 25) / 25} onChanged={() => refresh(engine)} />
           </>
         )}
-      </aside>
-      <section style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
-        {engine?.player ? (
-          <>
-            <Viewer player={engine.player} onTick={onTick} refreshKey={refreshKey} />
-            <Transport player={engine.player} tick={tick} fps={fps} />
-            <Scopes player={engine.player} frameKey={(tick?.frame ?? 0) * 1000 + refreshKey} />
-          </>
-        ) : null}
         {engine?.mixer && seq && seq.tracks.some((t) => t.kind === "audio") && (
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Mixer</h2>
@@ -177,6 +168,15 @@ export default function App() {
             <ExportPanel exporter={engine.exporter} />
           </>
         )}
+      </aside>
+      <section style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflowY: "auto" }}>
+        {engine?.player ? (
+          <>
+            <Viewer player={engine.player} onTick={onTick} refreshKey={refreshKey} />
+            <Transport player={engine.player} tick={tick} fps={fps} />
+            <Scopes player={engine.player} frameKey={(tick?.frame ?? 0) * 1000 + refreshKey} />
+          </>
+        ) : null}
         {engine?.media && engine.player && seq ? (
           <Timeline
             seq={seq}

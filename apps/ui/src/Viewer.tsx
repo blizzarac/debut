@@ -50,7 +50,7 @@ export function Viewer({ player, onTick, refreshKey }: { player: PlayerApi; onTi
   }, [player, onTick]);
 
   return (
-    <div style={{ background: "#111", display: "flex", alignItems: "center", justifyContent: "center", aspectRatio: "16 / 9" }}>
+    <div style={{ background: "#111", display: "flex", alignItems: "center", justifyContent: "center", aspectRatio: "16 / 9", maxHeight: "48vh" }}>
       <canvas
         ref={canvas}
         style={{ maxWidth: "100%", maxHeight: "100%", imageRendering: size[0] < 400 ? "pixelated" : "auto" }}

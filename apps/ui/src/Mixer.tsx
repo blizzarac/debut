@@ -15,7 +15,7 @@ export function Mixer({ seq, mixer, onChanged }: { seq: SequenceInfo; mixer: Mix
   const tracks = seq.tracks.filter((t) => t.kind === "audio");
   const act = (p: Promise<void>) => p.then(onChanged).catch((e) => console.warn("mixer rejected", e));
   const strip = (t: TrackInfo, n: number) => (
-    <div key={t.id} style={{ border: "1px solid #e5e5e5", borderRadius: 4, padding: 8, minWidth: 150, fontSize: 12 }}>
+    <div key={t.id} style={{ border: "1px solid #e5e5e5", borderRadius: 4, padding: 8, minWidth: 120, flex: 1, fontSize: 12 }}>
       <strong>A{n}</strong>
       <label style={{ display: "block", marginTop: 6 }}>
         gain <code>{t.mix.gain_db.toFixed(1)} dB</code>

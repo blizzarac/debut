@@ -57,10 +57,10 @@ export function Scopes({ player, frameKey }: { player: PlayerApi; frameKey: numb
     };
   }, [player, frameKey]);
   return (
-    <div style={{ display: "flex", gap: 8, alignItems: "flex-start" }}>
-      <canvas ref={wave} title="Luma waveform" style={{ width: 256, height: 128, background: "#111", imageRendering: "pixelated" }} />
-      <canvas ref={vec} title="Vectorscope" style={{ width: 128, height: 128, background: "#111", borderRadius: 64, imageRendering: "pixelated" }} />
-      <canvas ref={hist} title="RGB histogram" style={{ width: 256, height: 96, background: "#111" }} />
+    <div style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "4px 0" }}>
+      <canvas ref={wave} title="Luma waveform" style={{ width: 192, height: 96, background: "#111", imageRendering: "pixelated" }} />
+      <canvas ref={vec} title="Vectorscope" style={{ width: 96, height: 96, background: "#111", borderRadius: 48, imageRendering: "pixelated" }} />
+      <canvas ref={hist} title="RGB histogram" style={{ width: 192, height: 72, background: "#111" }} />
     </div>
   );
 }
