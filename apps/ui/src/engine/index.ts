@@ -41,7 +41,13 @@ export interface MediaInfo {
   rating: number;
   /** False when the file is missing; clips show a slate until relinked. */
   online: boolean;
+  /** Start timecode and reel from the file's tags. */
+  timecode: string | null;
+  reel: string | null;
 }
+
+/** How a multicam clip lines up its angles. */
+export type SyncBy = "start" | "audio" | "timecode";
 
 export type RuleField = "name" | "path" | "keyword" | "rating" | "reel" | "camera" | "audio";
 
@@ -412,7 +418,7 @@ export interface MediaApi {
   setTitle(track: string, clip: string, title: TitleInfo): Promise<void>;
   /** Inserts a multicam clip of two or more media at `at` (shortest angle sets the length);
    * with `sync`, angles are aligned to the first by audio. */
-  addMulticam(at: number, media: string[], sync?: boolean): Promise<MulticamSync>;
+  addMulticam(at: number, media: string[], by?: SyncBy): Promise<MulticamSync>;
   /** Switch a multicam clip's angle; with `cut`, blade at the playhead first and switch the tail. Returns the switched clip id. */
   switchAngle(track: string, clip: string, angle: number, cut: boolean): Promise<string>;
   edit(op: EditOp): Promise<void>;

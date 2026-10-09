@@ -53,6 +53,20 @@ pub trait Decoder: Send {
     /// the other off, or the decoder buffers it while searching. Both are on
     /// by default.
     fn select(&mut self, _video: bool, _audio: bool) {}
+    /// Container and stream tags worth keeping as media metadata (MED-04).
+    fn tags(&self) -> SourceTags {
+        SourceTags::default()
+    }
+}
+
+/// Tags a camera or recorder leaves in the file: start timecode as written
+/// ("HH:MM:SS:FF", ';' before the frames for drop-frame), reel / tape name and
+/// camera model.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct SourceTags {
+    pub timecode: Option<String>,
+    pub reel: Option<String>,
+    pub camera: Option<String>,
 }
 
 pub trait Encoder: Send {

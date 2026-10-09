@@ -16,7 +16,7 @@ pub mod threads;
 pub use audio_out::AudioOut;
 pub use codec::{
     AudioBlock, AudioEncodeSettings, AudioInfo, Decoder, EncodeSettings, Encoder, HwEncoder,
-    VideoFrame, VideoInfo,
+    SourceTags, VideoFrame, VideoInfo,
 };
 pub use display::Display;
 pub use file_store::FileStore;

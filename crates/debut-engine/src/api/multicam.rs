@@ -10,6 +10,18 @@ pub struct MulticamSyncDto {
     pub confidences: Vec<f32>,
 }
 
+/// How a multicam clip lines its angles up (MED-11).
+#[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SyncBy {
+    /// Every angle from its first frame.
+    Start,
+    /// Cross-correlate each angle's audio with the first's.
+    Audio,
+    /// Start timecodes: angles meet where their timecodes overlap.
+    Timecode,
+}
+
 impl Session {
     /// Insert a multicam clip of `media` (two or more angles, angle 0 active) on
     /// the first video track and, when every angle has audio, on the first
@@ -55,6 +67,19 @@ impl Session {
         media: Vec<String>,
         sync: bool,
     ) -> Result<MulticamSyncDto, String> {
+        let by = if sync { SyncBy::Audio } else { SyncBy::Start };
+        self.add_multicam_by(at, media, by)
+    }
+
+    /// Insert a multicam clip with its angles lined up `by` start, audio or
+    /// timecode. Returns the per-angle offsets in seconds and, for audio, the
+    /// sync confidences.
+    pub fn add_multicam_by(
+        &mut self,
+        at: f64,
+        media: Vec<String>,
+        by: SyncBy,
+    ) -> Result<MulticamSyncDto, String> {
         if media.len() < 2 {
             return Err("a multicam clip needs at least two angles".into());
         }
@@ -83,7 +108,37 @@ impl Session {
         // shrinks by what it must skip at the head.
         let mut offsets = vec![Rational::ZERO; angles.len()];
         let mut confidences = Vec::new();
-        if sync {
+        if by == SyncBy::Timecode {
+            // Start of each take in seconds of the day; the latest start is
+            // where every angle has material.
+            let mut starts = Vec::with_capacity(angles.len());
+            for m in &angles {
+                let r = self
+                    .project()
+                    .and_then(|p| p.media.iter().find(|r| r.id == *m))
+                    .ok_or("unknown media")?;
+                let tc = r.metadata.start_timecode.ok_or_else(|| {
+                    format!(
+                        "{} has no timecode",
+                        r.path.rsplit('/').next().unwrap_or(&r.path)
+                    )
+                })?;
+                let rate = r.metadata.frame_rate.unwrap_or(fr);
+                starts.push(rate.frame_to_time(tc.to_frames(rate)));
+            }
+            let latest = starts.iter().copied().fold(Rational::ZERO, Rational::max);
+            for (i, start) in starts.iter().enumerate() {
+                offsets[i] = fr.snap(latest - *start);
+            }
+            for (i, m) in angles.iter().enumerate() {
+                let p = self.probed.get(m).ok_or("unknown media")?;
+                duration = duration.min(p.2 - offsets[i]);
+            }
+            if duration <= Rational::ZERO {
+                return Err("the takes' timecodes do not overlap".into());
+            }
+        }
+        if by == SyncBy::Audio {
             const HEAD_SECONDS: f64 = 60.0;
             const MAX_OFFSET_S: f32 = 30.0;
             // Read at most a minute, and never past the end of a short take.

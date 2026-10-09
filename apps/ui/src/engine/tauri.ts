@@ -22,6 +22,7 @@ import type {
   ExportApi,
   InterchangeFormat,
   ProxyStatus,
+  SyncBy,
   ExportPreset,
   ExportStatus,
   FileStatus,
@@ -128,8 +129,8 @@ class TauriMedia implements MediaApi {
   setTitle(track: string, clip: string, title: TitleInfo) {
     return invoke<void>("set_title", { track, clip, title });
   }
-  addMulticam(at: number, media: string[], sync = false) {
-    return invoke<MulticamSync>("add_multicam", { at, media, sync });
+  addMulticam(at: number, media: string[], by: SyncBy = "start") {
+    return invoke<MulticamSync>("add_multicam", { at, media, by });
   }
   switchAngle(track: string, clip: string, angle: number, cut: boolean) {
     return invoke<string>("switch_angle", { track, clip, angle, cut });

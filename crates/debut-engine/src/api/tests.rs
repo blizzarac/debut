@@ -1315,6 +1315,55 @@ fn linked_clips_edit_together_until_unlinked() {
     assert_eq!(spans(&s), vec![vec![(1.8, 1.4)], vec![(1.4, 1.4)]]);
 }
 
+/// Start timecode and reel come in at import; multicam lines takes up by
+/// timecode (MED-04, MED-11).
+#[test]
+fn multicam_syncs_by_timecode() {
+    let Fx { mut s, m, .. } = fixture("multicam_syncs_by_timecode");
+    let tc = |name: &str| {
+        format!(
+            "{}/../debut-platform-native/tests/fixtures/{name}",
+            env!("CARGO_MANIFEST_DIR")
+        )
+    };
+    let a = s.import_media(tc("tc_a_25fps_2s.mov")).unwrap();
+    let b = s.import_media(tc("tc_b_25fps_2s.mov")).unwrap();
+    assert_eq!(
+        (a.timecode.as_deref(), a.reel.as_deref()),
+        (Some("10:00:00:00"), Some("CAMA"))
+    );
+    assert_eq!(b.timecode.as_deref(), Some("10:00:00:12"));
+    // Kept in the project: the media list reads it back.
+    let listed = s.media_list().unwrap();
+    assert_eq!(
+        listed
+            .iter()
+            .find(|x| x.id == b.id)
+            .unwrap()
+            .reel
+            .as_deref(),
+        Some("CAMB")
+    );
+    // B starts 12 frames later, so A is entered 0.48 s in; both then run
+    // for B's 2 s minus nothing, A's 2 s minus 0.48.
+    let r = s
+        .add_multicam_by(5.0, vec![a.id.clone(), b.id.clone()], SyncBy::Timecode)
+        .unwrap();
+    assert_eq!(r.offsets, vec![0.48, 0.0]);
+    let dto = sequence_dto(s.first_sequence().unwrap());
+    let mc = dto.tracks[0]
+        .clips
+        .iter()
+        .find(|c| c.angles.is_some())
+        .unwrap();
+    assert!((mc.duration - 1.52).abs() < 1e-9, "{}", mc.duration);
+    // Without timecode on every angle there is nothing to line up.
+    let err = s
+        .add_multicam_by(9.0, vec![a.id.clone(), m.id.clone()], SyncBy::Timecode)
+        .unwrap_err();
+    assert!(err.contains("no timecode"), "{err}");
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

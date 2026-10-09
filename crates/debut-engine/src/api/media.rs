@@ -20,6 +20,11 @@ pub struct MediaDto {
     pub rating: u8,
     /// False when the file is missing or unreadable (MED-05); clips show a slate.
     pub online: bool,
+    /// Start timecode and reel from the file's tags (MED-04).
+    #[serde(default)]
+    pub timecode: Option<String>,
+    #[serde(default)]
+    pub reel: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -48,6 +53,8 @@ impl Session {
             .map_err(|e| e.to_string())?;
         let v = dec.video_info().ok_or("file has no video stream")?.clone();
         let has_audio = dec.audio_info().is_some();
+        let tags = dec.tags();
+        let start_timecode = tags.timecode.as_deref().and_then(Timecode::parse);
         self.project_mut()?;
         let id: MediaId = self.ids.fresh();
         let media = MediaRef {
@@ -57,6 +64,9 @@ impl Session {
             metadata: MediaMetadata {
                 frame_rate: Some(v.frame_rate),
                 audio_channels: dec.audio_info().map(|a| a.channels).unwrap_or(0),
+                start_timecode,
+                reel: tags.reel.clone(),
+                camera: tags.camera.clone(),
                 ..Default::default()
             },
             proxies: vec![],
@@ -78,6 +88,8 @@ impl Session {
             keywords: Vec::new(),
             rating: 0,
             online: true,
+            timecode: start_timecode.map(|t| t.to_string()),
+            reel: tags.reel,
         })
     }
 
@@ -150,6 +162,8 @@ impl Session {
                     keywords: m.keywords.clone(),
                     rating: m.rating,
                     online: !self.offline.contains(&m.id) && self.store.exists(&m.path),
+                    timecode: m.metadata.start_timecode.map(|t| t.to_string()),
+                    reel: m.metadata.reel.clone(),
                 }
             })
             .collect())

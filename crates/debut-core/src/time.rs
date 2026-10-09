@@ -296,6 +296,30 @@ impl Timecode {
         }
     }
 
+    /// Parse "HH:MM:SS:FF"; ';' or '.' before the frames marks drop-frame.
+    /// `None` for anything else or out-of-range fields.
+    pub fn parse(text: &str) -> Option<Self> {
+        let text = text.trim();
+        let drop_frame = text.contains(';') || text.matches('.').count() == 1;
+        let parts: Vec<&str> = text.split([':', ';', '.']).collect();
+        let [h, m, s, f] = parts.as_slice() else {
+            return None;
+        };
+        let (hours, minutes, seconds, frames) = (
+            h.parse::<u8>().ok()?,
+            m.parse::<u8>().ok()?,
+            s.parse::<u8>().ok()?,
+            f.parse::<u16>().ok()?,
+        );
+        (hours < 24 && minutes < 60 && seconds < 60).then_some(Self {
+            hours,
+            minutes,
+            seconds,
+            frames,
+            drop_frame,
+        })
+    }
+
     /// Absolute frame number for this label at `rate`.
     pub fn to_frames(self, rate: FrameRate) -> i64 {
         let nominal = rate.nominal();
@@ -327,6 +351,26 @@ impl fmt::Display for Timecode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timecode_parses_and_round_trips() {
+        let tc = Timecode::parse("10:00:00:12").unwrap();
+        assert_eq!(tc.to_frames(FrameRate::FPS_25), 10 * 3600 * 25 + 12);
+        assert_eq!(tc.to_string(), "10:00:00:12");
+        let df = Timecode::parse("01:00:00;02").unwrap();
+        assert!(df.drop_frame);
+        assert_eq!(
+            Timecode::from_frames(
+                df.to_frames(FrameRate::FPS_29_97),
+                FrameRate::FPS_29_97,
+                true
+            ),
+            df
+        );
+        assert!(Timecode::parse("25:00:00:00").is_none());
+        assert!(Timecode::parse("10:00:00").is_none());
+        assert!(Timecode::parse("aa:00:00:00").is_none());
+    }
 
     #[test]
     fn rational_normalizes_sign_and_gcd() {

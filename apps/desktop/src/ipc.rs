@@ -422,8 +422,14 @@ pub fn add_multicam(
     at: f64,
     media: Vec<String>,
     sync: Option<bool>,
+    by: Option<SyncBy>,
 ) -> Result<MulticamSyncDto, String> {
-    lock(&state).add_multicam_synced(at, media, sync.unwrap_or(false))
+    let by = by.unwrap_or(if sync.unwrap_or(false) {
+        SyncBy::Audio
+    } else {
+        SyncBy::Start
+    });
+    lock(&state).add_multicam_by(at, media, by)
 }
 
 #[tauri::command]

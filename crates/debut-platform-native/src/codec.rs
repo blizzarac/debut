@@ -3,7 +3,7 @@
 //! codec context.
 
 use debut_core::{Error, FrameRate, Rational, Result};
-use debut_platform::codec::{AudioBlock, AudioInfo, Decoder, VideoFrame, VideoInfo};
+use debut_platform::codec::{AudioBlock, AudioInfo, Decoder, SourceTags, VideoFrame, VideoInfo};
 use ffmpeg_next as ff;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -55,6 +55,7 @@ pub struct FfmpegDecoder {
     /// Streams to decode; packets of a switched-off stream are dropped.
     want_video: bool,
     want_audio: bool,
+    tags: SourceTags,
 }
 
 // The FFmpeg contexts are only ever touched from the thread that owns the decoder.
@@ -149,10 +150,12 @@ impl FfmpegDecoder {
             None => None,
         };
 
+        let tags = read_tags(&input);
         Ok(Self {
             input,
             video,
             audio,
+            tags,
             video_queue: VecDeque::new(),
             audio_queue: VecDeque::new(),
             want_video: true,
@@ -267,7 +270,37 @@ impl FfmpegDecoder {
     }
 }
 
+/// Timecode, reel and camera from the container and every stream (the
+/// timecode often sits on a `tmcd` data stream, the reel next to it).
+fn read_tags(input: &ff::format::context::Input) -> SourceTags {
+    let mut tags = SourceTags::default();
+    let mut look = |dict: ff::DictionaryRef| {
+        for (k, v) in dict.iter() {
+            let v = v.trim();
+            if v.is_empty() {
+                continue;
+            }
+            let slot = match k.to_ascii_lowercase().as_str() {
+                "timecode" => &mut tags.timecode,
+                "reel_name" | "reel" | "com.apple.quicktime.reel" => &mut tags.reel,
+                "com.apple.quicktime.model" | "model" | "camera_model" => &mut tags.camera,
+                _ => continue,
+            };
+            slot.get_or_insert_with(|| v.to_string());
+        }
+    };
+    look(input.metadata());
+    for stream in input.streams() {
+        look(stream.metadata());
+    }
+    tags
+}
+
 impl Decoder for FfmpegDecoder {
+    fn tags(&self) -> SourceTags {
+        self.tags.clone()
+    }
+
     fn video_info(&self) -> Option<&VideoInfo> {
         self.video.as_ref().map(|v| &v.info)
     }
@@ -801,6 +834,18 @@ mod tests {
             blocks += 1;
         }
         assert!(blocks > 0 && d.video_queue.is_empty());
+    }
+
+    #[test]
+    fn reads_timecode_and_reel_tags() {
+        let tc = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/tc_b_25fps_2s.mov"
+        );
+        let tags = FfmpegDecoder::open(tc).unwrap().tags();
+        assert_eq!(tags.timecode.as_deref(), Some("10:00:00:12"));
+        assert_eq!(tags.reel.as_deref(), Some("CAMB"));
+        assert_eq!(FfmpegDecoder::open(FIXTURE).unwrap().tags().timecode, None);
     }
 
     #[test]

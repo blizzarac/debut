@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { BinInfo, MediaApi, MediaInfo, ProxyStatus, RuleField } from "./engine";
+import type { BinInfo, MediaApi, MediaInfo, ProxyStatus, RuleField, SyncBy } from "./engine";
 
 /** Media and bins (MED-07): import, filter by bin or search, assign media to
  * manual bins, create manual or smart (file-name) bins; build proxies and
@@ -18,7 +18,7 @@ export function MediaPanel({
   bins: BinInfo[];
   onChanged: () => void;
   onInsert: (m: MediaInfo) => void;
-  onMulticam: (ids: string[], sync: boolean) => void;
+  onMulticam: (ids: string[], by: SyncBy) => void;
   onStatus: (s: string) => void;
 }) {
   const [path, setPath] = useState("");
@@ -166,6 +166,7 @@ export function MediaPanel({
                 </button>
               )}
               {name(m)} · {m.width}×{m.height} · {m.duration.toFixed(2)}s
+              {m.timecode && <span title={m.reel ? `reel ${m.reel}` : undefined}> · TC {m.timecode}</span>}
               <ProxyBadge status={proxies[m.id]} />
             </span>
             {manual.length > 0 ? (
@@ -247,12 +248,17 @@ export function MediaPanel({
         </button>
         {shown.length >= 2 && (
           <>
-            <button onClick={() => onMulticam(shown.map((m) => m.id), false)} title="Insert the listed media as one multicam clip at the playhead; keys 1–9 switch angles">
+            <button onClick={() => onMulticam(shown.map((m) => m.id), "start")} title="Insert the listed media as one multicam clip at the playhead; keys 1–9 switch angles">
               Multicam ({shown.length})
             </button>
-            <button onClick={() => onMulticam(shown.map((m) => m.id), true)} title="Same, aligning the angles to the first one by their audio">
+            <button onClick={() => onMulticam(shown.map((m) => m.id), "audio")} title="Same, aligning the angles to the first one by their audio">
               Sync by audio
             </button>
+            {shown.every((m) => m.timecode) && (
+              <button onClick={() => onMulticam(shown.map((m) => m.id), "timecode")} title="Same, lining the angles up where their start timecodes overlap">
+                Sync by timecode
+              </button>
+            )}
           </>
         )}
       </div>

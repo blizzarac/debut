@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type Tick } from "./engine";
+import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type SyncBy, type Tick } from "./engine";
 import { Captions } from "./Captions";
 import { MediaPanel } from "./MediaPanel";
 import { ExportPanel } from "./ExportPanel";
@@ -94,11 +94,12 @@ export default function App() {
     }
   }
 
-  async function addMulticam(ids: string[], sync: boolean) {
+  async function addMulticam(ids: string[], by: SyncBy) {
     if (!engine?.media || ids.length < 2) return;
     try {
-      const r = await engine.media.addMulticam(tick?.position ?? 0, ids, sync);
-      if (sync) {
+      const r = await engine.media.addMulticam(tick?.position ?? 0, ids, by);
+      if (by === "timecode") setStatus(`multicam by timecode: offsets ${r.offsets.map((o) => o.toFixed(2) + "s").join(", ")}`);
+      if (by === "audio") {
         const low = r.confidences.filter((c) => c < 0.3).length;
         setStatus(`multicam synced: offsets ${r.offsets.map((o) => o.toFixed(2) + "s").join(", ")}${low ? ` · ${low} angle(s) with weak audio match` : ""}`);
       }
