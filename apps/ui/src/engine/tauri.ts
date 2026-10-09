@@ -22,6 +22,7 @@ import type {
   ExportApi,
   InterchangeFormat,
   ProxyStatus,
+  Shortcuts,
   SyncBy,
   ExportPreset,
   ExportStatus,
@@ -285,6 +286,9 @@ export class TauriEngine implements Engine {
 
   version() {
     return invoke<string>("version");
+  }
+  shortcuts() {
+    return invoke<Shortcuts>("shortcuts");
   }
   newProject(name: string) {
     return invoke<void>("new_project", { name });

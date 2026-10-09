@@ -1429,6 +1429,21 @@ fn multicam_syncs_by_timecode() {
     assert!(err.contains("no timecode"), "{err}");
 }
 
+/// Shortcut presets reach the UI (TL-12).
+#[test]
+fn shortcut_presets() {
+    let s = native();
+    let sc = s.shortcuts();
+    let ids: Vec<&str> = sc.keymaps.iter().map(|k| k.id.as_str()).collect();
+    assert_eq!(ids, vec!["debut", "premiere", "final_cut", "avid"]);
+    let fcp = &sc.keymaps[2];
+    assert!(fcp
+        .bindings
+        .iter()
+        .any(|b| b.action == "blade" && b.key == "b" && b.cmd && !b.shift));
+    assert!(sc.actions.iter().any(|a| a.id == "toggle_linked"));
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

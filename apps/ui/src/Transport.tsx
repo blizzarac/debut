@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useShortcut } from "./shortcuts";
 import type { PlayerApi, PreviewQuality, Tick } from "./engine";
 
 export function timecode(t: number, fps: number): string {
@@ -11,43 +12,22 @@ export function timecode(t: number, fps: number): string {
 
 export function Transport({ player, tick, fps, onMarker, onAngle }: { player: PlayerApi; tick: Tick | null; fps: number; onMarker?: () => void; onAngle?: (angle: number) => void }) {
   const [quality, setQuality] = useState<PreviewQuality>("auto");
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement)?.tagName === "INPUT") return;
-      switch (e.key) {
-        case " ":
-          e.preventDefault();
-          player.transport({ kind: "toggle" });
-          break;
-        case "j":
-          player.transport({ kind: "shuttle", forward: false });
-          break;
-        case "k":
-          player.transport({ kind: "pause" });
-          break;
-        case "l":
-          player.transport({ kind: "shuttle", forward: true });
-          break;
-        case "ArrowLeft":
-          player.transport({ kind: "step", n: e.shiftKey ? -10 : -1 });
-          break;
-        case "ArrowRight":
-          player.transport({ kind: "step", n: e.shiftKey ? 10 : 1 });
-          break;
-        case "Home":
-          player.transport({ kind: "seek", t: 0 });
-          break;
-        case "m":
-          onMarker?.();
-          break;
-        default:
-          // 1..9 switch the selected multicam clip's angle at the playhead.
-          if (e.key >= "1" && e.key <= "9" && !e.ctrlKey && !e.metaKey && !e.altKey) onAngle?.(Number(e.key) - 1);
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [player, onMarker, onAngle]);
+  // Transport, marker and angle keys come from the active keymap (TL-12).
+  const t = (a: Parameters<PlayerApi["transport"]>[0]) => () => void player.transport(a);
+  useShortcut("play_pause", t({ kind: "toggle" }));
+  useShortcut("shuttle_back", t({ kind: "shuttle", forward: false }));
+  useShortcut("pause", t({ kind: "pause" }));
+  useShortcut("shuttle_forward", t({ kind: "shuttle", forward: true }));
+  useShortcut("step_back", t({ kind: "step", n: -1 }));
+  useShortcut("step_forward", t({ kind: "step", n: 1 }));
+  useShortcut("step_back_10", t({ kind: "step", n: -10 }));
+  useShortcut("step_forward_10", t({ kind: "step", n: 10 }));
+  useShortcut("go_to_start", t({ kind: "seek", t: 0 }));
+  useShortcut("add_marker", onMarker);
+  for (let n = 1; n <= 9; n++) {
+    // eslint-disable-next-line react-hooks/rules-of-hooks -- fixed count
+    useShortcut(`angle_${n}`, onAngle ? () => onAngle(n - 1) : null);
+  }
 
   const btn = (label: string, action: () => void, title?: string) => (
     <button onClick={action} title={title} style={{ minWidth: 36 }}>

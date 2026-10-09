@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type SyncBy, type Tick } from "./engine";
+import { chordLabel, installShortcuts, setKeymap, useShortcut } from "./shortcuts";
+import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type Shortcuts, type SyncBy, type Tick } from "./engine";
 import { Captions } from "./Captions";
 import { MediaPanel } from "./MediaPanel";
 import { ExportPanel } from "./ExportPanel";
@@ -27,6 +28,25 @@ export default function App() {
   const [captionList, setCaptionList] = useState<CaptionInfo[]>([]);
   const [sequences, setSequences] = useState<SequenceListItem[]>([]);
   const [filePath, setFilePath] = useState("");
+  const [shortcuts, setShortcuts] = useState<Shortcuts | null>(null);
+  const [keymapId, setKeymapId] = useState(() => {
+    try {
+      return localStorage.getItem("debut.keymap") ?? "debut";
+    } catch {
+      return "debut";
+    }
+  });
+  const [showKeys, setShowKeys] = useState(false);
+  useEffect(() => installShortcuts(), []);
+  useEffect(() => {
+    const maps = shortcuts?.keymaps ?? [];
+    setKeymap(maps.find((m) => m.id === keymapId) ?? maps[0] ?? null);
+    try {
+      localStorage.setItem("debut.keymap", keymapId);
+    } catch {
+      // Private window: the choice lasts for this session only.
+    }
+  }, [shortcuts, keymapId]);
 
   const refresh = useCallback(async (e: Engine) => {
     if (e.media) {
@@ -47,6 +67,7 @@ export default function App() {
       .then(async (e) => {
         setEngine(e);
         setVersion(await e.version());
+        e.shortcuts?.().then(setShortcuts).catch(() => {});
         await e.newProject("Untitled");
         if (e.media) setSeq(await e.media.ensureSequence());
         if (e.fileStatus) setFile(await e.fileStatus().catch(() => null));
@@ -133,6 +154,10 @@ export default function App() {
     }
   }
 
+  useShortcut("undo", () => engine?.undo().then(() => refresh(engine)));
+  useShortcut("redo", () => engine?.redo().then(() => refresh(engine)));
+  useShortcut("save", () => void save());
+
   async function openFile() {
     if (!engine?.openProjectFile || !filePath) return;
     try {
@@ -160,7 +185,41 @@ export default function App() {
           <button disabled={!engine} onClick={() => engine && engine.redo().then(() => refresh(engine))}>
             Redo
           </button>
+          {shortcuts && (
+            <>
+              <select value={keymapId} onChange={(e) => setKeymapId(e.target.value)} title="Keyboard shortcut preset" style={{ fontSize: 12, width: 120, minWidth: 0 }}>
+                {shortcuts.keymaps.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name} keys
+                  </option>
+                ))}
+              </select>
+              <button onClick={() => setShowKeys((v) => !v)} title="Show the shortcuts of this preset">
+                ?
+              </button>
+            </>
+          )}
         </div>
+        {showKeys && shortcuts && (
+          <table style={{ fontSize: 11, borderCollapse: "collapse" }}>
+            <tbody>
+              {shortcuts.actions
+                .filter((a) => !a.id.startsWith("angle_") || a.id === "angle_1")
+                .map((a) => {
+                  const map = shortcuts.keymaps.find((m) => m.id === keymapId) ?? shortcuts.keymaps[0];
+                  const keys = map.bindings.filter((b) => b.action === a.id).map(chordLabel).join(", ");
+                  return (
+                    <tr key={a.id}>
+                      <td style={{ padding: "1px 6px 1px 0", color: "#555" }}>{a.id === "angle_1" ? "Multicam angle 1–9" : a.label}</td>
+                      <td>
+                        <code>{a.id === "angle_1" ? "1 … 9" : keys}</code>
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        )}
         {engine?.saveProject && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
             <div style={{ display: "flex", gap: 4 }}>

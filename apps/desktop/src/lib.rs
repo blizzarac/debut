@@ -32,6 +32,7 @@ pub fn run() {
             ipc::waveform,
             ipc::snap_points,
             ipc::linked_selection,
+            ipc::shortcuts,
             ipc::set_linked_selection,
             ipc::relink_media,
             ipc::create_proxies,

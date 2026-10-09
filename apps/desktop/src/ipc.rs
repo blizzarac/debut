@@ -534,6 +534,11 @@ pub fn waveform(
 }
 
 #[tauri::command]
+pub fn shortcuts(state: State<'_, Shared>) -> ShortcutsDto {
+    lock(&state).shortcuts()
+}
+
+#[tauri::command]
 pub fn linked_selection(state: State<'_, Shared>) -> bool {
     lock(&state).linked_selection()
 }

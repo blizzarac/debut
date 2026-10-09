@@ -462,7 +462,32 @@ export interface PlayerApi {
   setPreviewQuality?(quality: PreviewQuality): Promise<void>;
 }
 
+/** A key chord bound to a shortcut action (TL-12). */
+export interface Binding {
+  action: string;
+  /** KeyboardEvent.key, lowercased ("j", " ", "arrowleft", "delete"). */
+  key: string;
+  /** Ctrl, or ⌘ on a Mac. */
+  cmd: boolean;
+  shift: boolean;
+  alt: boolean;
+}
+
+export interface Keymap {
+  id: string;
+  name: string;
+  bindings: Binding[];
+}
+
+export interface Shortcuts {
+  actions: { id: string; label: string }[];
+  /** Presets, the default first. */
+  keymaps: Keymap[];
+}
+
 export interface Engine extends ProjectApi {
+  /** Keyboard shortcut presets (debut, Premiere Pro, Final Cut Pro, Avid). */
+  shortcuts?(): Promise<Shortcuts>;
   media?: MediaApi;
   player?: PlayerApi;
   effects?: EffectsApi;

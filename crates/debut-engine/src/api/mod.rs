@@ -33,6 +33,7 @@ mod mixer;
 mod multicam;
 mod playback;
 mod proxies;
+mod shortcuts;
 mod timeline;
 mod titles;
 mod waveforms;
@@ -41,6 +42,7 @@ pub use self::mixer::DuckDto;
 use self::mixer::*;
 use self::proxies::ProxyJobs;
 pub use self::proxies::ProxyStatusDto;
+pub use self::shortcuts::{BindingDto, KeymapDto, ShortcutActionDto, ShortcutsDto};
 use self::waveforms::WaveformCache;
 pub use self::{
     captions::*, effects::*, export::*, markers::*, media::*, multicam::*, playback::*,

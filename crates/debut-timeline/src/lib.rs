@@ -7,7 +7,7 @@ pub mod trim; // TL-04 ripple / roll / slip / slide
 
 pub mod evaluate; // sequence -> frame composition plan (pending; see debut-render::compose)
 pub mod select; // TL-05 linked selection (track targeting and patching pending)
-pub mod shortcuts; // TL-12 keymaps with NLE presets (pending)
+pub mod shortcuts; // TL-12 keymaps with NLE presets
 pub mod snap; // TL-06 snap targets, gap removal
 pub mod snapshot; // TL-14 versions and compare (pending)
 pub mod speed; // TL-09 constant, reverse, freeze, ramps

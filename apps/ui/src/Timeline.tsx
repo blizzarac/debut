@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { useShortcut } from "./shortcuts";
 import type { ClipInfo, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, TitleTemplate, TrackInfo } from "./engine";
 
 const TRACK_H = 44;
@@ -67,15 +68,8 @@ export function Timeline({
     const on = !linkedOn;
     media.setLinkedSelection?.(on).then(() => setLinkedOn(on)).catch(() => {});
   };
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      const tag = (e.target as HTMLElement)?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
-      if (e.key === "s" && !e.ctrlKey && !e.metaKey && !e.altKey) setSnapOn((v) => !v);
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  useShortcut("toggle_snap", () => setSnapOn((v) => !v));
+  useShortcut("toggle_linked", () => toggleLinked());
   const svg = useRef<SVGSVGElement>(null);
   const fps = seq.frame_rate[0] / seq.frame_rate[1];
   const length = Math.max(seq.duration + 5, 10);
@@ -130,6 +124,16 @@ export function Timeline({
   };
 
   const selectedClip = selected && seq.tracks.find((t) => t.id === selected.track)?.clips.find((c) => c.id === selected.clip);
+  useShortcut("blade", () => {
+    const t = selected ? seq.tracks.find((t) => t.id === selected.track) : seq.tracks[0];
+    if (t) run({ kind: "blade", track: t.id, at: toFrame(position) });
+  });
+  useShortcut("ripple_delete", () => {
+    if (selectedClip) run({ kind: "extract", track: selected!.track, start: selectedClip.timeline_in, end: selectedClip.timeline_in + selectedClip.duration });
+  });
+  useShortcut("lift", () => {
+    if (selectedClip) run({ kind: "lift", track: selected!.track, start: selectedClip.timeline_in, end: selectedClip.timeline_in + selectedClip.duration });
+  });
 
   return (
     <div>
