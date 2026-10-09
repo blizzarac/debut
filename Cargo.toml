@@ -55,7 +55,8 @@ ffmpeg-next = "7"
 cpal = "0.16"
 wasm-bindgen = "0.2"
 # web-sys = "0.3"        # debut-platform-web: WebCodecs, OPFS, AudioWorklet
-# tauri = "2"            # apps/desktop: shell (PLT-10)
+tauri = "2"
+tauri-build = "2"
 # opentimelineio / fcpxml crates for MED-12 interchange
 
 [profile.release]

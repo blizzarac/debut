@@ -14,6 +14,7 @@ PKGS=(
   libasound2-dev
   libclang-dev clang pkg-config
   ffmpeg
+  libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev
 )
 
 missing=()
@@ -32,3 +33,9 @@ rustup target add wasm32-unknown-unknown >/dev/null 2>&1 || true
 
 cd "$CLAUDE_PROJECT_DIR"
 cargo fetch
+
+# Shared TypeScript UI; the Tauri shell embeds its dist/ at compile time.
+if command -v pnpm >/dev/null 2>&1; then
+  pnpm --dir apps/ui install --frozen-lockfile --silent
+  pnpm --dir apps/ui build >/dev/null
+fi

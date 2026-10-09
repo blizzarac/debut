@@ -1,5 +1,6 @@
-//! Desktop shell (Tauri). Exposes `debut_engine::api` over IPC to `apps/ui`.
+// Prevents an extra console window on Windows in release builds.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
-    println!("debut desktop shell: engine wiring pending");
+    debut_desktop::run()
 }

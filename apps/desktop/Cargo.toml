@@ -6,7 +6,19 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "debut_desktop"
+crate-type = ["lib", "cdylib", "staticlib"]
+
+[build-dependencies]
+tauri-build.workspace = true
+
 [dependencies]
+debut-core.workspace = true
+debut-project.workspace = true
+debut-command.workspace = true
 debut-engine.workspace = true
 debut-platform-native.workspace = true
-# tauri = "2"   # PLT-10: installer under 50 MB excluding codecs and models
+tauri.workspace = true
+serde.workspace = true
+serde_json.workspace = true

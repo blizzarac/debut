@@ -67,5 +67,7 @@ wasm-pack build apps/web --target web        # browser (once wasm-bindgen is ena
 2. ~~`debut-command` apply/invert for the TL-03 core edits; journal + crash recovery.~~ Done: `Replace`/`Shift`/`Blade`/`Join` primitives, `insert`/`overwrite`/`lift`/`extract` constructors, `History` undo/redo, JSON-lines `Journal`.
 3. ~~`debut-platform-native` decoder via FFmpeg; `debut-audio` clock + `AudioOut`; `debut-engine::playback`~~ Done: `FfmpegDecoder` (video + audio, seek), lock-free audio `Clock`, `Transport` (tick/drop stats, JKL, loop, step), `FrameSource` decoder→graph bridge, `NativePlatform` with cpal `AudioOut`, file store, thread pool. Still open: audio mixing into `AudioOut`, hardware decode.
 4. ~~`debut-render` pull graph with transform/blend/dissolve nodes~~ Done, CPU reference + wgpu backend with conformance test. Still open: the OCIO pipeline, masks/keys/LUTs, scopes.
-5. `debut-export` reusing the graph; CI gate on NFR-02 – NFR-04 numbers.
-6. `debut-platform-web` + `apps/web`; browser/desktop render-match test (PLT-04).
+5. ~~`debut-export` reusing the graph~~ Done: `FfmpegEncoder` (H.264/AAC), `export()` job, `ExportQueue`, presets. Still open: CI gate on NFR-02 – NFR-04 numbers, smart render, HDR.
+6. ~~`apps/web` builds for wasm32~~ Done (wasm-bindgen API over the command log). Still open: `debut-platform-web` implementations (WebCodecs, OPFS, AudioWorklet), browser render-match test.
+7. Timeline: ~~trim tools and three-point editing~~ Done. Still open: selection/patching, snapping, speed ramps, shortcuts, snapshots.
+8. Shells: Tauri desktop app and the shared TypeScript UI.
