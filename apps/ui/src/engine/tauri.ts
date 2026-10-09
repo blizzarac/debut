@@ -15,6 +15,7 @@ import type {
   MixerApi,
   ParamName,
   PlayerApi,
+  PreviewQuality,
   ScopesData,
   SequenceInfo,
   Tick,
@@ -53,6 +54,9 @@ class TauriPlayer implements PlayerApi {
     const width = view.getUint32(0, true);
     const height = view.getUint32(4, true);
     return { width, height, rgba: new Uint8ClampedArray(buf, 8, width * height * 4) };
+  }
+  setPreviewQuality(quality: PreviewQuality) {
+    return invoke<void>("set_preview_quality", { quality });
   }
   async scopes(): Promise<ScopesData> {
     const buf = await invoke<ArrayBuffer>("scopes");

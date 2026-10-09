@@ -1,5 +1,5 @@
-import { useEffect } from "react";
-import type { PlayerApi, Tick } from "./engine";
+import { useEffect, useState } from "react";
+import type { PlayerApi, PreviewQuality, Tick } from "./engine";
 
 export function timecode(t: number, fps: number): string {
   const total = Math.max(0, Math.round(t * fps));
@@ -10,6 +10,7 @@ export function timecode(t: number, fps: number): string {
 }
 
 export function Transport({ player, tick, fps }: { player: PlayerApi; tick: Tick | null; fps: number }) {
+  const [quality, setQuality] = useState<PreviewQuality>("auto");
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement)?.tagName === "INPUT") return;
@@ -57,6 +58,25 @@ export function Transport({ player, tick, fps }: { player: PlayerApi; tick: Tick
       {btn("▶▶", () => player.transport({ kind: "shuttle", forward: true }), "L")}
       <code style={{ marginLeft: 12, fontSize: 16 }}>{timecode(tick?.position ?? 0, fps)}</code>
       {tick && tick.dropped > 0 && <span style={{ color: "#c33", fontSize: 12 }}>{tick.dropped} dropped</span>}
+      <span style={{ flex: 1 }} />
+      {player.setPreviewQuality && (
+        <label style={{ fontSize: 12 }} title="Playback resolution">
+          preview{" "}
+          <select
+            value={quality}
+            onChange={(e) => {
+              const q = e.target.value as PreviewQuality;
+              setQuality(q);
+              player.setPreviewQuality!(q);
+            }}
+          >
+            <option value="auto">Auto{tick ? ` (1/${tick.preview_divisor})` : ""}</option>
+            <option value="full">Full</option>
+            <option value="half">1/2</option>
+            <option value="quarter">1/4</option>
+          </select>
+        </label>
+      )}
     </div>
   );
 }

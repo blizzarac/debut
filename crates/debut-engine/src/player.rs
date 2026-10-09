@@ -9,7 +9,7 @@ use debut_audio::{AudioRenderer, Clock, RtSink};
 use debut_core::{MediaId, Rational, Result};
 use debut_platform::Decoder;
 use debut_project::Sequence;
-use debut_render::compose::{compose, SourceInfo};
+use debut_render::compose::{compose_at, SourceInfo};
 use debut_render::Graph;
 use std::sync::Arc;
 
@@ -24,6 +24,8 @@ pub struct Player {
     audio: AudioRenderer,
     pub frames: FrameSource,
     pub samples: SampleCache,
+    /// Preview resolution divisor: 1 = full, 2 = half, 4 = quarter (PB-03).
+    preview_divisor: u32,
 }
 
 impl SourceInfo for FrameSource {
@@ -44,6 +46,7 @@ impl Player {
             audio,
             frames: FrameSource::new(8),
             samples: SampleCache::new(SAMPLE_RATE),
+            preview_divisor: 1,
         };
         (player, sink)
     }
@@ -93,6 +96,23 @@ impl Player {
         self.transport.stats()
     }
 
+    pub fn preview_divisor(&self) -> u32 {
+        self.preview_divisor
+    }
+
+    pub fn set_preview_divisor(&mut self, d: u32) {
+        self.preview_divisor = d.clamp(1, 8);
+    }
+
+    /// Canvas the viewer renders at.
+    pub fn preview_canvas(&self) -> (u32, u32) {
+        let d = self.preview_divisor;
+        (
+            (self.sequence.width / d).max(16) & !1,
+            (self.sequence.height / d).max(16) & !1,
+        )
+    }
+
     /// Call once per display refresh. Keeps audio rendered ahead and returns the
     /// graph for the frame to present, or `None` if the displayed frame is current.
     pub fn tick(&mut self) -> Result<Option<Graph>> {
@@ -108,7 +128,12 @@ impl Player {
             return Ok(None);
         };
         let t = self.transport.frame_rate().frame_to_time(frame);
-        Ok(Some(compose(&self.sequence, t, &self.frames)))
+        Ok(Some(compose_at(
+            &self.sequence,
+            t,
+            &self.frames,
+            self.preview_canvas(),
+        )))
     }
 
     /// The graph for the current frame regardless of whether it changed (e.g. after
@@ -118,6 +143,6 @@ impl Player {
             .transport
             .frame_rate()
             .frame_to_time(self.transport.current_frame());
-        compose(&self.sequence, t, &self.frames)
+        compose_at(&self.sequence, t, &self.frames, self.preview_canvas())
     }
 }

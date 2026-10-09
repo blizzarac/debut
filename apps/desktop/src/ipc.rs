@@ -37,6 +37,10 @@ pub struct Session {
     backend: AnyBackend,
     /// Media probed so far: id -> (width, height, duration, has_audio).
     probed: std::collections::HashMap<MediaId, (u32, u32, Rational, bool)>,
+    preview: PreviewQuality,
+    /// Rolling cost of producing a frame (render + readback), for Auto.
+    frame_cost: Option<std::time::Duration>,
+    frames_since_change: u32,
     exports: Arc<Mutex<ExportQueue>>,
     export_worker: Arc<std::sync::atomic::AtomicBool>,
     /// Per-job preset, normalization target and media paths (shared with the worker).
@@ -63,6 +67,9 @@ impl Session {
             audio_out: None,
             backend: AnyBackend::detect(),
             probed: Default::default(),
+            preview: PreviewQuality::Auto,
+            frame_cost: None,
+            frames_since_change: 0,
             exports: Arc::new(Mutex::new(ExportQueue::default())),
             export_worker: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             export_specs: Default::default(),
@@ -626,6 +633,7 @@ impl Session {
         if self.player.is_none() {
             self.sync_player()?;
         }
+        self.apply_preview_quality();
         let p = self.player.as_mut().ok_or("no sequence")?;
         let changed = p.tick().map_err(|e| e.to_string())?.is_some();
         let Stats { dropped, .. } = p.stats();
@@ -635,11 +643,51 @@ impl Session {
             playing: p.transport.is_playing(),
             changed,
             dropped,
+            preview_divisor: p.preview_divisor(),
         })
     }
 
-    /// The current frame as `(width, height, RGBA8 bytes)`.
+    pub fn set_preview_quality(&mut self, q: PreviewQuality) {
+        self.preview = q;
+        self.frames_since_change = 0;
+        self.apply_preview_quality();
+    }
+
+    /// Fixed modes set the divisor directly. Auto steps down when a frame costs
+    /// more than ~70 % of its display time and back up after a run of cheap ones.
+    fn apply_preview_quality(&mut self) {
+        let Some(p) = self.player.as_mut() else {
+            return;
+        };
+        let target = match self.preview {
+            PreviewQuality::Full => 1,
+            PreviewQuality::Half => 2,
+            PreviewQuality::Quarter => 4,
+            PreviewQuality::Auto => {
+                let d = p.preview_divisor();
+                let budget = p.transport.frame_rate().frame_duration().as_f64();
+                match self.frame_cost.map(|c| c.as_secs_f64()) {
+                    Some(cost) if cost > budget * 0.7 && d < 4 => {
+                        self.frames_since_change = 0;
+                        d * 2
+                    }
+                    // Stepping up costs ~4x per step; only when there's clear headroom.
+                    Some(cost)
+                        if cost < budget * 0.12 && d > 1 && self.frames_since_change > 50 =>
+                    {
+                        self.frames_since_change = 0;
+                        d / 2
+                    }
+                    _ => d,
+                }
+            }
+        };
+        p.set_preview_divisor(target);
+    }
+
+    /// The current frame as `(width, height, RGBA8 bytes)` at the preview size.
     pub fn frame_pixels(&mut self) -> Result<(u32, u32, Vec<u8>), String> {
+        let started = Instant::now();
         let Session {
             player, backend, ..
         } = self;
@@ -648,7 +696,15 @@ impl Session {
         let (w, h, px) = backend
             .render_pixels(&graph, &mut p.frames)
             .map_err(|e| e.to_string())?;
-        Ok((w, h, to_rgba8(&px)))
+        let out = to_rgba8(&px);
+        let cost = started.elapsed();
+        // Exponential moving average so one slow frame doesn't flip the mode.
+        self.frame_cost = Some(match self.frame_cost {
+            Some(prev) => prev.mul_f32(0.7) + cost.mul_f32(0.3),
+            None => cost,
+        });
+        self.frames_since_change = self.frames_since_change.saturating_add(1);
+        Ok((w, h, out))
     }
 
     /// Scopes of the current frame (PB-08), packed as `Scopes::to_bytes`.
@@ -1300,6 +1356,18 @@ pub struct TickDto {
     pub playing: bool,
     pub changed: bool,
     pub dropped: u64,
+    /// Preview resolution in use: 1, 2 or 4 (PB-03).
+    pub preview_divisor: u32,
+}
+
+/// Playback resolution selector (PB-03).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PreviewQuality {
+    Full,
+    Half,
+    Quarter,
+    Auto,
 }
 
 #[tauri::command]
@@ -1312,6 +1380,11 @@ pub fn transport(state: State<'_, Shared>, action: TransportAction) -> Result<()
 #[tauri::command]
 pub fn tick(state: State<'_, Shared>) -> Result<TickDto, String> {
     lock(&state).tick()
+}
+
+#[tauri::command]
+pub fn set_preview_quality(state: State<'_, Shared>, quality: PreviewQuality) {
+    lock(&state).set_preview_quality(quality)
 }
 
 #[tauri::command]
@@ -1478,6 +1551,20 @@ mod tests {
         );
         assert_eq!(s.player.as_ref().unwrap().sequence.duration().as_f64(), 2.4);
 
+        // Preview quality: fixed modes change the frame size; Auto keeps the divisor
+        // until it has timings.
+        s.set_preview_quality(PreviewQuality::Quarter);
+        let (qw, qh, _) = s.frame_pixels().unwrap();
+        assert_eq!((qw, qh), (16, 16), "64x36 / 4 clamps to the 16 px floor");
+        s.set_preview_quality(PreviewQuality::Half);
+        let (hw, hh, _) = s.frame_pixels().unwrap();
+        assert_eq!((hw, hh), (32, 18));
+        s.set_preview_quality(PreviewQuality::Auto);
+        assert_eq!(s.tick().unwrap().preview_divisor, 2);
+        s.set_preview_quality(PreviewQuality::Full);
+        let (fw, _, _) = s.frame_pixels().unwrap();
+        assert_eq!(fw, 64);
+
         // Transition: blade V1 at 1.0 s, dissolve 0.4 s into the second piece (its head
         // handle is 0.6 s of source), then check the DTO and that scopes come back.
         s.edit(EditOp::Blade {
@@ -1611,6 +1698,67 @@ mod tests {
         assert!(px
             .chunks(4)
             .any(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 60));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    /// `cargo test -p debut-desktop -- --ignored bench` prints the frame cost per
+    /// preview divisor on a generated 1080p clip: what Auto is working with.
+    #[test]
+    #[ignore]
+    fn bench_preview_divisors_on_1080p() {
+        let dir = std::env::temp_dir().join(format!("debut-bench-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("hd.mp4");
+        let ok = std::process::Command::new("ffmpeg")
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-y",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=1920x1080:rate=25:duration=2",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-preset",
+                "ultrafast",
+            ])
+            .arg(&clip)
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        assert!(ok, "ffmpeg is needed to generate the 1080p clip");
+        let mut s = Session::new();
+        let id = s.ids.fresh();
+        s.start(
+            Project::new(id, "bench"),
+            dir.join("b.debut").to_string_lossy().into_owned(),
+        )
+        .unwrap();
+        let m = s.import_media(clip.to_string_lossy().into_owned()).unwrap();
+        let seq = s.ensure_sequence().unwrap();
+        s.add_clip(&seq.tracks[0].id, &m.id, 0.0).unwrap();
+        for (q, label) in [
+            (PreviewQuality::Full, "full"),
+            (PreviewQuality::Half, "half"),
+            (PreviewQuality::Quarter, "quarter"),
+        ] {
+            s.set_preview_quality(q);
+            let t0 = std::time::Instant::now();
+            for i in 0..10 {
+                s.transport(TransportAction::Seek { t: i as f64 * 0.04 })
+                    .unwrap();
+                s.frame_pixels().unwrap();
+            }
+            eprintln!(
+                "{label}: {:.1} ms/frame (gpu={})",
+                t0.elapsed().as_secs_f64() * 100.0,
+                s.backend.is_gpu()
+            );
+        }
         std::fs::remove_dir_all(dir).ok();
     }
 }

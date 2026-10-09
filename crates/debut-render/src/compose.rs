@@ -29,7 +29,15 @@ pub trait SourceInfo {
 pub const WORKING: ColorSpace = ColorSpace::Linear709;
 
 pub fn compose(seq: &Sequence, t: Rational, info: &dyn SourceInfo) -> Graph {
-    let (w, h) = (seq.width, seq.height);
+    compose_at(seq, t, info, (seq.width, seq.height))
+}
+
+/// Compose onto a canvas of another size: the preview at 1/2 or 1/4 resolution
+/// (PB-03) renders the same picture with positions scaled, so the viewer and the
+/// full-size export agree.
+pub fn compose_at(seq: &Sequence, t: Rational, info: &dyn SourceInfo, canvas: (u32, u32)) -> Graph {
+    let (w, h) = (canvas.0.max(1), canvas.1.max(1));
+    let px_scale = w as f32 / seq.width.max(1) as f32;
     let mut g = Graph::default();
     let mut acc: NodeId = g.add(Node::Solid {
         w,
@@ -41,13 +49,13 @@ pub fn compose(seq: &Sequence, t: Rational, info: &dyn SourceInfo) -> Graph {
             continue;
         };
         let (node, opacity) = match layer {
-            Layer::Single(clip) => match clip_layer(&mut g, clip, t, (w, h), info) {
+            Layer::Single(clip) => match clip_layer(&mut g, clip, t, (w, h), px_scale, info) {
                 Some(l) => l,
                 None => continue,
             },
             Layer::Transition { from, to, progress } => {
-                let a = clip_layer(&mut g, from, t, (w, h), info);
-                let b = clip_layer(&mut g, to, t, (w, h), info);
+                let a = clip_layer(&mut g, from, t, (w, h), px_scale, info);
+                let b = clip_layer(&mut g, to, t, (w, h), px_scale, info);
                 match (a, b) {
                     (Some((na, oa)), Some((nb, ob))) => {
                         let node = g.add(Node::Dissolve {
@@ -81,6 +89,7 @@ fn clip_layer(
     clip: &Clip,
     t: Rational,
     canvas: (u32, u32),
+    px_scale: f32,
     info: &dyn SourceInfo,
 ) -> Option<(NodeId, f32)> {
     let (w, h) = canvas;
@@ -108,8 +117,8 @@ fn clip_layer(
         let v = |p: Param| clip.param_at(i, p, t).unwrap_or(0.0) as f32;
         scale = v(Param::Scale);
         rotation = v(Param::Rotation).to_radians();
-        dx = v(Param::X);
-        dy = v(Param::Y);
+        dx = v(Param::X) * px_scale;
+        dy = v(Param::Y) * px_scale;
         opacity = v(Param::Opacity).clamp(0.0, 1.0);
     }
     let xf = Transform2D::from_srt(
@@ -304,5 +313,48 @@ mod tests {
         // Outside the window there is no dissolve.
         let g = compose(&seq, Rational::from_int(5), &Fixed(100, 100));
         assert!((0..g.len() as u32).all(|i| !matches!(g.node(NodeId(i)), Node::Dissolve { .. })));
+    }
+
+    #[test]
+    fn compose_at_scales_positions_with_the_canvas() {
+        use debut_project::TransformFx;
+        let mut ids = IdGen::new(12);
+        let mut seq = Sequence::new(ids.fresh(), "s", FrameRate::FPS_25, 1920, 1080);
+        let mut v1 = Track::new(ids.fresh(), TrackKind::Video);
+        let m: MediaId = ids.fresh();
+        let mut clip = Clip::new(
+            ids.fresh(),
+            ClipSource::Media(m),
+            Rational::ZERO,
+            Rational::from_int(10),
+            Rational::ZERO,
+        );
+        let tf = TransformFx {
+            x: Curve::constant(400.0),
+            ..Default::default()
+        };
+        clip.effects.push(Effect::Transform(tf));
+        v1.clips.push(clip);
+        seq.tracks.push(v1);
+        let full = compose(&seq, Rational::ONE, &Fixed(1920, 1080));
+        let quarter = compose_at(&seq, Rational::ONE, &Fixed(1920, 1080), (480, 270));
+        let xf = |g: &Graph| {
+            (0..g.len() as u32)
+                .find_map(|i| match g.node(NodeId(i)) {
+                    Node::Transform { xf, w, h, .. } => Some((*xf, *w, *h)),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let (f, fw, fh) = xf(&full);
+        let (q, qw, qh) = xf(&quarter);
+        assert_eq!((fw, fh, qw, qh), (1920, 1080, 480, 270));
+        // The same source point lands at the same relative canvas position.
+        let (sx_f, sy_f) = f.apply(960.0 + 400.0, 540.0);
+        let (sx_q, sy_q) = q.apply(240.0 + 100.0, 135.0);
+        assert!(
+            (sx_f - sx_q).abs() < 1e-3 && (sy_f - sy_q).abs() < 1e-3,
+            "{sx_f},{sy_f} vs {sx_q},{sy_q}"
+        );
     }
 }

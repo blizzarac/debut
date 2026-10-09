@@ -178,7 +178,11 @@ export interface Tick {
   playing: boolean;
   changed: boolean;
   dropped: number;
+  /** Preview resolution divisor in use: 1, 2 or 4. */
+  preview_divisor: number;
 }
+
+export type PreviewQuality = "full" | "half" | "quarter" | "auto";
 
 export interface Frame {
   width: number;
@@ -191,6 +195,7 @@ export interface PlayerApi {
   tick(): Promise<Tick>;
   framePixels(): Promise<Frame>;
   scopes?(): Promise<ScopesData>;
+  setPreviewQuality?(quality: PreviewQuality): Promise<void>;
 }
 
 export interface Engine extends ProjectApi {

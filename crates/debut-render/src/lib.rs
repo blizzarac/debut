@@ -68,6 +68,7 @@ impl AnyBackend {
     }
 }
 pub use color::{ColorTransform, Grade, Transfer};
+pub use compose::{compose, compose_at};
 pub use debut_core::keyframe::{self, Curve, Interp, Keyframe};
 pub use graph::{Graph, LutRef, Node, NodeId};
 pub use lut::Lut3d;
