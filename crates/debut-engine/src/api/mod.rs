@@ -33,8 +33,10 @@ mod multicam;
 mod playback;
 mod timeline;
 mod titles;
+mod waveforms;
 
 use self::mixer::*;
+use self::waveforms::WaveformCache;
 pub use self::{
     captions::*, effects::*, export::*, markers::*, media::*, multicam::*, playback::*,
     timeline::*, titles::*,
@@ -53,6 +55,8 @@ pub struct Session {
     active: Option<SequenceId>,
     /// Media whose file could not be opened this session (MED-05).
     offline: std::collections::HashSet<MediaId>,
+    /// Waveform peaks per media, built in the background (AUD-04).
+    waveforms: WaveformCache,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -107,6 +111,7 @@ impl Session {
             ids: IdGen::random(),
             active: None,
             offline: Default::default(),
+            waveforms: Default::default(),
             player: None,
             audio_out: None,
             backend: AnyBackend::detect(),

@@ -94,6 +94,7 @@ impl Session {
             (v.width, v.height, v.duration, dec.audio_info().is_some()),
         );
         self.offline.remove(&id);
+        self.forget_waveform(id);
         if let Some(p) = &mut self.player {
             p.forget_media(id);
         }

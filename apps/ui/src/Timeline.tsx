@@ -223,6 +223,9 @@ export function Timeline({
                           pointerEvents="none"
                         />
                       )}
+                      {track.kind === "audio" && clip.media && media.waveform && (
+                        <ClipWaveform media={media} mediaId={clip.media} start={clip.source_in} duration={clip.duration} x={x} y={y + 4} w={w} h={TRACK_H - 8} />
+                      )}
                       <text x={x + EDGE + 2} y={y + TRACK_H / 2 + 4} fontSize={11} fill="#fff" pointerEvents="none">
                         {clip.title ? `T “${clip.title.text.slice(0, 18)}”` : clip.angles != null ? `MC ${(clip.angle ?? 0) + 1}/${clip.angles}` : clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s
                       </text>
@@ -238,4 +241,41 @@ export function Timeline({
       </div>
     </div>
   );
+}
+
+/** Audio peaks drawn inside a clip (AUD-04): one vertical stroke per pixel
+ * column, on a decibel scale. The engine builds peaks in the background, so this polls briefly
+ * until they arrive. */
+function ClipWaveform({ media, mediaId, start, duration, x, y, w, h }: { media: MediaApi; mediaId: string; start: number; duration: number; x: number; y: number; w: number; h: number }) {
+  const buckets = Math.max(1, Math.min(4096, Math.round(w)));
+  const [peaks, setPeaks] = useState<[number, number][] | null>(null);
+  useEffect(() => {
+    let alive = true;
+    let tries = 0;
+    const fetchPeaks = () => {
+      media
+        .waveform?.(mediaId, start, start + duration, buckets)
+        .then((p) => {
+          if (!alive) return;
+          if (p) setPeaks(p);
+          else if (tries++ < 50) setTimeout(fetchPeaks, 200);
+        })
+        .catch(() => {});
+    };
+    fetchPeaks();
+    return () => {
+      alive = false;
+    };
+  }, [media, mediaId, start, duration, buckets]);
+  if (!peaks) return null;
+  const mid = y + h / 2;
+  // Decibel scale over a 60 dB range, so quiet dialogue stays readable.
+  const db = (a: number) => (a <= 0.001 ? 0 : Math.min(1, (20 * Math.log10(a) + 60) / 60));
+  const d = peaks
+    .map(([lo, hi], i) => {
+      const half = (db(Math.max(-lo, hi)) * h) / 2;
+      return `M${(x + (i * w) / peaks.length).toFixed(1)} ${(mid - half).toFixed(1)}V${(mid + half + 0.5).toFixed(1)}`;
+    })
+    .join("");
+  return <path d={d} stroke="rgba(0,60,20,0.55)" strokeWidth={1} fill="none" pointerEvents="none" />;
 }

@@ -46,6 +46,9 @@ class TauriMedia implements MediaApi {
   mediaList() {
     return invoke<MediaInfo[]>("media_list");
   }
+  waveform(media: string, start: number, end: number, buckets: number) {
+    return invoke<[number, number][] | null>("waveform", { media, start, end, buckets });
+  }
   bins() {
     return invoke<BinInfo[]>("bins");
   }

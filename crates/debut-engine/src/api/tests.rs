@@ -978,6 +978,28 @@ fn dissolve_needs_handles() {
     );
 }
 
+/// Waveform peaks build in the background and answer range queries (AUD-04).
+#[test]
+fn waveform_peaks_build_in_the_background() {
+    let Fx { mut s, m, .. } = fixture("waveform_peaks_build_in_the_background");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let peaks = loop {
+        if let Some(p) = s.waveform(&m.id, 0.0, 2.0, 100).unwrap() {
+            break p;
+        }
+        assert!(std::time::Instant::now() < deadline, "peaks never arrived");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_eq!(peaks.len(), 100);
+    let loudest = peaks.iter().map(|b| b[1].max(-b[0])).fold(0.0f32, f32::max);
+    assert!(loudest > 0.05, "the fixture's tone shows: {loudest}");
+    assert!(peaks.iter().all(|b| b[0] <= b[1]));
+    // Past the end of the file: silence; a second request is served from cache.
+    let after = s.waveform(&m.id, 3.0, 4.0, 10).unwrap().unwrap();
+    assert!(after.iter().all(|b| *b == [0.0, 0.0]));
+    assert!(s.waveform("not-an-id", 0.0, 1.0, 10).is_err());
+}
+
 /// Timeline and clip markers (TL-10).
 #[test]
 fn markers_edit_export_undo() {

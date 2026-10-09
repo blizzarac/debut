@@ -331,6 +331,8 @@ export interface MediaApi {
   importMedia(path: string): Promise<MediaInfo>;
   /** Every media in the project (also after opening a file). */
   mediaList(): Promise<MediaInfo[]>;
+  /** [min, max] audio peaks of a media between source times; null while still being built. */
+  waveform?(media: string, start: number, end: number, buckets: number): Promise<[number, number][] | null>;
   bins(): Promise<BinInfo[]>;
   /** With `filter`, a smart bin matching file names containing it. */
   addBin(name: string, filter?: string): Promise<string>;

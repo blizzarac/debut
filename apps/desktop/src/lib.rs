@@ -29,6 +29,7 @@ pub fn run() {
             ipc::can_undo,
             ipc::import_media,
             ipc::media_list,
+            ipc::waveform,
             ipc::relink_media,
             ipc::bins,
             ipc::add_bin,

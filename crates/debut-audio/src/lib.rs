@@ -11,7 +11,7 @@ pub mod sync; // MED-11 audio alignment for multicam
 pub mod ducking; // AUD-08 (pending)
 pub mod effects; // AUD-05 EQ, compressor, limiter, de-esser, gate, reverb
 pub mod loudness; // AUD-06 BS.1770 LUFS / true peak, normalization gain
-pub mod waveform; // AUD-04 multi-resolution peak cache (pending)
+pub mod waveform; // AUD-04 multi-resolution peak cache
 
 pub use clock::Clock;
 pub use effects::{AudioEffect, EqBand, EqKind, Processor};
@@ -21,3 +21,4 @@ pub use engine::{
 pub use graph::TrackMix;
 pub use loudness::{normalize_gain, LoudnessMeter};
 pub use sync::{align, Alignment};
+pub use waveform::{Peaks, PeaksBuilder};

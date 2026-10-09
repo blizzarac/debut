@@ -473,3 +473,14 @@ pub fn frame_pixels(state: State<'_, Shared>) -> Result<tauri::ipc::Response, St
     bytes.extend_from_slice(&rgba);
     Ok(tauri::ipc::Response::new(bytes))
 }
+
+#[tauri::command]
+pub fn waveform(
+    state: State<'_, Shared>,
+    media: String,
+    start: f64,
+    end: f64,
+    buckets: usize,
+) -> Result<Option<Vec<[f32; 2]>>, String> {
+    lock(&state).waveform(&media, start, end, buckets)
+}
