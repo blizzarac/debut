@@ -67,8 +67,25 @@ impl Transform2D {
 /// Where decoded frames come from. The playback engine implements this over the
 /// platform decoder and its frame cache; tests use synthetic sources.
 pub trait FrameProvider {
-    /// Frame of `media` at source time `t`, as linear premultiplied RGBA.
-    fn frame(&mut self, media: MediaId, t: Rational) -> Result<(u32, u32, Vec<Rgba>)>;
+    /// Frame of `media` at source time `t` as display-encoded, straight-alpha
+    /// RGBA8 (what decoders produce); the graph's input transform linearizes it.
+    fn frame(&mut self, media: MediaId, t: Rational) -> Result<(u32, u32, Vec<u8>)>;
+}
+
+/// Straight RGBA8 -> premultiplied f32 (same encoding), for CPU paths.
+pub fn rgba8_to_f32(rgba8: &[u8]) -> Vec<Rgba> {
+    rgba8
+        .chunks_exact(4)
+        .map(|p| {
+            let a = p[3] as f32 / 255.0;
+            [
+                p[0] as f32 / 255.0 * a,
+                p[1] as f32 / 255.0 * a,
+                p[2] as f32 / 255.0 * a,
+                a,
+            ]
+        })
+        .collect()
 }
 
 pub trait Backend {
@@ -77,6 +94,11 @@ pub trait Backend {
     fn size(&self, img: &Self::Image) -> (u32, u32);
     fn solid(&mut self, w: u32, h: u32, color: Rgba) -> Self::Image;
     fn upload(&mut self, w: u32, h: u32, pixels: &[Rgba]) -> Self::Image;
+    /// Upload straight-alpha RGBA8 (decoded video); backends keep it 8-bit until
+    /// a pass reads it, so a 4K frame costs 32 MB, not 128.
+    fn upload_rgba8(&mut self, w: u32, h: u32, pixels: &[u8]) -> Self::Image {
+        self.upload(w, h, &rgba8_to_f32(pixels))
+    }
     /// Resample `src` into a `w x h` image through `xf` (bilinear, transparent outside).
     fn transform(&mut self, src: &Self::Image, xf: &Transform2D, w: u32, h: u32) -> Self::Image;
     /// Composite `top` over `bottom`; both the same size.

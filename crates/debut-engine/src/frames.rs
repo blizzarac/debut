@@ -2,37 +2,20 @@
 //! [`debut_render::FrameProvider`] over one decoder per media, with a small
 //! per-media cache of linearized frames so scrubbing back a few frames is free.
 //!
-//! Frames arrive as 8-bit display-encoded RGBA and leave as `f32` premultiplied
-//! RGBA in the same encoding; `compose` inserts the input transform for the
-//! media's tagged color space (FX-08), so linearization happens on the GPU.
+//! Frames stay 8-bit display-encoded RGBA all the way to the backend upload;
+//! `compose` inserts the input transform for the media's tagged color space
+//! (FX-08), so linearization happens on the GPU.
 
 use debut_core::{Error, MediaId, Rational, Result};
 use debut_platform::Decoder;
-use debut_render::{FrameProvider, Rgba};
+use debut_render::FrameProvider;
 use std::collections::{HashMap, VecDeque};
-
-/// Display-encoded RGBA8 -> `f32` premultiplied RGBA, still display-encoded: the
-/// graph's input transform (from the media's tagged space) linearizes on the GPU.
-pub fn to_f32_rgba(rgba8: &[u8]) -> Vec<Rgba> {
-    rgba8
-        .chunks_exact(4)
-        .map(|p| {
-            let a = p[3] as f32 / 255.0;
-            [
-                p[0] as f32 / 255.0 * a,
-                p[1] as f32 / 255.0 * a,
-                p[2] as f32 / 255.0 * a,
-                a,
-            ]
-        })
-        .collect()
-}
 
 struct Cached {
     pts: Rational,
     width: u32,
     height: u32,
-    pixels: Vec<Rgba>,
+    pixels: Vec<u8>,
 }
 
 struct Source {
@@ -82,7 +65,7 @@ impl FrameSource {
 }
 
 impl FrameProvider for FrameSource {
-    fn frame(&mut self, media: MediaId, t: Rational) -> Result<(u32, u32, Vec<Rgba>)> {
+    fn frame(&mut self, media: MediaId, t: Rational) -> Result<(u32, u32, Vec<u8>)> {
         let src = self
             .sources
             .get_mut(&media)
@@ -110,7 +93,7 @@ impl FrameProvider for FrameSource {
                 pts: f.pts,
                 width: f.width,
                 height: f.height,
-                pixels: to_f32_rgba(&f.rgba8),
+                pixels: f.rgba8,
             };
             let done = covers(&c) || f.pts > t;
             if f.pts > t && best.is_some() {
@@ -130,18 +113,5 @@ impl FrameProvider for FrameSource {
             src.recent.pop_front();
         }
         Ok(out)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn to_f32_premultiplies_without_changing_encoding() {
-        let px = to_f32_rgba(&[255, 0, 128, 255, 255, 255, 255, 0]);
-        assert_eq!(px[0][0], 1.0);
-        assert!((px[0][2] - 128.0 / 255.0).abs() < 1e-6);
-        assert_eq!(px[1], [0.0, 0.0, 0.0, 0.0]);
     }
 }

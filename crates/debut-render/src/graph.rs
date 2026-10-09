@@ -169,7 +169,7 @@ impl Graph {
                 Node::Solid { w, h, color } => backend.solid(*w, *h, *color),
                 Node::Source { media, source_time } => {
                     let (w, h, px) = frames.frame(*media, *source_time)?;
-                    backend.upload(w, h, &px)
+                    backend.upload_rgba8(w, h, &px)
                 }
                 Node::Transform { input, xf, w, h } => {
                     backend.transform(&get(&images, *input), xf, *w, *h)
@@ -208,12 +208,13 @@ mod tests {
     }
 
     impl FrameProvider for SolidSource {
-        fn frame(&mut self, _media: MediaId, t: Rational) -> Result<(u32, u32, Vec<Rgba>)> {
-            let v = t.as_f64() as f32;
+        fn frame(&mut self, _media: MediaId, t: Rational) -> Result<(u32, u32, Vec<u8>)> {
+            // Red = t, encoded as 8-bit; the test reads it back through the graph.
+            let v = (t.as_f64() * 255.0).round() as u8;
             Ok((
                 self.w,
                 self.h,
-                vec![[v, 0.0, 0.0, 1.0]; (self.w * self.h) as usize],
+                (0..self.w * self.h).flat_map(|_| [v, 0, 0, 255]).collect(),
             ))
         }
     }
@@ -250,7 +251,7 @@ mod tests {
         assert_eq!(px.len(), 4);
         let p = px[0];
         assert!(
-            (p[0] - 0.25).abs() < 1e-6 && (p[2] - 0.5).abs() < 1e-6 && (p[3] - 1.0).abs() < 1e-6,
+            (p[0] - 0.25).abs() < 2e-3 && (p[2] - 0.5).abs() < 1e-6 && (p[3] - 1.0).abs() < 1e-6,
             "{p:?}"
         );
     }
@@ -259,7 +260,7 @@ mod tests {
     fn unreachable_nodes_are_not_evaluated() {
         struct Panics;
         impl FrameProvider for Panics {
-            fn frame(&mut self, _: MediaId, _: Rational) -> Result<(u32, u32, Vec<Rgba>)> {
+            fn frame(&mut self, _: MediaId, _: Rational) -> Result<(u32, u32, Vec<u8>)> {
                 panic!("should not be pulled")
             }
         }

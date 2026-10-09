@@ -19,6 +19,7 @@ const COLOR: &str = include_str!("../../../shaders/color.wgsl");
 const COLOR_TRANSFORM: &str = include_str!("../../../shaders/color_transform.wgsl");
 const LUT3D: &str = include_str!("../../../shaders/lut3d.wgsl");
 const GRADE: &str = include_str!("../../../shaders/grade.wgsl");
+const PREMULTIPLY: &str = include_str!("../../../shaders/premultiply.wgsl");
 
 #[derive(Clone)]
 pub struct GpuImage {
@@ -88,6 +89,7 @@ pub struct GpuBackend {
     color_transform: Pass,
     lut3d: Pass,
     grade: Pass,
+    premultiply: Pass,
 }
 
 impl GpuBackend {
@@ -164,6 +166,7 @@ impl GpuBackend {
             false,
             std::mem::size_of::<GradeParams>(),
         );
+        let premultiply = Self::pass(&device, "premultiply", "", PREMULTIPLY, 1, false, 16);
         Some(Self {
             device,
             queue,
@@ -173,6 +176,7 @@ impl GpuBackend {
             color_transform,
             lut3d,
             grade,
+            premultiply,
         })
     }
 
@@ -264,6 +268,16 @@ impl GpuBackend {
     }
 
     fn texture(&self, w: u32, h: u32, label: &str) -> wgpu::Texture {
+        self.texture_with(w, h, FORMAT, label)
+    }
+
+    fn texture_with(
+        &self,
+        w: u32,
+        h: u32,
+        format: wgpu::TextureFormat,
+        label: &str,
+    ) -> wgpu::Texture {
         self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
             size: wgpu::Extent3d {
@@ -274,7 +288,7 @@ impl GpuBackend {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: FORMAT,
+            format,
             usage: wgpu::TextureUsages::TEXTURE_BINDING
                 | wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::COPY_SRC
@@ -423,6 +437,38 @@ impl Backend for GpuBackend {
             w,
             h,
         }
+    }
+
+    /// Decoded video is uploaded as an 8-bit texture (a quarter of the bytes) and
+    /// premultiplied into the float format by one pass on the GPU.
+    fn upload_rgba8(&mut self, w: u32, h: u32, pixels: &[u8]) -> GpuImage {
+        assert_eq!(pixels.len(), (w * h * 4) as usize);
+        let texture = self.texture_with(w, h, wgpu::TextureFormat::Rgba8Unorm, "upload_rgba8");
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let raw = GpuImage {
+            texture: Arc::new(texture),
+            w,
+            h,
+        };
+        self.run(&self.premultiply, &[0u8; 16], &[&raw], w, h, "premultiply")
     }
 
     fn transform(&mut self, src: &GpuImage, xf: &Transform2D, w: u32, h: u32) -> GpuImage {
@@ -705,6 +751,21 @@ mod tests {
 
         let got = gpu.download(&ga);
         assert_eq!(max_diff(&got, &a), 0.0, "upload/download round trip");
+        let bytes: Vec<u8> = (0..w * h * 4).map(|i| (i * 37 % 256) as u8).collect();
+        let g8 = gpu.upload_rgba8(w, h, &bytes);
+        let c8 = cpu.upload_rgba8(w, h, &bytes);
+        let xf0 = Transform2D::IDENTITY;
+        let d = max_diff(
+            &{
+                let t = gpu.transform(&g8, &xf0, w, h);
+                gpu.download(&t)
+            },
+            &{
+                let t = cpu.transform(&c8, &xf0, w, h);
+                cpu.download(&t)
+            },
+        );
+        assert!(d < 1e-5, "rgba8 upload differs by {d}");
 
         for mode in [
             BlendMode::Normal,
