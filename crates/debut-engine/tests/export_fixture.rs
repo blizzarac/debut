@@ -80,6 +80,7 @@ fn exports_a_range_with_audio_and_video() {
             height: 36,
             frame_rate: FrameRate::FPS_25,
             crf: 20,
+            encoder: None,
             audio: Some(AudioEncodeSettings {
                 channels: 2,
                 sample_rate: 48_000,

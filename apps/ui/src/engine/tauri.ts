@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  CodecCapabilities,
   MulticamSync,
   SmartRule,
   CaptionSettings,
@@ -173,8 +174,11 @@ class TauriExport implements ExportApi {
   presets() {
     return invoke<ExportPreset[]>("export_presets");
   }
-  start(output: string, preset: string, normalize: number | null, captionSidecar = false) {
-    return invoke<number>("export_start", { output, preset, normalize, captionSidecar });
+  start(output: string, preset: string, normalize: number | null, captionSidecar = false, hardware = false) {
+    return invoke<number>("export_start", { output, preset, normalize, captionSidecar, hardware });
+  }
+  capabilities() {
+    return invoke<CodecCapabilities>("codec_capabilities");
   }
   status() {
     return invoke<ExportStatus[]>("export_status");

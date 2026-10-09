@@ -315,6 +315,119 @@ pub struct EncodeSettings {
     /// Constant rate factor for x264 (lower = better, 18–28 is typical).
     pub crf: u8,
     pub audio: Option<AudioEncodeSettings>,
+    /// A named encoder to prefer (e.g. `h264_nvenc`); `None` or an encoder
+    /// that cannot open falls back to software H.264 (NFR-09).
+    pub encoder: Option<String>,
+}
+
+/// A hardware encoder this machine can actually open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HwEncoder {
+    /// FFmpeg encoder name, e.g. `hevc_videotoolbox`.
+    pub name: String,
+    /// "h264" or "hevc".
+    pub codec: &'static str,
+    /// The acceleration API behind it.
+    pub api: &'static str,
+}
+
+/// Candidates by (name, codec, api). VAAPI needs hardware frame contexts and is
+/// left out until the encoder can upload them.
+const HW_ENCODERS: &[(&str, &str, &str)] = &[
+    ("h264_videotoolbox", "h264", "VideoToolbox"),
+    ("hevc_videotoolbox", "hevc", "VideoToolbox"),
+    ("h264_nvenc", "h264", "NVENC"),
+    ("hevc_nvenc", "hevc", "NVENC"),
+    ("h264_qsv", "h264", "Quick Sync"),
+    ("hevc_qsv", "hevc", "Quick Sync"),
+    ("h264_amf", "h264", "AMF"),
+    ("hevc_amf", "hevc", "AMF"),
+];
+
+/// Pixel format a named encoder takes from the scaler.
+fn input_format(encoder: &str) -> ff::format::Pixel {
+    if encoder.contains("qsv") || encoder.contains("amf") {
+        ff::format::Pixel::NV12
+    } else {
+        ff::format::Pixel::YUV420P
+    }
+}
+
+/// Try to open `name` on a tiny frame; true when the driver is really there,
+/// not just compiled in.
+fn probe_encoder(name: &str) -> bool {
+    let Some(codec) = ff::encoder::find_by_name(name) else {
+        return false;
+    };
+    let ctx = ff::codec::context::Context::new_with_codec(codec);
+    let Ok(mut enc) = ctx.encoder().video() else {
+        return false;
+    };
+    enc.set_width(128);
+    enc.set_height(128);
+    enc.set_format(input_format(name));
+    enc.set_time_base(ff::Rational::new(1, 25));
+    enc.set_frame_rate(Some(ff::Rational::new(25, 1)));
+    enc.open_with(ff::Dictionary::new()).is_ok()
+}
+
+/// Hardware encoders available on this machine, in preference order.
+pub fn hardware_encoders() -> Vec<HwEncoder> {
+    init();
+    HW_ENCODERS
+        .iter()
+        .filter(|(name, _, _)| probe_encoder(name))
+        .map(|(name, codec, api)| HwEncoder {
+            name: name.to_string(),
+            codec,
+            api,
+        })
+        .collect()
+}
+
+/// Hardware decoders compiled into this FFmpeg (by name; drivers are not probed).
+pub fn hardware_decoders() -> Vec<String> {
+    init();
+    [
+        "h264_cuvid",
+        "hevc_cuvid",
+        "h264_qsv",
+        "hevc_qsv",
+        "h264_videotoolbox",
+        "hevc_videotoolbox",
+    ]
+    .iter()
+    .filter(|n| ff::decoder::find_by_name(n).is_some())
+    .map(|n| n.to_string())
+    .collect()
+}
+
+/// Rate-control options for an encoder at a CRF-like `quality`.
+fn rate_options(
+    encoder: &str,
+    quality: u8,
+    width: u32,
+    height: u32,
+    fps: f64,
+) -> ff::Dictionary<'static> {
+    let mut opts = ff::Dictionary::new();
+    if encoder == "libx264" || encoder == "libx265" {
+        opts.set("preset", "medium");
+        opts.set("crf", &quality.to_string());
+    } else if encoder.contains("nvenc") {
+        opts.set("rc", "vbr");
+        opts.set("cq", &quality.to_string());
+        opts.set("preset", "p4");
+    } else if encoder.contains("qsv") {
+        opts.set("global_quality", &quality.to_string());
+    } else {
+        // VideoToolbox, AMF: no CRF; target a bitrate from quality
+        // (0.1 bit per pixel per frame at quality 23, halving every 6 steps).
+        let bpp = 0.1 * 2f64.powf((23.0 - quality as f64) / 6.0);
+        let bitrate = (bpp * width as f64 * height as f64 * fps) as i64;
+        opts.set("b", &bitrate.to_string());
+    }
+    opts
 }
 
 #[derive(Clone, Debug)]
@@ -349,6 +462,23 @@ pub struct FfmpegEncoder {
     video: VideoEnc,
     audio: Option<AudioEnc>,
     settings: EncodeSettings,
+    /// The encoder actually opened (requested one, or the software fallback).
+    encoder_name: String,
+}
+
+impl FfmpegEncoder {
+    pub fn encoder_name(&self) -> &str {
+        &self.encoder_name
+    }
+
+    /// True when a requested hardware encoder could not open and software
+    /// H.264 was used instead.
+    pub fn used_fallback(&self) -> bool {
+        self.settings
+            .encoder
+            .as_deref()
+            .is_some_and(|e| e != self.encoder_name)
+    }
 }
 
 unsafe impl Send for FfmpegEncoder {}
@@ -363,15 +493,31 @@ impl FfmpegEncoder {
             .contains(ff::format::Flags::GLOBAL_HEADER);
 
         let fr = settings.frame_rate.0;
-        let video = {
-            let codec = ff::encoder::find(ff::codec::Id::H264)
-                .ok_or_else(|| Error::Unsupported("no H.264 encoder".into()))?;
-            let mut stream = output.add_stream(codec).map_err(err)?;
+        // Requested hardware encoder first, software H.264 as the fallback
+        // (NFR-09): the first one that opens wins.
+        let software = ff::encoder::find(ff::codec::Id::H264)
+            .ok_or_else(|| Error::Unsupported("no H.264 encoder".into()))?;
+        let mut candidates: Vec<(String, ff::Codec)> = Vec::new();
+        if let Some(name) = &settings.encoder {
+            if let Some(codec) = ff::encoder::find_by_name(name) {
+                if probe_encoder(name) {
+                    candidates.push((name.clone(), codec));
+                }
+            }
+        }
+        candidates.push((software.name().to_string(), software));
+        let mut opened: Option<(String, ff::encoder::Video, ff::format::Pixel, ff::Rational)> =
+            None;
+        let mut last_err = None;
+        for (name, codec) in candidates {
             let ctx = ff::codec::context::Context::new_with_codec(codec);
-            let mut enc = ctx.encoder().video().map_err(err)?;
+            let Ok(mut enc) = ctx.encoder().video() else {
+                continue;
+            };
+            let format = input_format(&name);
             enc.set_width(settings.width);
             enc.set_height(settings.height);
-            enc.set_format(ff::format::Pixel::YUV420P);
+            enc.set_format(format);
             let time_base = ff::Rational::new(fr.den as i32, fr.num as i32);
             enc.set_time_base(time_base);
             enc.set_frame_rate(Some(ff::Rational::new(fr.num as i32, fr.den as i32)));
@@ -379,10 +525,28 @@ impl FfmpegEncoder {
             if global_header {
                 enc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
             }
-            let mut opts = ff::Dictionary::new();
-            opts.set("preset", "medium");
-            opts.set("crf", &settings.crf.to_string());
-            let encoder = enc.open_with(opts).map_err(err)?;
+            let opts = rate_options(
+                &name,
+                settings.crf,
+                settings.width,
+                settings.height,
+                fr.as_f64(),
+            );
+            match enc.open_with(opts) {
+                Ok(e) => {
+                    opened = Some((name, e, format, time_base));
+                    break;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        let (encoder_name, encoder, format, time_base) = opened.ok_or_else(|| {
+            err(last_err.map_or("no encoder could open".to_string(), |e| e.to_string()))
+        })?;
+        let video = {
+            let mut stream = output
+                .add_stream(ff::encoder::find_by_name(&encoder_name).unwrap_or(software))
+                .map_err(err)?;
             stream.set_parameters(&encoder);
             stream.set_time_base(time_base);
             stream.set_rate(ff::Rational::new(fr.num as i32, fr.den as i32));
@@ -391,7 +555,7 @@ impl FfmpegEncoder {
                 ff::format::Pixel::RGBA,
                 settings.width,
                 settings.height,
-                ff::format::Pixel::YUV420P,
+                format,
                 settings.width,
                 settings.height,
                 ff::software::scaling::Flags::BILINEAR,
@@ -456,6 +620,7 @@ impl FfmpegEncoder {
             video,
             audio,
             settings,
+            encoder_name,
         })
     }
 
@@ -655,6 +820,7 @@ mod tests {
                 sample_rate: 48_000,
                 bitrate: 64_000,
             }),
+            encoder: None,
         };
         let mut enc = Box::new(FfmpegEncoder::create(&path, settings).unwrap());
         // 30 frames: left half red, right half ramps from black to white.
@@ -736,5 +902,36 @@ mod tests {
         );
         assert!(peak > 0.3, "peak {peak}");
         std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn hardware_encoder_detection_and_software_fallback() {
+        // Whatever this machine has, the probe must not panic and every entry
+        // must name a known codec family.
+        for hw in hardware_encoders() {
+            assert!(hw.codec == "h264" || hw.codec == "hevc", "{hw:?}");
+            assert!(hw.name.contains(hw.codec));
+        }
+        let _ = hardware_decoders();
+        // Asking for an encoder that is not usable here lands on software H.264.
+        let dir = std::env::temp_dir().join(format!("debut-hw-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("fallback.mp4");
+        let enc = FfmpegEncoder::create(
+            &path,
+            EncodeSettings {
+                width: 64,
+                height: 36,
+                frame_rate: FrameRate::FPS_25,
+                crf: 23,
+                audio: None,
+                encoder: Some("h264_definitely_not_an_encoder".into()),
+            },
+        )
+        .unwrap();
+        assert!(enc.used_fallback());
+        assert_eq!(enc.encoder_name(), "libx264");
+        drop(enc);
+        std::fs::remove_dir_all(dir).ok();
     }
 }

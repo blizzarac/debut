@@ -54,7 +54,13 @@ pub struct Session {
     export_specs_shared: Option<Arc<Mutex<std::collections::HashMap<JobId, ExportSpec>>>>,
 }
 
-type ExportSpec = (Preset, Option<f32>, Vec<(MediaId, String)>, Vec<Sequence>);
+type ExportSpec = (
+    Preset,
+    Option<f32>,
+    Vec<(MediaId, String)>,
+    Vec<Sequence>,
+    Option<String>,
+);
 
 impl Default for Session {
     fn default() -> Self {
@@ -2000,17 +2006,48 @@ impl Session {
     }
 
     /// Queue an export of the whole sequence and make sure a worker is running.
+    /// What this machine can accelerate (NFR-09): hardware encoders that
+    /// really open, and hardware decoders compiled into FFmpeg.
+    pub fn codec_capabilities(&self) -> CodecCapabilitiesDto {
+        CodecCapabilitiesDto {
+            hardware_encoders: debut_platform_native::codec::hardware_encoders()
+                .into_iter()
+                .map(|e| HwEncoderDto {
+                    name: e.name,
+                    codec: e.codec.to_string(),
+                    api: e.api.to_string(),
+                })
+                .collect(),
+            hardware_decoders: debut_platform_native::codec::hardware_decoders(),
+        }
+    }
+
     pub fn export_start(
         &mut self,
         output: String,
         preset: &str,
         normalize: Option<f32>,
         caption_sidecar: bool,
+        hardware: bool,
     ) -> Result<u64, String> {
         let preset = Preset::all()
             .into_iter()
             .find(|p| p.name == preset)
             .ok_or_else(|| format!("unknown preset {preset}"))?;
+        // Pick a hardware encoder for the preset's codec family when asked and
+        // one is available; the encoder falls back to software if it cannot open.
+        let encoder: Option<String> = if hardware {
+            let family = match preset.codec {
+                debut_export::VideoCodec::Hevc => "hevc",
+                _ => "h264",
+            };
+            debut_platform_native::codec::hardware_encoders()
+                .into_iter()
+                .find(|e| e.codec == family)
+                .map(|e| e.name)
+        } else {
+            None
+        };
         let seq = self.first_sequence()?.clone();
         if seq.duration() <= Rational::ZERO {
             return Err("the sequence is empty".into());
@@ -2038,12 +2075,20 @@ impl Session {
             .exports
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .submit(preset.name.clone(), job, output, 0);
+            .submit(
+                match &encoder {
+                    Some(e) => format!("{} · {e}", preset.name),
+                    None => preset.name.clone(),
+                },
+                job,
+                output,
+                0,
+            );
         let sequences = self
             .project()
             .map(|p| p.sequences.clone())
             .unwrap_or_default();
-        let spec = (preset, normalize, media, sequences);
+        let spec = (preset, normalize, media, sequences, encoder);
         if self
             .export_worker
             .load(std::sync::atomic::Ordering::Acquire)
@@ -2083,7 +2128,7 @@ impl Session {
                     };
                     let spec = specs.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
                     let result = (|| -> Result<debut_export::Progress, String> {
-                        let (preset, normalize, media, sequences) =
+                        let (preset, normalize, media, sequences, encoder) =
                             spec.ok_or("missing export spec")?;
                         let mut frames = debut_engine::FrameSource::new(4);
                         let mut samples = debut_engine::SampleCache::new(48_000);
@@ -2127,9 +2172,18 @@ impl Session {
                                     sample_rate: 48_000,
                                     bitrate: preset.audio_bitrate.max(96_000),
                                 }),
+                                encoder,
                             },
                         )
                         .map_err(|e| e.to_string())?;
+                        if encoder.used_fallback() {
+                            queue
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .rename(id, |n| {
+                                    format!("{n} · fell back to {}", encoder.encoder_name())
+                                });
+                        }
                         let mut backend = AnyBackend::detect();
                         let q = Arc::clone(&queue);
                         let progress = match &mut backend {
@@ -2236,8 +2290,33 @@ pub fn export_start(
     preset: String,
     normalize: Option<f32>,
     caption_sidecar: Option<bool>,
+    hardware: Option<bool>,
 ) -> Result<u64, String> {
-    lock(&state).export_start(output, &preset, normalize, caption_sidecar.unwrap_or(false))
+    lock(&state).export_start(
+        output,
+        &preset,
+        normalize,
+        caption_sidecar.unwrap_or(false),
+        hardware.unwrap_or(false),
+    )
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct HwEncoderDto {
+    pub name: String,
+    pub codec: String,
+    pub api: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct CodecCapabilitiesDto {
+    pub hardware_encoders: Vec<HwEncoderDto>,
+    pub hardware_decoders: Vec<String>,
+}
+
+#[tauri::command]
+pub fn codec_capabilities(state: State<'_, Shared>) -> CodecCapabilitiesDto {
+    lock(&state).codec_capabilities()
 }
 
 #[tauri::command]
@@ -3892,8 +3971,13 @@ mod tests {
         let out = dir.join("out.mp4").to_string_lossy().into_owned();
         s.add_caption(0.6, 1.6, "Bye".into()).unwrap();
         let job_id = s
-            .export_start(out.clone(), "YouTube 1080p", Some(-14.0), true)
+            .export_start(out.clone(), "YouTube 1080p", Some(-14.0), true, true)
             .unwrap();
+        let caps = s.codec_capabilities();
+        assert!(caps
+            .hardware_encoders
+            .iter()
+            .all(|e| e.codec == "h264" || e.codec == "hevc"));
         let sidecar = std::fs::read_to_string(dir.join("out.srt")).unwrap();
         assert!(
             sidecar.contains("00:00:00,600 --> 00:00:01,600\nBye"),

@@ -59,6 +59,7 @@ pub fn run() {
             ipc::add_insert,
             ipc::remove_insert,
             ipc::export_presets,
+            ipc::codec_capabilities,
             ipc::export_start,
             ipc::export_status,
             ipc::export_pause,

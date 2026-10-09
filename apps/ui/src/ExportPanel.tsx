@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { ExportApi, ExportPreset, ExportStatus } from "./engine";
+import type { CodecCapabilities, ExportApi, ExportPreset, ExportStatus } from "./engine";
 
 /** Queue exports with a delivery preset and optional loudness normalization; shows
  * progress, integrated LUFS and true peak per job (EXP-02, EXP-03, AUD-06). */
@@ -9,6 +9,8 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
   const [output, setOutput] = useState("");
   const [normalize, setNormalize] = useState(true);
   const [sidecar, setSidecar] = useState(true);
+  const [hardware, setHardware] = useState(true);
+  const [caps, setCaps] = useState<CodecCapabilities | null>(null);
   const [jobs, setJobs] = useState<ExportStatus[]>([]);
   const [error, setError] = useState("");
 
@@ -24,12 +26,17 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
     return () => clearInterval(id);
   }, [exporter]);
 
+  useEffect(() => {
+    exporter.capabilities?.().then(setCaps).catch(() => setCaps(null));
+  }, [exporter]);
+
   const target = presets.find((p) => p.name === preset)?.loudness_lufs ?? -14;
+  const hwCount = caps?.hardware_encoders.length ?? 0;
 
   async function start() {
     setError("");
     try {
-      await exporter.start(output, preset, normalize ? target : null, sidecar);
+      await exporter.start(output, preset, normalize ? target : null, sidecar, hardware && hwCount > 0);
     } catch (e) {
       setError(String(e));
     }
@@ -47,6 +54,9 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
         </select>
         <label>
           <input type="checkbox" checked={normalize} onChange={(e) => setNormalize(e.target.checked)} /> normalize to {target} LUFS
+        </label>
+        <label title={hwCount ? `Use ${caps!.hardware_encoders.map((e) => `${e.name} (${e.api})`).join(", ")}; falls back to software if it cannot open` : "No hardware encoder opens on this machine; software H.264 is used"}>
+          <input type="checkbox" checked={hardware && hwCount > 0} disabled={hwCount === 0} onChange={(e) => setHardware(e.target.checked)} /> hardware encoder{hwCount ? ` (${hwCount})` : " (none)"}
         </label>
         <label title="Also write the captions as an .srt next to the movie">
           <input type="checkbox" checked={sidecar} onChange={(e) => setSidecar(e.target.checked)} /> .srt sidecar

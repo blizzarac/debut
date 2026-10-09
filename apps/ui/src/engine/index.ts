@@ -144,6 +144,11 @@ export interface ExportPreset {
   loudness_lufs: number;
 }
 
+export interface CodecCapabilities {
+  hardware_encoders: { name: string; codec: string; api: string }[];
+  hardware_decoders: string[];
+}
+
 export interface ExportStatus {
   id: number;
   name: string;
@@ -159,7 +164,9 @@ export interface ExportStatus {
 export interface ExportApi {
   presets(): Promise<ExportPreset[]>;
   /** Queue an export of the whole sequence; `normalize` is a LUFS target or null. */
-  start(output: string, preset: string, normalize: number | null, captionSidecar?: boolean): Promise<number>;
+  start(output: string, preset: string, normalize: number | null, captionSidecar?: boolean, hardware?: boolean): Promise<number>;
+  /** Hardware encoders that open on this machine and hardware decoders compiled in. */
+  capabilities?(): Promise<CodecCapabilities>;
   status(): Promise<ExportStatus[]>;
   pause(id: number): Promise<void>;
   resume(id: number): Promise<void>;

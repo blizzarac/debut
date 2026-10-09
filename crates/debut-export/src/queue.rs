@@ -61,6 +61,13 @@ impl ExportQueue {
         id
     }
 
+    /// Change a job's display name (e.g. to note an encoder fallback).
+    pub fn rename(&mut self, id: JobId, f: impl FnOnce(&str) -> String) {
+        if let Some(e) = self.entries.iter_mut().find(|e| e.id == id) {
+            e.name = f(&e.name);
+        }
+    }
+
     pub fn entries(&self) -> impl Iterator<Item = &Entry> {
         self.entries.iter()
     }
