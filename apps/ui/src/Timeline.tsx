@@ -22,6 +22,7 @@ export function Timeline({
   onSelect,
   onEdited,
   markers = [],
+  onOpenNested,
 }: {
   seq: SequenceInfo;
   position: number;
@@ -31,6 +32,8 @@ export function Timeline({
   onSelect: (s: Selection) => void;
   onEdited: () => void;
   markers?: MarkerInfo[];
+  /** Double-click on a compound clip opens its nested sequence. */
+  onOpenNested?: (sequence: string) => void;
 }) {
   const [pxPerSec, setPxPerSec] = useState(120);
   const setSelected = onSelect;
@@ -184,7 +187,7 @@ export function Timeline({
                   };
                   return (
                     <g key={clip.id}>
-                      <rect x={x} y={y + 4} width={w} height={TRACK_H - 8} rx={3} fill={color} stroke={sel ? "#111" : "none"} onMouseDown={start("body")} style={{ cursor: "grab" }} />
+                      <rect x={x} y={y + 4} width={w} height={TRACK_H - 8} rx={3} fill={color} stroke={sel ? "#111" : "none"} onMouseDown={start("body")} onDoubleClick={() => clip.nested && onOpenNested?.(clip.nested)} style={{ cursor: "grab" }} />
                       <rect x={x} y={y + 4} width={EDGE} height={TRACK_H - 8} fill="rgba(0,0,0,0.15)" onMouseDown={start("head")} style={{ cursor: "ew-resize" }} />
                       <rect x={x + w - EDGE} y={y + 4} width={EDGE} height={TRACK_H - 8} fill="rgba(0,0,0,0.15)" onMouseDown={start("tail")} style={{ cursor: "ew-resize" }} />
                       {clip.transition_in && (

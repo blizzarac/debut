@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { detectTarget, loadEngine, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
+import { detectTarget, loadEngine, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type Tick } from "./engine";
 import { Captions } from "./Captions";
 import { ExportPanel } from "./ExportPanel";
 import { Inspector, TitleEditor } from "./Inspector";
@@ -24,10 +24,14 @@ export default function App() {
   const [file, setFile] = useState<FileStatus | null>(null);
   const [markerList, setMarkerList] = useState<MarkerInfo[]>([]);
   const [captionList, setCaptionList] = useState<CaptionInfo[]>([]);
+  const [sequences, setSequences] = useState<SequenceListItem[]>([]);
   const [filePath, setFilePath] = useState("");
 
   const refresh = useCallback(async (e: Engine) => {
-    if (e.media) setSeq(await e.media.sequence().catch(() => null));
+    if (e.media) {
+      setSeq(await e.media.sequence().catch(() => null));
+      setSequences(await e.media.sequences().catch(() => []));
+    }
     if (e.fileStatus) setFile(await e.fileStatus().catch(() => null));
     if (e.markers) setMarkerList(await e.markers.list().catch(() => []));
     if (e.captions) setCaptionList(await e.captions.list().catch(() => []));
@@ -75,6 +79,17 @@ export default function App() {
     },
     [engine, refresh],
   );
+
+  async function openSequence(id: string) {
+    if (!engine?.media) return;
+    try {
+      await engine.media.openSequence(id);
+      setSelected(null);
+      await refresh(engine);
+    } catch (err) {
+      setStatus(`open failed: ${err}`);
+    }
+  }
 
   async function addMulticam() {
     if (!engine?.media || mediaList.length < 2) return;
@@ -237,6 +252,17 @@ export default function App() {
           </>
         ) : null}
         {engine?.media && engine.player && seq ? (
+          <>
+          {sequences.length > 1 && (
+            <div style={{ display: "flex", gap: 4, alignItems: "center", fontSize: 12, padding: "4px 0" }}>
+              <span style={{ color: "#666" }}>sequence</span>
+              {sequences.map((s) => (
+                <button key={s.id} disabled={s.active} onClick={() => openSequence(s.id)} title={`${s.duration.toFixed(2)} s`} style={{ fontWeight: s.active ? 600 : 400 }}>
+                  {s.name}
+                </button>
+              ))}
+            </div>
+          )}
           <Timeline
             seq={seq}
             position={tick?.position ?? 0}
@@ -245,8 +271,10 @@ export default function App() {
             selected={selected}
             onSelect={setSelected}
             onEdited={() => refresh(engine)}
+            onOpenNested={openSequence}
             markers={markerList}
           />
+          </>
         ) : null}
       </section>
     </main>

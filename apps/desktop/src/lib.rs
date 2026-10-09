@@ -29,6 +29,8 @@ pub fn run() {
             ipc::import_media,
             ipc::ensure_sequence,
             ipc::sequence,
+            ipc::sequences,
+            ipc::open_sequence,
             ipc::add_clip,
             ipc::add_title,
             ipc::add_multicam,

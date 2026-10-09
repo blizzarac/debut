@@ -126,6 +126,13 @@ export interface ExportApi {
   cancel(id: number): Promise<void>;
 }
 
+export interface SequenceListItem {
+  id: string;
+  name: string;
+  duration: number;
+  active: boolean;
+}
+
 export interface SequenceInfo {
   id: string;
   name: string;
@@ -259,6 +266,10 @@ export interface MediaApi {
   importMedia(path: string): Promise<MediaInfo>;
   ensureSequence(): Promise<SequenceInfo>;
   sequence(): Promise<SequenceInfo>;
+  /** Every sequence in the project; one is active (shown in the timeline). */
+  sequences(): Promise<SequenceListItem[]>;
+  /** Show a sequence (a nested one, or the main one again) in the timeline. */
+  openSequence(id: string): Promise<SequenceInfo>;
   addClip(track: string, media: string, at: number): Promise<void>;
   /** Adds a 5 s title at `at` on a free video track (adds a track if needed); returns the clip id. */
   addTitle(at: number, text: string): Promise<string>;

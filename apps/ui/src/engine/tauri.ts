@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  SequenceListItem,
   CaptionInfo,
   CaptionEdit,
   CaptionsApi,
@@ -41,6 +42,12 @@ class TauriMedia implements MediaApi {
   }
   sequence() {
     return invoke<SequenceInfo>("sequence");
+  }
+  sequences() {
+    return invoke<SequenceListItem[]>("sequences");
+  }
+  openSequence(id: string) {
+    return invoke<SequenceInfo>("open_sequence", { id });
   }
   addClip(track: string, media: string, at: number) {
     return invoke<void>("add_clip", { track, media, at });

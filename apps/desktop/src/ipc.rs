@@ -4,7 +4,7 @@
 use debut_audio::normalize_gain;
 use debut_command::{Command, MarkerTarget, Target};
 use debut_core::id::{CaptionId, MarkerId};
-use debut_core::{ClipId, FrameRate, IdGen, MediaId, Rational, TrackId};
+use debut_core::{ClipId, FrameRate, IdGen, MediaId, Rational, SequenceId, TrackId};
 use debut_engine::{Player, Stats, Workspace};
 use debut_export::{export, measure_loudness, ExportJob, ExportQueue, JobId, JobState, Preset};
 use debut_platform::audio_out::AudioOut;
@@ -33,6 +33,9 @@ pub struct Session {
     /// Commands replayed from the journal when the current file was opened.
     recovered: usize,
     ids: IdGen,
+    /// The sequence shown in the timeline (TL-07): a nested one while it is
+    /// opened for editing, else the project's first.
+    active: Option<SequenceId>,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -64,6 +67,7 @@ impl Session {
             store: Arc::new(NativeFileStore::new("/")),
             recovered: 0,
             ids: IdGen::random(),
+            active: None,
             player: None,
             audio_out: None,
             backend: AnyBackend::detect(),
@@ -123,6 +127,7 @@ impl Session {
         );
         self.recovered = 0;
         self.player = None;
+        self.active = None;
         self.sync_player()
     }
 
@@ -141,6 +146,7 @@ impl Session {
         self.workspace = Some(ws);
         self.recovered = opened.recovered;
         self.player = None;
+        self.active = None;
         self.probed.clear();
         // Re-probe media so sequences and clip insertion keep working.
         let media: Vec<(MediaId, String)> = self
@@ -176,16 +182,52 @@ impl Session {
         self.sync_player()
     }
 
+    /// The sequence being edited: the opened nested sequence when one is
+    /// active (and still exists), else the project's first.
     fn first_sequence(&self) -> Result<&Sequence, String> {
-        self.project()
-            .and_then(|p| p.sequences.first())
+        let p = self.project().ok_or("no project open")?;
+        self.active
+            .and_then(|id| p.sequence(id))
+            .or_else(|| p.sequences.first())
             .ok_or_else(|| "no sequence".to_string())
+    }
+
+    /// Every sequence in the project, for the breadcrumb / switcher.
+    pub fn sequences(&self) -> Result<Vec<SequenceListDto>, String> {
+        let active = self.first_sequence()?.id;
+        Ok(self
+            .project()
+            .map(|p| {
+                p.sequences
+                    .iter()
+                    .map(|s| SequenceListDto {
+                        id: id_str(s.id.0),
+                        name: s.name.clone(),
+                        duration: secs(s.duration()),
+                        active: s.id == active,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    /// Show `id` in the timeline (a nested sequence, or back to the main one).
+    /// The player is rebuilt for it; the transport starts at 0.
+    pub fn open_sequence(&mut self, id: &str) -> Result<SequenceDto, String> {
+        let id = SequenceId(parse_id(id)?);
+        if self.project().and_then(|p| p.sequence(id)).is_none() {
+            return Err("no such sequence".into());
+        }
+        self.active = Some(id);
+        self.player = None;
+        self.sync_player()?;
+        Ok(sequence_dto(self.first_sequence()?))
     }
 
     /// Rebuild the player's view of the sequence after an edit, keeping transport
     /// state; create it on first use.
     fn sync_player(&mut self) -> Result<(), String> {
-        let Some(seq) = self.project().and_then(|p| p.sequences.first()).cloned() else {
+        let Some(seq) = self.first_sequence().ok().cloned() else {
             self.player = None;
             return Ok(());
         };
@@ -449,6 +491,14 @@ pub struct ClipDto {
 }
 
 #[derive(Serialize)]
+pub struct SequenceListDto {
+    pub id: String,
+    pub name: String,
+    pub duration: f64,
+    pub active: bool,
+}
+
+#[derive(Serialize)]
 pub struct TrackDto {
     pub id: String,
     pub kind: String,
@@ -498,7 +548,7 @@ fn sequence_dto(seq: &Sequence) -> SequenceDto {
                             _ => None,
                         },
                         nested: match &c.source {
-                            ClipSource::Sequence(_) => Some("nested".to_string()),
+                            ClipSource::Sequence(id) => Some(id_str(id.0)),
                             _ => None,
                         },
                         angles: match &c.source {
@@ -1998,6 +2048,16 @@ pub fn ensure_sequence(state: State<'_, Shared>) -> Result<SequenceDto, String> 
 }
 
 #[tauri::command]
+pub fn sequences(state: State<'_, Shared>) -> Result<Vec<SequenceListDto>, String> {
+    lock(&state).sequences()
+}
+
+#[tauri::command]
+pub fn open_sequence(state: State<'_, Shared>, id: String) -> Result<SequenceDto, String> {
+    lock(&state).open_sequence(&id)
+}
+
+#[tauri::command]
 pub fn sequence(state: State<'_, Shared>) -> Result<SequenceDto, String> {
     let s = lock(&state);
     Ok(sequence_dto(s.first_sequence()?))
@@ -2592,14 +2652,41 @@ mod tests {
             "nesting must not change the picture ({worst}/255)"
         );
         assert_eq!(dto.duration, 2.4);
+        // Open the nested sequence in the timeline: its material starts at 0 and
+        // renders; the list marks it active; opening the main one goes back.
+        let list = s.sequences().unwrap();
+        assert_eq!(list.len(), 2);
+        let main_id = list.iter().find(|x| x.active).unwrap().id.clone();
+        let nested_id = v1[1].nested.clone().unwrap();
+        let inner = s.open_sequence(&nested_id).unwrap();
+        assert_eq!(
+            (inner.id.as_str(), inner.duration),
+            (nested_id.as_str(), 1.0)
+        );
+        assert_eq!(inner.tracks[0].clips[0].timeline_in, 0.0);
+        assert!(s
+            .sequences()
+            .unwrap()
+            .iter()
+            .any(|x| x.active && x.id == nested_id));
+        s.transport(TransportAction::Seek { t: 0.4 }).unwrap();
+        let (_, _, inner_px) = s.frame_pixels().unwrap();
+        assert!(sum(&inner_px) > 0);
+        assert!(s.open_sequence("nope").is_err());
+        s.open_sequence(&main_id).unwrap();
+        assert_eq!(sequence_dto(s.first_sequence().unwrap()).id, main_id);
+        // Undoing the nest while the nested sequence is open falls back to main.
+        s.open_sequence(&nested_id).unwrap();
         s.workspace_mut().unwrap().undo().unwrap();
         s.sync_player().unwrap();
+        assert_eq!(sequence_dto(s.first_sequence().unwrap()).id, main_id);
         assert_eq!(
             sequence_dto(s.first_sequence().unwrap()).tracks[0]
                 .clips
                 .len(),
             1
         );
+        s.active = None;
         assert_eq!(s.project().unwrap().sequences.len(), seqs_before);
 
         // Transition: blade V1 at 1.0 s, dissolve 0.4 s into the second piece (its head
