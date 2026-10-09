@@ -1,0 +1,532 @@
+//! wgpu backend: the same ops as [`crate::CpuBackend`], executed as render passes
+//! with the WGSL in `/shaders`. Runs on Metal, Vulkan, DX12 natively and WebGPU in
+//! the browser (NFR-09, PLT-04). Images are `Rgba32Float` textures; bilinear
+//! sampling is done in the shader so results match the CPU reference bit for bit
+//! up to float rounding.
+
+use crate::backend::{Backend, BlendMode, Rgba, Transform2D};
+use bytemuck::{Pod, Zeroable};
+use std::sync::Arc;
+
+const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
+const COMMON: &str = include_str!("../../../shaders/common.wgsl");
+const TRANSFORM: &str = include_str!("../../../shaders/transform.wgsl");
+const BLEND: &str = include_str!("../../../shaders/blend.wgsl");
+const DISSOLVE: &str = include_str!("../../../shaders/dissolve.wgsl");
+
+#[derive(Clone)]
+pub struct GpuImage {
+    texture: Arc<wgpu::Texture>,
+    w: u32,
+    h: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct TransformParams {
+    m: [f32; 4],
+    t: [f32; 2],
+    _pad: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct BlendParams {
+    mode: u32,
+    opacity: f32,
+    _pad: [f32; 2],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct DissolveParams {
+    progress: f32,
+    _pad: [f32; 3],
+}
+
+struct Pass {
+    pipeline: wgpu::RenderPipeline,
+    layout: wgpu::BindGroupLayout,
+}
+
+pub struct GpuBackend {
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    transform: Pass,
+    blend: Pass,
+    dissolve: Pass,
+}
+
+impl GpuBackend {
+    /// Pick any adapter (software ones included) and build the pipelines.
+    /// `None` when the platform has no usable GPU API at all.
+    pub fn new() -> Option<Self> {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor::default());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok()?;
+        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+            label: Some("debut-render"),
+            required_features: wgpu::Features::empty(),
+            required_limits: wgpu::Limits::downlevel_defaults().using_resolution(adapter.limits()),
+            memory_hints: wgpu::MemoryHints::Performance,
+            trace: wgpu::Trace::Off,
+            experimental_features: wgpu::ExperimentalFeatures::disabled(),
+        }))
+        .ok()?;
+        let transform = Self::pass(
+            &device,
+            "transform",
+            TRANSFORM,
+            1,
+            std::mem::size_of::<TransformParams>(),
+        );
+        let blend = Self::pass(
+            &device,
+            "blend",
+            BLEND,
+            2,
+            std::mem::size_of::<BlendParams>(),
+        );
+        let dissolve = Self::pass(
+            &device,
+            "dissolve",
+            DISSOLVE,
+            2,
+            std::mem::size_of::<DissolveParams>(),
+        );
+        Some(Self {
+            device,
+            queue,
+            transform,
+            blend,
+            dissolve,
+        })
+    }
+
+    fn pass(
+        device: &wgpu::Device,
+        name: &str,
+        fs: &str,
+        textures: u32,
+        uniform_size: usize,
+    ) -> Pass {
+        let source = format!("{COMMON}\n{fs}");
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some(name),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
+        });
+        let mut entries = vec![wgpu::BindGroupLayoutEntry {
+            binding: 0,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(uniform_size as u64),
+            },
+            count: None,
+        }];
+        for i in 0..textures {
+            entries.push(wgpu::BindGroupLayoutEntry {
+                binding: 1 + i,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            });
+        }
+        let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some(name),
+            entries: &entries,
+        });
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some(name),
+            bind_group_layouts: &[&layout],
+            push_constant_ranges: &[],
+        });
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some(name),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs_main"),
+                compilation_options: Default::default(),
+                buffers: &[],
+            },
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs_main"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: FORMAT,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview: None,
+            cache: None,
+        });
+        Pass { pipeline, layout }
+    }
+
+    fn texture(&self, w: u32, h: u32, label: &str) -> wgpu::Texture {
+        self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: FORMAT,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        })
+    }
+
+    /// Run one full-screen pass into a new `w x h` image.
+    fn run(
+        &self,
+        pass: &Pass,
+        uniforms: &[u8],
+        inputs: &[&GpuImage],
+        w: u32,
+        h: u32,
+        label: &str,
+    ) -> GpuImage {
+        let out = self.texture(w, h, label);
+        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some(label),
+            size: uniforms.len() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        self.queue.write_buffer(&uniform, 0, uniforms);
+        let views: Vec<wgpu::TextureView> = inputs
+            .iter()
+            .map(|i| {
+                i.texture
+                    .create_view(&wgpu::TextureViewDescriptor::default())
+            })
+            .collect();
+        let mut entries = vec![wgpu::BindGroupEntry {
+            binding: 0,
+            resource: uniform.as_entire_binding(),
+        }];
+        for (i, v) in views.iter().enumerate() {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 1 + i as u32,
+                resource: wgpu::BindingResource::TextureView(v),
+            });
+        }
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some(label),
+            layout: &pass.layout,
+            entries: &entries,
+        });
+        let out_view = out.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
+        {
+            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some(label),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &out_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rp.set_pipeline(&pass.pipeline);
+            rp.set_bind_group(0, &bind_group, &[]);
+            rp.draw(0..3, 0..1);
+        }
+        self.queue.submit(Some(encoder.finish()));
+        GpuImage {
+            texture: Arc::new(out),
+            w,
+            h,
+        }
+    }
+}
+
+const BYTES_PER_PIXEL: u32 = 16;
+
+fn padded_bytes_per_row(w: u32) -> u32 {
+    let unpadded = w * BYTES_PER_PIXEL;
+    let align = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    unpadded.div_ceil(align) * align
+}
+
+impl Backend for GpuBackend {
+    type Image = GpuImage;
+
+    fn size(&self, img: &GpuImage) -> (u32, u32) {
+        (img.w, img.h)
+    }
+
+    fn solid(&mut self, w: u32, h: u32, color: Rgba) -> GpuImage {
+        let px = vec![color; (w * h) as usize];
+        self.upload(w, h, &px)
+    }
+
+    fn upload(&mut self, w: u32, h: u32, pixels: &[Rgba]) -> GpuImage {
+        assert_eq!(pixels.len(), (w * h) as usize);
+        let texture = self.texture(w, h, "upload");
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(pixels),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * BYTES_PER_PIXEL),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        GpuImage {
+            texture: Arc::new(texture),
+            w,
+            h,
+        }
+    }
+
+    fn transform(&mut self, src: &GpuImage, xf: &Transform2D, w: u32, h: u32) -> GpuImage {
+        let p = TransformParams {
+            m: [xf.m[0][0], xf.m[0][1], xf.m[1][0], xf.m[1][1]],
+            t: xf.t,
+            _pad: [0.0; 2],
+        };
+        self.run(
+            &self.transform,
+            bytemuck::bytes_of(&p),
+            &[src],
+            w,
+            h,
+            "transform",
+        )
+    }
+
+    fn blend(
+        &mut self,
+        bottom: &GpuImage,
+        top: &GpuImage,
+        mode: BlendMode,
+        opacity: f32,
+    ) -> GpuImage {
+        assert_eq!(
+            (bottom.w, bottom.h),
+            (top.w, top.h),
+            "blend inputs must match"
+        );
+        let mode = match mode {
+            BlendMode::Normal => 0,
+            BlendMode::Add => 1,
+            BlendMode::Multiply => 2,
+            BlendMode::Screen => 3,
+        };
+        let p = BlendParams {
+            mode,
+            opacity,
+            _pad: [0.0; 2],
+        };
+        self.run(
+            &self.blend,
+            bytemuck::bytes_of(&p),
+            &[bottom, top],
+            bottom.w,
+            bottom.h,
+            "blend",
+        )
+    }
+
+    fn dissolve(&mut self, a: &GpuImage, b: &GpuImage, progress: f32) -> GpuImage {
+        assert_eq!((a.w, a.h), (b.w, b.h), "dissolve inputs must match");
+        let p = DissolveParams {
+            progress: progress.clamp(0.0, 1.0),
+            _pad: [0.0; 3],
+        };
+        self.run(
+            &self.dissolve,
+            bytemuck::bytes_of(&p),
+            &[a, b],
+            a.w,
+            a.h,
+            "dissolve",
+        )
+    }
+
+    fn download(&mut self, img: &GpuImage) -> Vec<Rgba> {
+        let bpr = padded_bytes_per_row(img.w);
+        let buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("download"),
+            size: (bpr * img.h) as u64,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("download"),
+            });
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &img.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bpr),
+                    rows_per_image: Some(img.h),
+                },
+            },
+            wgpu::Extent3d {
+                width: img.w,
+                height: img.h,
+                depth_or_array_layers: 1,
+            },
+        );
+        self.queue.submit(Some(encoder.finish()));
+        let slice = buffer.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .expect("device poll");
+        rx.recv().expect("map callback").expect("map read");
+        let data = slice.get_mapped_range();
+        let mut out = Vec::with_capacity((img.w * img.h) as usize);
+        for row in 0..img.h {
+            let start = (row * bpr) as usize;
+            let end = start + (img.w * BYTES_PER_PIXEL) as usize;
+            out.extend_from_slice(bytemuck::cast_slice::<u8, Rgba>(&data[start..end]));
+        }
+        drop(data);
+        buffer.unmap();
+        out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::CpuBackend;
+
+    fn gpu() -> Option<GpuBackend> {
+        let g = GpuBackend::new();
+        if g.is_none() {
+            eprintln!("no GPU adapter available; skipping conformance test");
+        }
+        g
+    }
+
+    /// Deterministic pseudo-random image with partial alpha.
+    fn noise(w: u32, h: u32, seed: u32) -> Vec<Rgba> {
+        let mut s = seed.wrapping_mul(2654435761) | 1;
+        let mut next = move || {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            (s % 1000) as f32 / 1000.0
+        };
+        (0..w * h)
+            .map(|_| {
+                let a = next();
+                [next() * a, next() * a, next() * a, a]
+            })
+            .collect()
+    }
+
+    fn max_diff(a: &[Rgba], b: &[Rgba]) -> f32 {
+        assert_eq!(a.len(), b.len());
+        a.iter()
+            .zip(b)
+            .flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs()))
+            .fold(0.0, f32::max)
+    }
+
+    /// PLT-04: the GPU backend must match the CPU reference within tolerance.
+    #[test]
+    fn gpu_matches_cpu_reference() {
+        let Some(mut gpu) = gpu() else { return };
+        let mut cpu = CpuBackend;
+        let (w, h) = (37, 23);
+        let a = noise(w, h, 1);
+        let b = noise(w, h, 2);
+        let small = noise(9, 7, 3);
+
+        let (ga, gb, gs) = (
+            gpu.upload(w, h, &a),
+            gpu.upload(w, h, &b),
+            gpu.upload(9, 7, &small),
+        );
+        let (ca, cb, cs) = (
+            cpu.upload(w, h, &a),
+            cpu.upload(w, h, &b),
+            cpu.upload(9, 7, &small),
+        );
+
+        let got = gpu.download(&ga);
+        assert_eq!(max_diff(&got, &a), 0.0, "upload/download round trip");
+
+        for mode in [
+            BlendMode::Normal,
+            BlendMode::Add,
+            BlendMode::Multiply,
+            BlendMode::Screen,
+        ] {
+            let g = gpu.blend(&ga, &gb, mode, 0.7);
+            let c = cpu.blend(&ca, &cb, mode, 0.7);
+            let d = max_diff(&gpu.download(&g), &cpu.download(&c));
+            assert!(d < 1e-5, "blend {mode:?} differs by {d}");
+        }
+
+        let g = gpu.dissolve(&ga, &gb, 0.3);
+        let c = cpu.dissolve(&ca, &cb, 0.3);
+        assert!(
+            max_diff(&gpu.download(&g), &cpu.download(&c)) < 1e-5,
+            "dissolve"
+        );
+
+        let xf = Transform2D::from_srt((9, 7), (w, h), (2.5, 1.75), 0.4, (3.0, -2.0));
+        let g = gpu.transform(&gs, &xf, w, h);
+        let c = cpu.transform(&cs, &xf, w, h);
+        let d = max_diff(&gpu.download(&g), &cpu.download(&c));
+        assert!(d < 1e-4, "transform differs by {d}");
+    }
+}

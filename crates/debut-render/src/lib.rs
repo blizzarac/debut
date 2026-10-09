@@ -13,6 +13,7 @@ pub mod backend;
 pub mod cache;
 pub mod compose;
 pub mod cpu;
+pub mod gpu;
 pub mod graph;
 pub mod keyframe;
 
@@ -25,5 +26,6 @@ pub mod tracking; // FX-04, FX-06 (pending)
 pub use backend::{Backend, BlendMode, FrameProvider, Rgba, Transform2D};
 pub use cache::RenderCache;
 pub use cpu::CpuBackend;
+pub use gpu::GpuBackend;
 pub use graph::{Graph, Node, NodeId};
 pub use keyframe::{Curve, Interp, Keyframe};
