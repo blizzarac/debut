@@ -11,21 +11,27 @@ type Drag = { track: TrackInfo; clip: ClipInfo; mode: "head" | "tail" | "body"; 
 /** Tracks as rows, clips as blocks. Click the ruler to seek; drag a clip body to
  * slide it, drag an edge to ripple-trim; buttons blade at the playhead and
  * ripple-delete the selected clip. */
+export type Selection = { track: string; clip: string } | null;
+
 export function Timeline({
   seq,
   position,
   media,
   player,
+  selected,
+  onSelect,
   onEdited,
 }: {
   seq: SequenceInfo;
   position: number;
   media: MediaApi;
   player: PlayerApi;
+  selected: Selection;
+  onSelect: (s: Selection) => void;
   onEdited: () => void;
 }) {
   const [pxPerSec, setPxPerSec] = useState(120);
-  const [selected, setSelected] = useState<{ track: string; clip: string } | null>(null);
+  const setSelected = onSelect;
   const [drag, setDrag] = useState<Drag | null>(null);
   const svg = useRef<SVGSVGElement>(null);
   const fps = seq.frame_rate[0] / seq.frame_rate[1];

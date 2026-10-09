@@ -60,6 +60,38 @@ export type EditOp =
   | { kind: "extract"; track: string; start: number; end: number }
   | { kind: "lift"; track: string; start: number; end: number };
 
+export type ParamName =
+  | "scale"
+  | "rotation"
+  | "x"
+  | "y"
+  | "opacity"
+  | "exposure"
+  | "contrast"
+  | "saturation"
+  | "temperature"
+  | "tint";
+
+export interface ParamInfo {
+  name: ParamName;
+  value: number;
+  animated: boolean;
+}
+
+export interface EffectInfo {
+  index: number;
+  kind: "transform" | "grade" | "lut";
+  params: ParamInfo[];
+}
+
+export interface EffectsApi {
+  clipEffects(track: string, clip: string): Promise<EffectInfo[]>;
+  addEffect(track: string, clip: string, kind: "transform" | "grade"): Promise<void>;
+  removeEffect(track: string, clip: string, index: number): Promise<void>;
+  /** Set as a constant, or keyframe at the playhead when `keyframe` is true. */
+  setParam(track: string, clip: string, effect: number, param: ParamName, value: number, keyframe: boolean): Promise<void>;
+}
+
 export interface MediaApi {
   importMedia(path: string): Promise<MediaInfo>;
   ensureSequence(): Promise<SequenceInfo>;
@@ -99,6 +131,7 @@ export interface PlayerApi {
 export interface Engine extends ProjectApi {
   media?: MediaApi;
   player?: PlayerApi;
+  effects?: EffectsApi;
 }
 
 export type Target = "desktop" | "browser";

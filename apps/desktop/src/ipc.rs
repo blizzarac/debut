@@ -10,7 +10,10 @@ use debut_platform::Decoder;
 use debut_platform_native::audio_out::{CpalAudioOut, SilentAudioOut};
 use debut_platform_native::codec::FfmpegDecoder;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
-use debut_project::{schema, Clip, ClipSource, Project, Sequence, Track, TrackKind};
+use debut_project::{
+    schema, Clip, ClipSource, Effect, GradeFx, Param, Project, Sequence, Track, TrackKind,
+    TransformFx,
+};
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
@@ -536,6 +539,169 @@ impl Session {
     }
 }
 
+#[derive(Serialize)]
+pub struct ParamDto {
+    pub name: Param,
+    /// Value at the playhead (clip-local evaluation).
+    pub value: f64,
+    /// More than one keyframe, or a single non-held key.
+    pub animated: bool,
+}
+
+#[derive(Serialize)]
+pub struct EffectDto {
+    pub index: usize,
+    pub kind: String,
+    pub params: Vec<ParamDto>,
+}
+
+impl Session {
+    fn clip_ref(&self, track: &str, clip: &str) -> Result<(Target, ClipId, Clip), String> {
+        let seq = self.first_sequence()?;
+        let track_id = TrackId(parse_id(track)?);
+        let clip_id = ClipId(parse_id(clip)?);
+        let c = seq
+            .track(track_id)
+            .and_then(|t| t.clip(clip_id))
+            .ok_or("clip not found")?
+            .clone();
+        Ok((
+            Target {
+                sequence: seq.id,
+                track: track_id,
+            },
+            clip_id,
+            c,
+        ))
+    }
+
+    fn playhead(&self) -> Rational {
+        self.player
+            .as_ref()
+            .map(|p| p.transport.position())
+            .unwrap_or(Rational::ZERO)
+    }
+
+    /// The clip's effects with each parameter evaluated at the playhead.
+    pub fn clip_effects(&self, track: &str, clip: &str) -> Result<Vec<EffectDto>, String> {
+        let (_, _, c) = self.clip_ref(track, clip)?;
+        let local = self.playhead() - c.timeline_in;
+        Ok(c.effects
+            .iter()
+            .enumerate()
+            .map(|(index, e)| EffectDto {
+                index,
+                kind: e.kind().to_string(),
+                params: e
+                    .params()
+                    .iter()
+                    .map(|&p| {
+                        let curve = e.curve(p).unwrap();
+                        ParamDto {
+                            name: p,
+                            value: curve.eval(local),
+                            animated: curve.keys().len() > 1,
+                        }
+                    })
+                    .collect(),
+            })
+            .collect())
+    }
+
+    pub fn add_effect(&mut self, track: &str, clip: &str, kind: &str) -> Result<(), String> {
+        let (target, clip_id, _) = self.clip_ref(track, clip)?;
+        let effect = match kind {
+            "transform" => Effect::Transform(TransformFx::default()),
+            "grade" => Effect::Grade(GradeFx::default()),
+            other => return Err(format!("unknown effect kind {other}")),
+        };
+        self.exec(Command::AddEffect {
+            target,
+            clip: clip_id,
+            effect,
+            index: None,
+        })
+    }
+
+    pub fn remove_effect(&mut self, track: &str, clip: &str, index: usize) -> Result<(), String> {
+        let (target, clip_id, _) = self.clip_ref(track, clip)?;
+        self.exec(Command::RemoveEffect {
+            target,
+            clip: clip_id,
+            index,
+        })
+    }
+
+    /// Set a parameter as a constant, or keyframe it at the playhead.
+    pub fn set_param(
+        &mut self,
+        track: &str,
+        clip: &str,
+        effect: usize,
+        param: Param,
+        value: f64,
+        keyframe: bool,
+    ) -> Result<(), String> {
+        let (target, clip_id, c) = self.clip_ref(track, clip)?;
+        let at = if keyframe {
+            let fr = self.first_sequence()?.frame_rate;
+            Some(fr.snap(self.playhead()) - c.timeline_in)
+        } else {
+            None
+        };
+        self.exec(Command::SetParam {
+            target,
+            clip: clip_id,
+            effect,
+            param,
+            at,
+            value,
+        })
+    }
+}
+
+#[tauri::command]
+pub fn clip_effects(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+) -> Result<Vec<EffectDto>, String> {
+    lock(&state).clip_effects(&track, &clip)
+}
+
+#[tauri::command]
+pub fn add_effect(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    kind: String,
+) -> Result<(), String> {
+    lock(&state).add_effect(&track, &clip, &kind)
+}
+
+#[tauri::command]
+pub fn remove_effect(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    index: usize,
+) -> Result<(), String> {
+    lock(&state).remove_effect(&track, &clip, index)
+}
+
+#[tauri::command]
+pub fn set_param(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    effect: usize,
+    param: Param,
+    value: f64,
+    keyframe: bool,
+) -> Result<(), String> {
+    lock(&state).set_param(&track, &clip, effect, param, value, keyframe)
+}
+
 #[tauri::command]
 pub fn import_media(state: State<'_, Shared>, path: String) -> Result<MediaDto, String> {
     lock(&state).import_media(path)
@@ -733,6 +899,57 @@ mod tests {
         );
         s.transport(TransportAction::Pause).unwrap();
         assert!(!s.tick().unwrap().playing);
+
+        // Effects: add a grade, set exposure as a constant, then keyframe opacity.
+        let clip_id = seq.tracks[0].clips[0].id.clone();
+        s.add_effect(&v, &clip_id, "grade").unwrap();
+        s.add_effect(&v, &clip_id, "transform").unwrap();
+        s.set_param(&v, &clip_id, 0, Param::Exposure, 1.0, false)
+            .unwrap();
+        s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+        s.set_param(&v, &clip_id, 1, Param::Opacity, 0.2, true)
+            .unwrap();
+        s.transport(TransportAction::Seek { t: 2.0 }).unwrap();
+        s.set_param(&v, &clip_id, 1, Param::Opacity, 1.0, true)
+            .unwrap();
+        // 1.4 s = frame 35 exactly: clip-local 1.0, 40% of the way from the 0.2 key to the 1.0 key.
+        s.transport(TransportAction::Seek { t: 1.4 }).unwrap();
+        let fx = s.clip_effects(&v, &clip_id).unwrap();
+        assert_eq!(
+            (fx[0].kind.as_str(), fx[1].kind.as_str()),
+            ("grade", "transform")
+        );
+        let exposure = fx[0]
+            .params
+            .iter()
+            .find(|p| p.name == Param::Exposure)
+            .unwrap();
+        assert_eq!((exposure.value, exposure.animated), (1.0, false));
+        let opacity = fx[1]
+            .params
+            .iter()
+            .find(|p| p.name == Param::Opacity)
+            .unwrap();
+        assert!(
+            (opacity.value - 0.52).abs() < 1e-9 && opacity.animated,
+            "{:?}",
+            opacity.value
+        );
+        // The graded, half-transparent frame is brighter than black but dimmer than full.
+        let (_, _, half) = s.frame_pixels().unwrap();
+        let sum = |px: &[u8]| {
+            px.chunks(4)
+                .map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64)
+                .sum::<u64>()
+        };
+        assert!(sum(&half) > 0);
+        s.remove_effect(&v, &clip_id, 1).unwrap();
+        let (_, _, full) = s.frame_pixels().unwrap();
+        assert!(
+            sum(&full) > sum(&half),
+            "removing the opacity ramp brightens the frame"
+        );
+        assert!(s.remove_effect(&v, &clip_id, 7).is_err());
 
         // Edit through the IPC op, then undo it.
         let clip = seq.tracks[0].clips[0].id.clone();

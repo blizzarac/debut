@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { detectTarget, loadEngine, type Engine, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
-import { Timeline } from "./Timeline";
+import { Inspector } from "./Inspector";
+import { Timeline, type Selection } from "./Timeline";
 import { Transport } from "./Transport";
 import { Viewer } from "./Viewer";
 
@@ -14,6 +15,7 @@ export default function App() {
   const [path, setPath] = useState("");
   const [canUndo, setCanUndo] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
+  const [selected, setSelected] = useState<Selection>(null);
 
   const refresh = useCallback(async (e: Engine) => {
     if (e.media) setSeq(await e.media.sequence().catch(() => null));
@@ -98,6 +100,12 @@ export default function App() {
         ) : (
           <p style={{ fontSize: 12, color: "#999" }}>Media import and playback are not available on this target yet.</p>
         )}
+        {engine?.effects && (
+          <>
+            <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Inspector</h2>
+            <Inspector effects={engine.effects} selected={selected} position={Math.round((tick?.position ?? 0) * 25) / 25} onChanged={() => refresh(engine)} />
+          </>
+        )}
       </aside>
       <section style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
         {engine?.player ? (
@@ -107,7 +115,15 @@ export default function App() {
           </>
         ) : null}
         {engine?.media && engine.player && seq ? (
-          <Timeline seq={seq} position={tick?.position ?? 0} media={engine.media} player={engine.player} onEdited={() => refresh(engine)} />
+          <Timeline
+            seq={seq}
+            position={tick?.position ?? 0}
+            media={engine.media}
+            player={engine.player}
+            selected={selected}
+            onSelect={setSelected}
+            onEdited={() => refresh(engine)}
+          />
         ) : null}
       </section>
     </main>

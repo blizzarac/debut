@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EditOp, Engine, Frame, MediaApi, MediaInfo, PlayerApi, SequenceInfo, Tick, TransportAction } from "./index";
+import type { EditOp, EffectInfo, EffectsApi, Engine, Frame, MediaApi, MediaInfo, ParamName, PlayerApi, SequenceInfo, Tick, TransportAction } from "./index";
 
 class TauriMedia implements MediaApi {
   importMedia(path: string) {
@@ -35,9 +35,25 @@ class TauriPlayer implements PlayerApi {
   }
 }
 
+class TauriEffects implements EffectsApi {
+  clipEffects(track: string, clip: string) {
+    return invoke<EffectInfo[]>("clip_effects", { track, clip });
+  }
+  addEffect(track: string, clip: string, kind: "transform" | "grade") {
+    return invoke<void>("add_effect", { track, clip, kind });
+  }
+  removeEffect(track: string, clip: string, index: number) {
+    return invoke<void>("remove_effect", { track, clip, index });
+  }
+  setParam(track: string, clip: string, effect: number, param: ParamName, value: number, keyframe: boolean) {
+    return invoke<void>("set_param", { track, clip, effect, param, value, keyframe });
+  }
+}
+
 export class TauriEngine implements Engine {
   media = new TauriMedia();
   player = new TauriPlayer();
+  effects = new TauriEffects();
 
   version() {
     return invoke<string>("version");
