@@ -4,7 +4,7 @@ use debut_core::id::MediaId;
 use debut_core::{color::ColorSpace, FrameRate, Timecode};
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MediaRef {
     pub id: MediaId,
     pub path: String,
@@ -13,7 +13,7 @@ pub struct MediaRef {
     pub proxies: Vec<Proxy>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MediaMetadata {
     pub frame_rate: Option<FrameRate>,
     pub start_timecode: Option<Timecode>,
@@ -26,7 +26,7 @@ pub struct MediaMetadata {
     pub variable_frame_rate: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Proxy {
     /// 2, 4 or 8 for 1/2, 1/4, 1/8 resolution.
     pub divisor: u8,

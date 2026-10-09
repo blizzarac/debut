@@ -10,3 +10,4 @@ repository.workspace = true
 debut-core.workspace = true
 serde.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true

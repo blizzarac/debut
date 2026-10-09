@@ -4,7 +4,7 @@ use debut_core::id::MarkerId;
 use debut_core::Rational;
 use serde::{Deserialize, Serialize};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Marker {
     pub id: MarkerId,
     pub at: Rational,

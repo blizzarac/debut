@@ -4,9 +4,9 @@
 //! upload, PLT-07), capped WASM heap (stream frames, cache on GPU), COOP/COEP for
 //! SharedArrayBuffer.
 
-pub mod codec;       // WebCodecs; WASM software fallback
-pub mod file_store;  // OPFS + File System Access API; offline cache (PLT-09)
-pub mod audio_out;   // AudioWorklet
-pub mod threads;     // Web Workers + SharedArrayBuffer
+pub mod audio_out; // AudioWorklet
+pub mod codec; // WebCodecs; WASM software fallback
+pub mod display;
+pub mod file_store; // OPFS + File System Access API; offline cache (PLT-09)
 pub mod plugin_host; // sandboxed WASM plugins only
-pub mod display;     // canvas with WebGPU context
+pub mod threads; // Web Workers + SharedArrayBuffer // canvas with WebGPU context

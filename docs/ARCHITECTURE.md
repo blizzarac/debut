@@ -63,8 +63,8 @@ wasm-pack build apps/web --target web        # browser (once wasm-bindgen is ena
 
 ## Suggested order of work
 
-1. `debut-core` time math + tests; `debut-project` schema with round-trip tests (PLT-03).
-2. `debut-command` apply/invert for the TL-03 core edits; journal + crash recovery.
+1. ~~`debut-core` time math + tests; `debut-project` schema with round-trip tests (PLT-03).~~ Done.
+2. ~~`debut-command` apply/invert for the TL-03 core edits; journal + crash recovery.~~ Done: `Replace`/`Shift`/`Blade`/`Join` primitives, `insert`/`overwrite`/`lift`/`extract` constructors, `History` undo/redo, JSON-lines `Journal`.
 3. `debut-platform-native` decoder via FFmpeg; `debut-audio` clock + `AudioOut`; `debut-engine::playback` → PB-01/PB-02 on a single clip.
 4. `debut-render` pull graph with transform/blend/dissolve nodes and the OCIO pipeline.
 5. `debut-export` reusing the graph; CI gate on NFR-02 – NFR-04 numbers.
