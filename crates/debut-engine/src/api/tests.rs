@@ -1,4 +1,5 @@
-//! End-to-end session flow over the native platform (FFmpeg fixture).
+//! Session API tests over the native platform (FFmpeg fixture): one focused
+//! test per area, each starting from the same small project.
 use super::*;
 use debut_platform_native::NativePlatform;
 
@@ -11,31 +12,97 @@ const FIXTURE: &str = concat!(
     "/../debut-platform-native/tests/fixtures/test_25fps_2s.mp4"
 );
 
-/// The whole desktop flow the UI drives, headless: import, sequence, insert,
-/// play against the silent audio output, pull frames, edit, undo.
-#[test]
-fn desktop_session_flow() {
-    let dir = std::env::temp_dir().join(format!("debut-session-{}", std::process::id()));
+/// Base state for every test: a project at its own path with the fixture
+/// imported, a sequence sized from it, and the clip on V1 and A1 at 0.4 s.
+struct Fx {
+    s: Session,
+    dir: TempDir,
+    path: String,
+    v: String,
+    a: String,
+    m: MediaDto,
+    seq: SequenceDto,
+    clip_id: String,
+}
+
+fn fixture(name: &str) -> Fx {
+    let dir = std::env::temp_dir().join(format!("debut-{name}-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let path = dir.join("t.debut").to_string_lossy().into_owned();
     let mut s = native();
     let id = s.ids.fresh();
     s.start(Project::new(id, "t"), path.clone()).unwrap();
     assert_eq!(s.file_status().path.as_deref(), Some(path.as_str()));
-
     let m = s.import_media(FIXTURE.to_string()).unwrap();
     assert_eq!((m.width, m.height, m.has_audio), (64, 36, true));
     let seq = s.ensure_sequence().unwrap();
     assert_eq!((seq.width, seq.height, seq.frame_rate), (64, 36, [25, 1]));
     assert_eq!(seq.tracks.len(), 2);
     let (v, a) = (seq.tracks[0].id.clone(), seq.tracks[1].id.clone());
-
     s.add_clip(&v, &m.id, 0.4).unwrap();
     s.add_clip(&a, &m.id, 0.4).unwrap();
     let seq = sequence_dto(s.first_sequence().unwrap());
     assert_eq!(seq.tracks[0].clips[0].timeline_in, 0.4);
     assert_eq!(seq.duration, 2.4);
+    // Pixel checks index a 64x36 frame; Auto may step down on a loaded machine.
+    s.set_preview_quality(PreviewQuality::Full);
+    let clip_id = seq.tracks[0].clips[0].id.clone();
+    Fx {
+        s,
+        dir: TempDir(dir),
+        path,
+        v,
+        a,
+        m,
+        seq,
+        clip_id,
+    }
+}
 
+/// A per-test scratch directory, removed when the test ends.
+struct TempDir(std::path::PathBuf);
+
+impl std::ops::Deref for TempDir {
+    type Target = std::path::Path;
+    fn deref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl AsRef<std::path::Path> for TempDir {
+    fn as_ref(&self) -> &std::path::Path {
+        &self.0
+    }
+}
+
+impl Drop for TempDir {
+    fn drop(&mut self) {
+        std::fs::remove_dir_all(&self.0).ok();
+    }
+}
+
+/// Sum of RGB over a frame.
+fn sum(px: &[u8]) -> u64 {
+    px.chunks(4)
+        .map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64)
+        .sum::<u64>()
+}
+
+/// RGB sum of one pixel of a 64-wide frame.
+fn at(px: &[u8], x: usize, y: usize) -> u32 {
+    let i = (y * 64 + x) * 4;
+    px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32
+}
+
+/// Number of differing bytes.
+fn changed(a: &[u8], b: &[u8]) -> usize {
+    a.iter().zip(b).filter(|(x, y)| x != y).count()
+}
+
+/// Frames before and inside the clip, GPU/CPU agreement (PLT-04), playback clock.
+#[test]
+fn playback_shows_black_then_picture_and_the_clock_runs() {
+    let Fx { mut s, .. } = fixture("playback_shows_black_then_picture_and_the_clock_runs");
     // Before the clip: black. Inside: picture.
     s.transport(TransportAction::Seek { t: 0.0 }).unwrap();
     let (w, h, px) = s.frame_pixels().unwrap();
@@ -77,9 +144,15 @@ fn desktop_session_flow() {
     );
     s.transport(TransportAction::Pause).unwrap();
     assert!(!s.tick().unwrap().playing);
+}
 
+/// Grade constant plus keyframed opacity; removing an effect brightens the frame.
+#[test]
+fn effects_grade_and_keyframed_opacity() {
+    let Fx {
+        mut s, v, clip_id, ..
+    } = fixture("effects_grade_and_keyframed_opacity");
     // Effects: add a grade, set exposure as a constant, then keyframe opacity.
-    let clip_id = seq.tracks[0].clips[0].id.clone();
     s.add_effect(&v, &clip_id, "grade").unwrap();
     s.add_effect(&v, &clip_id, "transform").unwrap();
     s.set_param(&v, &clip_id, 0, Param::Exposure, 1.0, false)
@@ -115,11 +188,6 @@ fn desktop_session_flow() {
     );
     // The graded, half-transparent frame is brighter than black but dimmer than full.
     let (_, _, half) = s.frame_pixels().unwrap();
-    let sum = |px: &[u8]| {
-        px.chunks(4)
-            .map(|p| p[0] as u64 + p[1] as u64 + p[2] as u64)
-            .sum::<u64>()
-    };
     assert!(sum(&half) > 0);
     s.remove_effect(&v, &clip_id, 1).unwrap();
     let (_, _, full) = s.frame_pixels().unwrap();
@@ -128,10 +196,22 @@ fn desktop_session_flow() {
         "removing the opacity ramp brightens the frame"
     );
     assert!(s.remove_effect(&v, &clip_id, 7).is_err());
+}
 
+/// Shape and polygon masks (FX-04), tracking (FX-06), keyer (FX-05).
+#[test]
+fn masks_tracking_and_keying() {
+    let Fx {
+        mut s, v, clip_id, ..
+    } = fixture("masks_tracking_and_keying");
+    // Inside the clip, with a +1 stop grade in slot 0: the mask lands in slot 1
+    // and the fixture's dark centre is bright enough to tell kept from cut.
+    s.transport(TransportAction::Seek { t: 1.4 }).unwrap();
+    s.add_effect(&v, &clip_id, "grade").unwrap();
+    s.set_param(&v, &clip_id, 0, Param::Exposure, 1.0, false)
+        .unwrap();
     // Pixel checks below index a 64x36 frame, so pin the preview (Auto may
     // step down on a loaded machine).
-    s.set_preview_quality(PreviewQuality::Full);
     // Mask (FX-04): a 32x18 rectangle in the 64x36 frame blacks out the
     // corners and keeps the centre; inverting swaps that; options are undoable.
     s.add_effect(&v, &clip_id, "mask").unwrap();
@@ -143,10 +223,6 @@ fn desktop_session_flow() {
     s.set_param(&v, &clip_id, mask_ix, Param::Feather, 0.0, false)
         .unwrap();
     let (_, _, masked) = s.frame_pixels().unwrap();
-    let at = |px: &[u8], x: usize, y: usize| {
-        let i = (y * 64 + x) * 4;
-        px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32
-    };
     assert_eq!(at(&masked, 1, 1), 0, "corner is masked out");
     assert!(at(&masked, 32, 18) > 60, "centre is kept");
     s.set_effect_options(
@@ -275,7 +351,12 @@ fn desktop_session_flow() {
     let fx = s.clip_effects(&v, &clip_id).unwrap();
     assert_eq!(fx.last().unwrap().options.color, Some([0, 255, 0]));
     s.remove_effect(&v, &clip_id, fx.len() - 1).unwrap();
+}
 
+/// An edit through the IPC op and its undo; preview divisors (PB-03).
+#[test]
+fn timeline_edit_undo_and_preview_quality() {
+    let Fx { mut s, v, seq, .. } = fixture("timeline_edit_undo_and_preview_quality");
     // Edit through the IPC op, then undo it.
     let clip = seq.tracks[0].clips[0].id.clone();
     s.edit(EditOp::RippleTail {
@@ -311,7 +392,14 @@ fn desktop_session_flow() {
     s.set_preview_quality(PreviewQuality::Full);
     let (fw, _, _) = s.frame_pixels().unwrap();
     assert_eq!(fw, 64);
+}
 
+/// Title clips (GFX-01), built-in and saved templates (GFX-02).
+#[test]
+fn titles_templates_and_saved_looks() {
+    let Fx {
+        mut s, v, clip_id, ..
+    } = fixture("titles_templates_and_saved_looks");
     // Titles (GFX-01): the video track is busy at 1 s, so the title lands on a new
     // track above it; its text brightens the picture, and an edit re-renders it.
     let before = sequence_dto(s.first_sequence().unwrap());
@@ -428,6 +516,12 @@ fn desktop_session_flow() {
         end: 6.0,
     })
     .unwrap();
+}
+
+/// Caption burn-in, settings, SRT/VTT round trip (GFX-05, GFX-06).
+#[test]
+fn captions_burn_in_settings_and_subtitle_files() {
+    let Fx { mut s, dir, .. } = fixture("captions_burn_in_settings_and_subtitle_files");
     // Captions (GFX-05/06): burned in near the bottom while active, SRT round trip.
     s.transport(TransportAction::Seek { t: 1.4 }).unwrap();
     let (_, _, bare) = s.frame_pixels().unwrap();
@@ -435,7 +529,6 @@ fn desktop_session_flow() {
     let (_, h, captioned) = s.frame_pixels().unwrap();
     // On a 36-line frame the scaled caption box spans roughly rows 13..34.
     let split = (h as usize / 3) * 64 * 4;
-    let changed = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| x != y).count();
     assert!(
         changed(&bare[split..], &captioned[split..]) > 20,
         "the lower part carries the caption"
@@ -508,7 +601,12 @@ fn desktop_session_flow() {
         .starts_with("WEBVTT\n"));
     s.remove_caption(&cap).unwrap();
     assert!(s.captions().unwrap().is_empty());
+}
 
+/// Multicam clips, audio sync and the live switch (MED-11, TL-08).
+#[test]
+fn multicam_audio_sync_and_live_switch() {
+    let Fx { mut s, v, m, .. } = fixture("multicam_audio_sync_and_live_switch");
     // Multicam (MED-11, TL-08): two angles of the same file on a fresh track
     // layout; a live switch at 1.0 s blades and switches only the tail.
     let m2 = s.import_media(FIXTURE.to_string()).unwrap();
@@ -577,7 +675,14 @@ fn desktop_session_flow() {
     s.workspace_mut().unwrap().undo().unwrap();
     s.sync_player().unwrap();
     assert_eq!(sequence_dto(s.first_sequence().unwrap()).tracks[0].id, v);
+}
 
+/// Bins (MED-07), keywords and ratings (MED-08), offline media and relink (MED-05).
+#[test]
+fn bins_tags_and_offline_media() {
+    let Fx { mut s, m, dir, .. } = fixture("bins_tags_and_offline_media");
+    // A second take of the same file, so the name-based smart bin matches two.
+    s.import_media(FIXTURE.to_string()).unwrap();
     // Bins (MED-07): a manual bin takes an assignment, a smart bin matches by
     // name, the media list reports both, and removing a bin is undoable.
     let selects = s.add_bin("Selects".into(), None).unwrap();
@@ -735,16 +840,12 @@ fn desktop_session_flow() {
     s.workspace_mut().unwrap().undo().unwrap(); // insert
     s.workspace_mut().unwrap().undo().unwrap(); // track
     s.sync_player().unwrap();
+}
 
-    // Lift the title again so the export below covers the original 2.4 s.
-    s.edit(EditOp::Lift {
-        track: title_track.id.clone(),
-        start: 1.0,
-        end: 6.0,
-    })
-    .unwrap();
-    assert_eq!(sequence_dto(s.first_sequence().unwrap()).duration, 2.4);
-
+/// Nesting a range and opening the nested sequence (TL-07).
+#[test]
+fn nest_and_open_the_nested_sequence() {
+    let Fx { mut s, .. } = fixture("nest_and_open_the_nested_sequence");
     // Nest 1.0..2.0 s (TL-07): a new sequence appears, V1/A1 get compound
     // clips there, the picture at 1.4 s survives, and undo restores the cut.
     let seqs_before = s.project().unwrap().sequences.len();
@@ -817,7 +918,12 @@ fn desktop_session_flow() {
     );
     s.active = None;
     assert_eq!(s.project().unwrap().sequences.len(), seqs_before);
+}
 
+/// Dissolve transitions with handle checks (FX-03).
+#[test]
+fn dissolve_needs_handles() {
+    let Fx { mut s, v, .. } = fixture("dissolve_needs_handles");
     // Transition: blade V1 at 1.0 s, dissolve 0.4 s into the second piece (its head
     // handle is 0.6 s of source), then check the DTO and that scopes come back.
     s.edit(EditOp::Blade {
@@ -869,7 +975,12 @@ fn desktop_session_flow() {
             .len(),
         1
     );
+}
 
+/// Timeline and clip markers (TL-10).
+#[test]
+fn markers_edit_export_undo() {
+    let Fx { mut s, dir, .. } = fixture("markers_edit_export_undo");
     // Markers: timeline and clip markers, edit, export, undo.
     let clip_for_marker = sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[0]
         .id
@@ -919,7 +1030,12 @@ fn desktop_session_flow() {
     s.workspace_mut().unwrap().undo().unwrap();
     assert!(s.markers().unwrap().is_empty());
     s.sync_player().unwrap();
+}
 
+/// Mixer strip and inserts (AUD-02/05), normalized export with caption sidecar (EXP, AUD-06).
+#[test]
+fn mixer_and_normalized_export_with_sidecar() {
+    let Fx { mut s, a, dir, .. } = fixture("mixer_and_normalized_export_with_sidecar");
     // Mixer: fader and an insert go through the command log.
     s.set_track_mix(
         &a,
@@ -982,7 +1098,18 @@ fn desktop_session_flow() {
     assert!(std::fs::metadata(&out)
         .map(|m| m.len() > 1000)
         .unwrap_or(false));
+}
 
+/// Save, edit, crash, reopen: the journal recovers the edit (MED-09, NFR-05).
+#[test]
+fn persistence_recovers_unsaved_edits() {
+    let Fx {
+        mut s,
+        path,
+        v,
+        dir,
+        ..
+    } = fixture("persistence_recovers_unsaved_edits");
     // Persistence: save, keep editing, "crash", reopen: the unsaved edit is recovered.
     assert!(s.file_status().dirty);
     let st = s.save_project(None).unwrap();
@@ -1017,8 +1144,6 @@ fn desktop_session_flow() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-/// `cargo test -p debut-desktop -- --ignored bench` prints the frame cost per
-/// preview divisor on a generated 1080p clip: what Auto is working with.
 #[test]
 #[ignore]
 fn bench_preview_divisors_on_1080p() {

@@ -12,7 +12,7 @@ apps/ui (TypeScript/React)          one UI for both targets
    │                 │
 apps/desktop      apps/web           Tauri IPC         wasm-bindgen
    │                 │
-          debut-engine               facade: api, playback, session
+          debut-engine               api::Session (the command surface), playback, session
    │  │  │  │  │  │  │  │
    project  command  media  timeline  audio  render  graphics  export  collab
    │                                                                   │
@@ -28,12 +28,22 @@ Rules enforced by the crate graph:
 - The project is mutated only through `debut-command`, so every edit is undoable, journaled and syncable (TL-11, NFR-05, COL).
 - Playback and export run the same `debut-render` graph; the audio clock in `debut-audio` is the master (PB-02).
 
+## Code layout
+
+Where new code goes, so the shells stay thin:
+
+- **Editing operations and their DTOs** go in `debut-engine/src/api/`, one module per area (`media`, `timeline`, `titles`, `multicam`, `playback`, `effects`, `mixer`, `export`, `markers`, `captions`), each adding methods to `Session`. Shared helpers and the session lifecycle live in `api/mod.rs`.
+- **Anything OS-, codec- or device-specific** goes behind `debut_platform::Platform` (decoders, encoders, audio out, files, hardware queries). `Session` holds an `Arc<dyn Platform>`; `NativePlatform` is the desktop implementation.
+- **Shells only translate.** `apps/desktop/src/ipc.rs` is one-line Tauri command forwards plus binary frame responses; it should not grow logic. The web shell will expose the same `Session` over wasm-bindgen.
+- **Pure algorithms** (masks, tracking, loudness, sync, SRT, templates) live in the domain crates with their own unit tests; `Session` only wires them to the project and the player.
+- **Session tests** are in `debut-engine/src/api/tests.rs`: one focused test per area over the native platform and the FFmpeg fixture, each starting from the shared `fixture()` project.
+
 ## Crate → requirement map
 
 | Crate | Owns | Requirement IDs |
 | --- | --- | --- |
 | `debut-core` | Rational time, timecode, frame rates, IDs, color-space tags, errors | MED-03, MED-04, AUD-01 |
-| `debut-platform` | Decoder/Encoder, FileStore, AudioOut, Threads, PluginHost, Display traits; `Capabilities` | PLT-01, PLT-02, PLT-05 |
+| `debut-platform` | Object-safe `Platform` (decoders, encoders, audio out, files, hardware queries); Decoder/Encoder, FileStore, AudioOut, Threads, PluginHost, Display traits; `Capabilities` | PLT-01, PLT-02, PLT-05 |
 | `debut-project` | Bins, smart bins, media refs + metadata + proxies, sequences, tracks, clips, markers, schema migration | MED-04 – MED-07, MED-09, MED-10, TL-01, TL-02, TL-07, TL-10, NFR-06, PLT-03 |
 | `debut-command` | Command enum, history (undo/redo), journal | TL-11, NFR-05, COL-05, COL-06 |
 | `debut-media` | Ingest, proxy queue, relink, multicam sync, VFR conform, FCPXML/EDL/AAF/OTIO | MED-01 – MED-03, MED-05, MED-06, MED-11 – MED-13 |
@@ -43,10 +53,10 @@ Rules enforced by the crate graph:
 | `debut-graphics` | Text, templates, shapes, transcription, captions, on-device AI host | GFX-01 – GFX-11, FX-14, AUD-07, TL-13 |
 | `debut-export` | Presets, queue, jobs/batches/stems, smart render, HDR metadata, upload | EXP-01 – EXP-10, NFR-04 |
 | `debut-collab` | Op sync, locks, presence, review comments, roles | COL-01 – COL-08 |
-| `debut-engine` | Public API, transport/playback, session (autosave, recovery, workspaces) | PB-04, PB-05, PB-07, PB-11, MED-09, NFR-05, NFR-18 |
+| `debut-engine` | `api::Session` command surface used by both shells, transport/playback, workspace (autosave, recovery) | PB-04, PB-05, PB-07, PB-11, MED-09, NFR-05, NFR-18 |
 | `debut-platform-native` | FFmpeg + VideoToolbox/NVDEC/QSV/AMF, native FS, CoreAudio/WASAPI, native threads, OpenFX/VST3/AU out-of-process, SDI/HDMI | NFR-07 – NFR-09, NFR-12, PB-09, AUD-09 |
 | `debut-platform-web` | WebCodecs + WASM fallback, OPFS, AudioWorklet, Web Workers, sandboxed WASM plugins, WebGPU canvas | PLT-06 – PLT-09 |
-| `apps/desktop` | Tauri shell | PLT-10 |
+| `apps/desktop` | Tauri shell: command forwards to `Session` over `NativePlatform` | PLT-10 |
 | `apps/web` | wasm-bindgen entry | PLT-01 |
 | `apps/ui` | Shared TypeScript/React app | NFR-16 – NFR-18 |
 | `shaders/` | Shared WGSL | NFR-09, PLT-04 |

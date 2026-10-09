@@ -9,8 +9,8 @@ pub mod ring; // SPSC lock-free sample ring
 pub mod sync; // MED-11 audio alignment for multicam
 
 pub mod ducking; // AUD-08 (pending)
-pub mod effects; // AUD-05 EQ, compressor, limiter, de-esser, gate, reverb (pending)
-pub mod loudness; // AUD-06 LUFS / true peak, normalization targets (pending)
+pub mod effects; // AUD-05 EQ, compressor, limiter, de-esser, gate, reverb
+pub mod loudness; // AUD-06 BS.1770 LUFS / true peak, normalization gain
 pub mod waveform; // AUD-04 multi-resolution peak cache (pending)
 
 pub use clock::Clock;
