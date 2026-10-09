@@ -14,7 +14,7 @@ use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
 use debut_project::{
-    AudioEffect, Clip, ClipSource, Effect, Marker, Param, Project, Sequence, SpeedKey, Track,
+    AudioEffect, Clip, ClipSource, Duck, Effect, Marker, Param, Project, Sequence, SpeedKey, Track,
     TrackMix, Transition,
 };
 use debut_project::{Bin, Caption, CaptionSettings, SavedTitleTemplate};
@@ -136,6 +136,11 @@ pub enum Command {
     SetTrackMix {
         target: Target,
         mix: TrackMix,
+    },
+    /// Set or clear a track's auto-ducking (AUD-08).
+    SetTrackDuck {
+        target: Target,
+        duck: Option<Duck>,
     },
     /// Replace what a clip plays (title text/style edits, relinks) in place.
     SetClipSource {
@@ -486,6 +491,15 @@ impl Command {
             }
             Command::SetTrackMix { target, mix } => {
                 track_mut(project, *target)?.mix = *mix;
+                Ok(())
+            }
+            Command::SetTrackDuck { target, duck } => {
+                if duck.is_some_and(|d| d.key == target.track) {
+                    return Err(Error::InvalidArgument(
+                        "a track cannot duck under itself".into(),
+                    ));
+                }
+                track_mut(project, *target)?.duck = *duck;
                 Ok(())
             }
             Command::SetClipSource {
@@ -970,6 +984,10 @@ impl Command {
             Command::SetTrackMix { target, .. } => Ok(Command::SetTrackMix {
                 target: *target,
                 mix: track(project, *target)?.mix,
+            }),
+            Command::SetTrackDuck { target, .. } => Ok(Command::SetTrackDuck {
+                target: *target,
+                duck: track(project, *target)?.duck,
             }),
             Command::SetClipSource { target, clip, .. } => Ok(Command::SetClipSource {
                 target: *target,

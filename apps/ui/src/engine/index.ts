@@ -140,10 +140,22 @@ export interface TrackInfo {
   clips: ClipInfo[];
   mix: TrackMix;
   inserts: string[];
+  /** Auto-ducking under another audio track, if set. */
+  duck: Duck | null;
+}
+
+/** Lower a track while the `key` track (dialogue) is active (AUD-08). */
+export interface Duck {
+  key: string;
+  amount_db: number;
+  threshold_db: number;
+  attack_ms: number;
+  release_ms: number;
 }
 
 export interface MixerApi {
   setTrackMix(track: string, mix: TrackMix): Promise<void>;
+  setTrackDuck?(track: string, duck: Duck | null): Promise<void>;
   addInsert(track: string, kind: InsertKind): Promise<void>;
   removeInsert(track: string, index: number): Promise<void>;
 }

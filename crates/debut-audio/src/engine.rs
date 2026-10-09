@@ -10,6 +10,7 @@
 //! ```
 
 use crate::clock::Clock;
+use crate::ducking::Ducker;
 use crate::effects::{build, Processor};
 use crate::graph::{mix_into, TrackMix};
 use crate::ring::{ring, Consumer, Producer};
@@ -30,6 +31,8 @@ type Chain = (Vec<AudioEffect>, Vec<Box<dyn Processor>>);
 #[derive(Default)]
 pub struct Inserts {
     chains: HashMap<debut_core::TrackId, Chain>,
+    /// Auto-ducking state per ducked track (AUD-08).
+    duckers: HashMap<debut_core::TrackId, Ducker>,
     /// Tracks of nested sequences seen while rendering; their chains survive
     /// `sync` of the top-level sequence.
     nested: HashSet<debut_core::TrackId>,
@@ -41,6 +44,8 @@ impl Inserts {
         self.sync_tracks(seq, sample_rate);
         let nested = &self.nested;
         self.chains
+            .retain(|id, _| nested.contains(id) || seq.tracks.iter().any(|t| t.id == *id));
+        self.duckers
             .retain(|id, _| nested.contains(id) || seq.tracks.iter().any(|t| t.id == *id));
     }
 
@@ -69,6 +74,15 @@ impl Inserts {
                     .collect();
                 self.chains.insert(t.id, (t.audio_effects.clone(), procs));
             }
+            match t.duck {
+                Some(d) if self.duckers.get(&t.id).is_none_or(|x| *x.settings() != d) => {
+                    self.duckers.insert(t.id, Ducker::new(d, sample_rate));
+                }
+                Some(_) => {}
+                None => {
+                    self.duckers.remove(&t.id);
+                }
+            }
         }
     }
 
@@ -76,6 +90,7 @@ impl Inserts {
         for (_, procs) in self.chains.values_mut() {
             procs.iter_mut().for_each(|p| p.reset());
         }
+        self.duckers.values_mut().for_each(Ducker::reset);
     }
 
     fn process(&mut self, track: debut_core::TrackId, buf: &mut [f32]) {
@@ -285,13 +300,15 @@ fn render_span_depth(
         .any(|t| t.kind == TrackKind::Audio && t.mix.solo);
     let mut clip_buf = Vec::new();
     let mut retimed = Vec::new();
-    let mut track_buf = vec![0.0f32; frames * CHANNELS];
+    // Each audible track's post-fader, post-insert block; summed after
+    // ducking, which needs every key track's level first.
+    let mut rendered: Vec<(debut_core::TrackId, Vec<f32>)> = Vec::new();
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio) {
         let mix = TrackMix::from(track.mix);
         if !mix.audible(any_solo) {
             continue;
         }
-        track_buf.fill(0.0);
+        let mut track_buf = vec![0.0f32; frames * CHANNELS];
         let mut touched = false;
         for clip in &track.clips {
             let cin = (clip.timeline_in * Rational::from_int(sr)).round();
@@ -344,11 +361,32 @@ fn render_span_depth(
             );
             touched = true;
         }
-        if touched || !track.audio_effects.is_empty() {
+        if touched || !track.audio_effects.is_empty() || track.duck.is_some() {
             inserts.process(track.id, &mut track_buf);
-            for (b, t) in bus.iter_mut().zip(&track_buf) {
-                *b += *t;
-            }
+            rendered.push((track.id, track_buf));
+        }
+    }
+    for track in seq.tracks.iter().filter(|t| t.duck.is_some()) {
+        let Some(i) = rendered.iter().position(|(id, _)| *id == track.id) else {
+            continue;
+        };
+        let Some(ducker) = inserts.duckers.get_mut(&track.id) else {
+            continue;
+        };
+        let key_id = ducker.settings().key;
+        // Key tracks are read as rendered (post-fader); a silent or muted key
+        // simply never ducks.
+        let mut buf = std::mem::take(&mut rendered[i].1);
+        let key = rendered
+            .iter()
+            .find(|(id, _)| *id == key_id)
+            .map(|(_, b)| b.as_slice());
+        ducker.process(key, &mut buf, CHANNELS);
+        rendered[i].1 = buf;
+    }
+    for (_, buf) in &rendered {
+        for (b, t) in bus.iter_mut().zip(buf) {
+            *b += *t;
         }
     }
     Ok(())
@@ -551,6 +589,71 @@ mod tests {
         }];
         let got = render(&seq, 48_100);
         assert!((got[0] - 480_050.0).abs() < 0.5 && (got[1] - got[0] - 0.5).abs() < 1e-3);
+    }
+
+    /// Constant-level media: the id's low bits pick the level.
+    struct Level;
+    impl SampleSource for Level {
+        fn read(&mut self, m: MediaId, _: Rational, n: usize, out: &mut Vec<f32>) -> Result<u16> {
+            let v = if m.0.is_multiple_of(2) { 0.5 } else { 0.25 };
+            out.clear();
+            out.resize(n, v);
+            Ok(1)
+        }
+    }
+
+    #[test]
+    fn music_ducks_under_the_voice_track() {
+        let mut ids = IdGen::new(11);
+        let mut seq = Sequence::new(ids.fresh(), "d", FrameRate::FPS_25, 16, 9);
+        let mut voice = Track::new(ids.fresh(), TrackKind::Audio);
+        let mut music = Track::new(ids.fresh(), TrackKind::Audio);
+        // Voice (0.25) from 1 s to 2 s; music (0.5) from 0 to 4 s.
+        voice.clips.push(Clip::new(
+            ids.fresh(),
+            ClipSource::Media(MediaId(1)),
+            Rational::from_int(1),
+            Rational::from_int(1),
+            Rational::ZERO,
+        ));
+        music.clips.push(Clip::new(
+            ids.fresh(),
+            ClipSource::Media(MediaId(2)),
+            Rational::ZERO,
+            Rational::from_int(4),
+            Rational::ZERO,
+        ));
+        music.duck = Some(debut_project::Duck::under(voice.id));
+        seq.tracks.push(voice);
+        seq.tracks.push(music);
+        let c = std::f32::consts::FRAC_1_SQRT_2;
+        let mut inserts = Inserts::default();
+        inserts.sync(&seq, 48_000);
+        // Render 0..4 s in 1024-frame blocks and sample the left channel.
+        let mut left = Vec::new();
+        let mut pos = 0i64;
+        while pos < 4 * 48_000 {
+            let mut bus = vec![0.0; 1024 * CHANNELS];
+            render_span(&seq, &mut inserts, &mut Level, pos, 1024, 48_000, &mut bus).unwrap();
+            left.extend(bus.iter().step_by(2).map(|s| s / c));
+            pos += 1024;
+        }
+        let at = |t: f64| left[(t * 48_000.0) as usize];
+        assert!((at(0.5) - 0.5).abs() < 1e-4, "music alone at full level");
+        // Late in the voice: voice + music 12 dB down.
+        let ducked = 0.25 + 0.5 * 10f32.powf(-12.0 / 20.0);
+        assert!((at(1.9) - ducked).abs() < 0.01, "{}", at(1.9));
+        assert!((at(3.9) - 0.5).abs() < 0.01, "recovered: {}", at(3.9));
+        // Muting the voice removes the key: nothing ducks.
+        seq.tracks[0].mix.mute = true;
+        let mut inserts = Inserts::default();
+        inserts.sync(&seq, 48_000);
+        let mut bus = vec![0.0; 1024 * CHANNELS];
+        for p in (0..2 * 48_000).step_by(1024) {
+            bus.fill(0.0);
+            render_span(&seq, &mut inserts, &mut Level, p, 1024, 48_000, &mut bus).unwrap();
+        }
+        assert!((bus[0] / c - 0.5).abs() < 1e-4);
     }
 
     /// Ramp media plus one nested sequence.

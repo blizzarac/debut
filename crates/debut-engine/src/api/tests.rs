@@ -1121,6 +1121,56 @@ fn speed_changes_retime_picture_and_undo() {
     assert_eq!((c.duration, c.speed, c.ramp.len()), (2.0, 1.0, 0));
 }
 
+/// Auto-ducking settings on a music track keyed by dialogue (AUD-08).
+#[test]
+fn music_track_ducks_under_dialogue() {
+    let Fx { mut s, v, a, .. } = fixture("music_track_ducks_under_dialogue");
+    let music = {
+        let t = Track::new(s.ids.fresh(), TrackKind::Audio);
+        let id = t.id;
+        let seq_id = s.first_sequence().unwrap().id;
+        s.exec(Command::AddTrack {
+            sequence: seq_id,
+            track: t,
+            index: None,
+        })
+        .unwrap();
+        id_str(id.0)
+    };
+    let duck = |key: &str| DuckDto {
+        key: TrackId(parse_id(key).unwrap()),
+        amount_db: -15.0,
+        threshold_db: -40.0,
+        attack_ms: 80.0,
+        release_ms: 500.0,
+    };
+    s.set_track_duck(&music, Some(duck(&a))).unwrap();
+    let dto = sequence_dto(s.first_sequence().unwrap());
+    let t = dto.tracks.iter().find(|t| t.id == music).unwrap();
+    assert_eq!(t.duck, Some(duck(&a)));
+    // The DTO speaks string ids like every other id.
+    let json = serde_json::to_value(t.duck.unwrap()).unwrap();
+    assert_eq!(json["key"], serde_json::Value::String(a.clone()));
+    // Not under itself, not under video, not out of range.
+    assert!(s.set_track_duck(&music, Some(duck(&music))).is_err());
+    assert!(s.set_track_duck(&music, Some(duck(&v))).is_err());
+    let loud = DuckDto {
+        amount_db: 6.0,
+        ..duck(&a)
+    };
+    assert!(s.set_track_duck(&music, Some(loud)).is_err());
+    s.set_track_duck(&music, None).unwrap();
+    s.undo().unwrap();
+    let dto = sequence_dto(s.first_sequence().unwrap());
+    assert!(dto
+        .tracks
+        .iter()
+        .find(|t| t.id == music)
+        .unwrap()
+        .duck
+        .is_some());
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

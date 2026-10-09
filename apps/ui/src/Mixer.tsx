@@ -1,4 +1,4 @@
-import type { InsertKind, MixerApi, SequenceInfo, TrackInfo } from "./engine";
+import type { Duck, InsertKind, MixerApi, SequenceInfo, TrackInfo } from "./engine";
 
 const INSERTS: [InsertKind, string][] = [
   ["eq_lowcut", "Low cut"],
@@ -10,7 +10,10 @@ const INSERTS: [InsertKind, string][] = [
   ["reverb", "Reverb"],
 ];
 
-/** One strip per audio track: fader, pan, mute/solo, inserts (AUD-02, AUD-05). */
+const DUCK_DEFAULTS = { amount_db: -12, threshold_db: -40, attack_ms: 80, release_ms: 500 };
+
+/** One strip per audio track: fader, pan, mute/solo, inserts, and ducking
+ * under another track (AUD-02, AUD-05, AUD-08). */
 export function Mixer({ seq, mixer, onChanged }: { seq: SequenceInfo; mixer: MixerApi; onChanged: () => void }) {
   const tracks = seq.tracks.filter((t) => t.kind === "audio");
   const act = (p: Promise<void>) => p.then(onChanged).catch((e) => console.warn("mixer rejected", e));
@@ -41,6 +44,44 @@ export function Mixer({ seq, mixer, onChanged }: { seq: SequenceInfo; mixer: Mix
           ))}
         </select>
       </div>
+      {mixer.setTrackDuck && (
+        <div style={{ marginBottom: 4 }} title="Lower this track while the chosen track (e.g. dialogue) plays">
+          <label>
+            duck under{" "}
+            <select
+              value={t.duck?.key ?? ""}
+              onChange={(e) => {
+                const key = e.target.value;
+                const duck: Duck | null = key ? { ...DUCK_DEFAULTS, ...(t.duck ?? {}), key } : null;
+                act(mixer.setTrackDuck!(t.id, duck));
+              }}
+            >
+              <option value="">—</option>
+              {tracks.map((o, i) =>
+                o.id === t.id ? null : (
+                  <option key={o.id} value={o.id}>
+                    A{i + 1}
+                  </option>
+                ),
+              )}
+            </select>
+          </label>
+          {t.duck && (
+            <label style={{ display: "block" }}>
+              by <code>{t.duck.amount_db.toFixed(0)} dB</code>
+              <input
+                type="range"
+                min={-40}
+                max={-1}
+                step={1}
+                defaultValue={t.duck.amount_db}
+                style={{ width: "100%" }}
+                onMouseUp={(e) => act(mixer.setTrackDuck!(t.id, { ...t.duck!, amount_db: Number((e.target as HTMLInputElement).value) }))}
+              />
+            </label>
+          )}
+        </div>
+      )}
       <ol style={{ margin: 0, paddingLeft: 16 }}>
         {t.inserts.map((name, i) => (
           <li key={i}>

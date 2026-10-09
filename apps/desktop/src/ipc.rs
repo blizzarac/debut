@@ -148,6 +148,15 @@ pub fn remove_insert(state: State<'_, Shared>, track: String, index: usize) -> R
 }
 
 #[tauri::command]
+pub fn set_track_duck(
+    state: State<'_, Shared>,
+    track: String,
+    duck: Option<DuckDto>,
+) -> Result<(), String> {
+    lock(&state).set_track_duck(&track, duck)
+}
+
+#[tauri::command]
 pub fn export_presets(state: State<'_, Shared>) -> Vec<PresetDto> {
     lock(&state).export_presets()
 }

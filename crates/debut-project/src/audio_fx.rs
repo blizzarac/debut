@@ -1,7 +1,34 @@
 //! Audio insert descriptions stored per track (AUD-05). `debut-audio` builds the
 //! processors from these.
 
+use debut_core::TrackId;
 use serde::{Deserialize, Serialize};
+
+/// Auto-ducking (AUD-08): lower this track by `amount_db` while the `key`
+/// track (typically dialogue) is above `threshold_db` after its fader. The
+/// gain falls over `attack_ms`, holds through short pauses and recovers over
+/// `release_ms`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Duck {
+    pub key: TrackId,
+    pub amount_db: f32,
+    pub threshold_db: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
+}
+
+impl Duck {
+    /// Music under dialogue: -12 dB, keyed above -40 dBFS, 80 ms down, 500 ms up.
+    pub fn under(key: TrackId) -> Self {
+        Self {
+            key,
+            amount_db: -12.0,
+            threshold_db: -40.0,
+            attack_ms: 80.0,
+            release_ms: 500.0,
+        }
+    }
+}
 
 /// What the project stores per track; the renderer builds processors from it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

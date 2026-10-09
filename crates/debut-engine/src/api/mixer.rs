@@ -1,4 +1,4 @@
-//! Track mixer strips and insert effects (AUD-02, AUD-05).
+//! Track mixer strips, insert effects and auto-ducking (AUD-02, AUD-05, AUD-08).
 
 use super::*;
 
@@ -64,6 +64,47 @@ pub(crate) fn insert_preset(kind: &str) -> Option<AudioEffect> {
     })
 }
 
+/// Auto-ducking settings as the UI sees them (AUD-08); `key` is the track id
+/// whose level ducks this one.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
+pub struct DuckDto {
+    #[serde(with = "id_serde")]
+    pub key: TrackId,
+    pub amount_db: f32,
+    pub threshold_db: f32,
+    pub attack_ms: f32,
+    pub release_ms: f32,
+}
+
+/// Track ids travel as decimal strings, like every other id in the DTOs.
+mod id_serde {
+    use debut_core::TrackId;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(id: &TrackId, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&super::id_str(id.0))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<TrackId, D::Error> {
+        let text = String::deserialize(d)?;
+        super::parse_id(&text)
+            .map(TrackId)
+            .map_err(serde::de::Error::custom)
+    }
+}
+
+impl From<Duck> for DuckDto {
+    fn from(d: Duck) -> Self {
+        Self {
+            key: d.key,
+            amount_db: d.amount_db,
+            threshold_db: d.threshold_db,
+            attack_ms: d.attack_ms,
+            release_ms: d.release_ms,
+        }
+    }
+}
+
 impl Session {
     pub(crate) fn track_target(&self, track: &str) -> Result<Target, String> {
         let seq = self.first_sequence()?;
@@ -78,6 +119,37 @@ impl Session {
     pub fn set_track_mix(&mut self, track: &str, mix: TrackMix) -> Result<(), String> {
         let target = self.track_target(track)?;
         self.exec(Command::SetTrackMix { target, mix })
+    }
+
+    /// Duck `track` under another audio track, or stop ducking it (`None`).
+    pub fn set_track_duck(&mut self, track: &str, duck: Option<DuckDto>) -> Result<(), String> {
+        let target = self.track_target(track)?;
+        let duck = match duck {
+            None => None,
+            Some(d) => {
+                let seq = self.first_sequence()?;
+                let key = seq.track(d.key).ok_or("key track not found")?;
+                if key.kind != TrackKind::Audio || key.id == target.track {
+                    return Err("duck under another audio track".into());
+                }
+                let ok = |v: f32, lo: f32, hi: f32| v.is_finite() && (lo..=hi).contains(&v);
+                if !(ok(d.amount_db, -60.0, 0.0)
+                    && ok(d.threshold_db, -80.0, 0.0)
+                    && ok(d.attack_ms, 1.0, 5000.0)
+                    && ok(d.release_ms, 1.0, 10_000.0))
+                {
+                    return Err("ducking settings out of range".into());
+                }
+                Some(Duck {
+                    key: d.key,
+                    amount_db: d.amount_db,
+                    threshold_db: d.threshold_db,
+                    attack_ms: d.attack_ms,
+                    release_ms: d.release_ms,
+                })
+            }
+        };
+        self.exec(Command::SetTrackDuck { target, duck })
     }
 
     pub(crate) fn track_inserts(&self, track: &str) -> Result<(Target, Vec<AudioEffect>), String> {

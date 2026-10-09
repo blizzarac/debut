@@ -15,7 +15,7 @@ pub mod schema;
 pub mod sequence;
 pub mod title;
 
-pub use audio_fx::{AudioEffect, EqBand, EqKind};
+pub use audio_fx::{AudioEffect, Duck, EqBand, EqKind};
 pub use bin::{Bin, BinKind, SmartRule};
 pub use caption::{Caption, CaptionPosition, CaptionSettings};
 pub use effect::{Effect, GradeFx, KeyFx, MaskFx, MaskShape, Param, TransformFx};

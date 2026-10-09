@@ -18,6 +18,7 @@ import type {
   EffectInfo,
   EffectsApi,
   Engine,
+  Duck,
   ExportApi,
   InterchangeFormat,
   ExportPreset,
@@ -172,6 +173,9 @@ class TauriMixer implements MixerApi {
   }
   addInsert(track: string, kind: InsertKind) {
     return invoke<void>("add_insert", { track, kind });
+  }
+  setTrackDuck(track: string, duck: Duck | null) {
+    return invoke<void>("set_track_duck", { track, duck });
   }
   removeInsert(track: string, index: number) {
     return invoke<void>("remove_insert", { track, index });

@@ -61,6 +61,7 @@ pub fn run() {
             ipc::set_track_mix,
             ipc::add_insert,
             ipc::remove_insert,
+            ipc::set_track_duck,
             ipc::export_presets,
             ipc::export_interchange,
             ipc::codec_capabilities,

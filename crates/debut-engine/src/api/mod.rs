@@ -15,9 +15,9 @@ use debut_platform::audio_out::AudioOut;
 use debut_platform::{AudioEncodeSettings, EncodeSettings, FileStore, Platform};
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
-    schema, AudioEffect, Bin, Caption, CaptionSettings, Clip, ClipSource, Effect, EqBand, EqKind,
-    GradeFx, KeyFx, Marker, MaskFx, MaskShape, Param, Project, SavedTitleTemplate, Sequence,
-    SpeedKey, Title, TitleStyle, Track, TrackKind, TrackMix, TransformFx, Transition,
+    schema, AudioEffect, Bin, Caption, CaptionSettings, Clip, ClipSource, Duck, Effect, EqBand,
+    EqKind, GradeFx, KeyFx, Marker, MaskFx, MaskShape, Param, Project, SavedTitleTemplate,
+    Sequence, SpeedKey, Title, TitleStyle, Track, TrackKind, TrackMix, TransformFx, Transition,
     TransitionKind,
 };
 use debut_render::AnyBackend;
@@ -36,6 +36,7 @@ mod timeline;
 mod titles;
 mod waveforms;
 
+pub use self::mixer::DuckDto;
 use self::mixer::*;
 use self::waveforms::WaveformCache;
 pub use self::{

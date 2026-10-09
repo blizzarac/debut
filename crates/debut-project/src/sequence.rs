@@ -91,6 +91,9 @@ pub struct Track {
     /// Mixer strip state (AUD-02).
     #[serde(default)]
     pub mix: TrackMix,
+    /// Auto-ducking under another track (AUD-08). Ignored on video tracks.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duck: Option<crate::audio_fx::Duck>,
 }
 
 /// Per-track mixer settings (AUD-02, AUD-03).
@@ -123,6 +126,7 @@ impl Track {
             clips: Vec::new(),
             audio_effects: Vec::new(),
             mix: TrackMix::default(),
+            duck: None,
         }
     }
 
