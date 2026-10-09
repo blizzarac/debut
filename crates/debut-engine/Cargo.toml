@@ -19,3 +19,6 @@ debut-graphics.workspace = true
 debut-export.workspace = true
 debut-collab.workspace = true
 thiserror.workspace = true
+
+[dev-dependencies]
+debut-platform-native.workspace = true

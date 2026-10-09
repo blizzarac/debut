@@ -14,7 +14,7 @@ pub mod plugin_host;
 pub mod threads;
 
 pub use audio_out::AudioOut;
-pub use codec::{Decoder, Encoder};
+pub use codec::{AudioBlock, AudioInfo, Decoder, Encoder, VideoFrame, VideoInfo};
 pub use display::Display;
 pub use file_store::FileStore;
 pub use plugin_host::PluginHost;
@@ -42,4 +42,7 @@ pub trait Platform: Send + Sync + 'static {
     type Display: Display;
 
     fn capabilities(&self) -> Capabilities;
+
+    /// Open a media file for decoding.
+    fn open_decoder(&self, path: &str) -> debut_core::Result<Self::Decoder>;
 }
