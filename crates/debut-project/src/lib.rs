@@ -5,11 +5,13 @@
 //! The on-disk schema is versioned; `schema::migrate` upgrades any older version.
 
 pub mod bin;
+pub mod effect;
 pub mod marker;
 pub mod media_ref;
 pub mod schema;
 pub mod sequence;
 
+pub use effect::{Effect, GradeFx, Param, TransformFx};
 pub use sequence::{Clip, ClipSource, Sequence, Track, TrackKind};
 
 use debut_core::{ProjectId, SequenceId};

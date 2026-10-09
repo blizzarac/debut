@@ -1,6 +1,6 @@
 //! Keyframed parameters (FX-01): hold, linear, eased and cubic-bezier segments.
 
-use debut_core::Rational;
+use crate::Rational;
 use serde::{Deserialize, Serialize};
 
 /// Interpolation of the segment that *leaves* a keyframe.

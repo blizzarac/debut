@@ -16,7 +16,6 @@ pub mod compose;
 pub mod cpu;
 pub mod gpu;
 pub mod graph;
-pub mod keyframe;
 pub mod lut;
 
 pub mod nodes; // further node kinds: masks, keys, LUTs, color wheels (pending)
@@ -69,6 +68,6 @@ impl AnyBackend {
     }
 }
 pub use color::{ColorTransform, Grade, Transfer};
+pub use debut_core::keyframe::{self, Curve, Interp, Keyframe};
 pub use graph::{Graph, LutRef, Node, NodeId};
-pub use keyframe::{Curve, Interp, Keyframe};
 pub use lut::Lut3d;

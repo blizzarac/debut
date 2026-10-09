@@ -6,8 +6,10 @@
 pub mod color;
 pub mod error;
 pub mod id;
+pub mod keyframe;
 pub mod time;
 
 pub use error::{Error, Result};
 pub use id::{ClipId, IdGen, MediaId, ProjectId, SequenceId, TrackId};
+pub use keyframe::{Curve, Interp, Keyframe};
 pub use time::{FrameRate, Rational, Timecode};

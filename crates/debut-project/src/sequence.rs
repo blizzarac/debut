@@ -2,6 +2,8 @@
 
 use debut_core::id::{ClipId, MediaId, SequenceId, TrackId};
 use debut_core::{FrameRate, Rational};
+
+use crate::effect::{Effect, Param};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -118,6 +120,9 @@ pub struct Clip {
     pub source_in: Rational,
     /// 1 = normal speed; ramps live in the effect stack (TL-09).
     pub speed: Rational,
+    /// Applied in order after the input color transform (FX-01, FX-02).
+    #[serde(default)]
+    pub effects: Vec<crate::effect::Effect>,
 }
 
 impl Clip {
@@ -135,6 +140,7 @@ impl Clip {
             duration,
             source_in,
             speed: Rational::ONE,
+            effects: Vec::new(),
         }
     }
 
@@ -176,10 +182,25 @@ impl Clip {
         tail
     }
 
+    /// Evaluate a parameter of the `effect`-th effect at sequence time `t`.
+    pub fn param_at(&self, effect: usize, p: Param, t: Rational) -> Option<f64> {
+        self.effects.get(effect)?.value(p, t - self.timeline_in)
+    }
+
+    /// First effect of a kind, if any.
+    pub fn effect_index(&self, kind: &str) -> Option<usize> {
+        self.effects.iter().position(|e| e.kind() == kind)
+    }
+
+    pub fn effect(&self, kind: &str) -> Option<&Effect> {
+        self.effect_index(kind).map(|i| &self.effects[i])
+    }
+
     /// True when `next` is the uninterrupted continuation of `self` (same source,
     /// same speed, source and timeline both contiguous), so the two can be joined.
     pub fn is_continuous_with(&self, next: &Clip) -> bool {
         self.source == next.source
+            && self.effects == next.effects
             && self.speed == next.speed
             && self.timeline_out() == next.timeline_in
             && self.source_out() == next.source_in

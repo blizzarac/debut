@@ -9,9 +9,10 @@
 //!
 //! Insert and extract are groups built by the constructors at the bottom.
 
+use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
-use debut_project::{Clip, Project, Sequence, Track};
+use debut_project::{Clip, Effect, Param, Project, Sequence, Track};
 use serde::{Deserialize, Serialize};
 
 /// Which track a primitive operates on.
@@ -76,6 +77,35 @@ pub enum Command {
         target: Target,
         clip: ClipId,
         delta: Rational,
+    },
+    // ---- effects (FX-01, FX-02) --------------------------------------------------
+    AddEffect {
+        target: Target,
+        clip: ClipId,
+        effect: Effect,
+        index: Option<usize>,
+    },
+    RemoveEffect {
+        target: Target,
+        clip: ClipId,
+        index: usize,
+    },
+    /// Set a parameter at a keyframe (`at`, clip-local) or as a constant.
+    SetParam {
+        target: Target,
+        clip: ClipId,
+        effect: usize,
+        param: Param,
+        at: Option<Rational>,
+        value: f64,
+    },
+    /// Replace a whole curve (the inverse of `SetParam`).
+    SetCurve {
+        target: Target,
+        clip: ClipId,
+        effect: usize,
+        param: Param,
+        curve: Curve,
     },
     // ---- project structure (MED-07, TL-01) ----------------------------------
     AddMedia(MediaRef),
@@ -261,6 +291,65 @@ impl Command {
                 c.timeline_in += *delta;
                 Ok(())
             }),
+            Command::AddEffect {
+                target,
+                clip,
+                effect,
+                index,
+            } => edit_clip(project, *target, *clip, |c| {
+                let at = index.unwrap_or(c.effects.len()).min(c.effects.len());
+                c.effects.insert(at, effect.clone());
+                Ok(())
+            }),
+            Command::RemoveEffect {
+                target,
+                clip,
+                index,
+            } => edit_clip(project, *target, *clip, |c| {
+                if *index >= c.effects.len() {
+                    return Err(Error::NotFound(format!("effect {index}")));
+                }
+                c.effects.remove(*index);
+                Ok(())
+            }),
+            Command::SetParam {
+                target,
+                clip,
+                effect,
+                param,
+                at,
+                value,
+            } => edit_clip(project, *target, *clip, |c| {
+                let e = c
+                    .effects
+                    .get_mut(*effect)
+                    .ok_or_else(|| Error::NotFound(format!("effect {effect}")))?;
+                if !e.set(*param, *at, *value) {
+                    return Err(Error::InvalidArgument(format!(
+                        "{param:?} is not a parameter of {}",
+                        e.kind()
+                    )));
+                }
+                Ok(())
+            }),
+            Command::SetCurve {
+                target,
+                clip,
+                effect,
+                param,
+                curve,
+            } => edit_clip(project, *target, *clip, |c| {
+                let e = c
+                    .effects
+                    .get_mut(*effect)
+                    .ok_or_else(|| Error::NotFound(format!("effect {effect}")))?;
+                let kind = e.kind();
+                let slot = e.curve_mut(*param).ok_or_else(|| {
+                    Error::InvalidArgument(format!("{param:?} is not a parameter of {kind}"))
+                })?;
+                *slot = curve.clone();
+                Ok(())
+            }),
             Command::AddMedia(m) => {
                 if project.media.iter().any(|x| x.id == m.id) {
                     return Err(Error::InvalidArgument("media id already exists".into()));
@@ -424,6 +513,66 @@ impl Command {
                 clip: *clip,
                 delta: -*delta,
             }),
+            Command::AddEffect {
+                target,
+                clip,
+                index,
+                ..
+            } => {
+                let c = find_clip(project, *target, *clip)?;
+                Ok(Command::RemoveEffect {
+                    target: *target,
+                    clip: *clip,
+                    index: index.unwrap_or(c.effects.len()).min(c.effects.len()),
+                })
+            }
+            Command::RemoveEffect {
+                target,
+                clip,
+                index,
+            } => {
+                let c = find_clip(project, *target, *clip)?;
+                let e = c
+                    .effects
+                    .get(*index)
+                    .ok_or_else(|| Error::NotFound(format!("effect {index}")))?;
+                Ok(Command::AddEffect {
+                    target: *target,
+                    clip: *clip,
+                    effect: e.clone(),
+                    index: Some(*index),
+                })
+            }
+            Command::SetParam {
+                target,
+                clip,
+                effect,
+                param,
+                ..
+            }
+            | Command::SetCurve {
+                target,
+                clip,
+                effect,
+                param,
+                ..
+            } => {
+                let c = find_clip(project, *target, *clip)?;
+                let e = c
+                    .effects
+                    .get(*effect)
+                    .ok_or_else(|| Error::NotFound(format!("effect {effect}")))?;
+                let curve = e.curve(*param).ok_or_else(|| {
+                    Error::InvalidArgument(format!("{param:?} is not a parameter of {}", e.kind()))
+                })?;
+                Ok(Command::SetCurve {
+                    target: *target,
+                    clip: *clip,
+                    effect: *effect,
+                    param: *param,
+                    curve: curve.clone(),
+                })
+            }
             Command::AddMedia(m) => Ok(Command::RemoveMedia(m.id)),
             Command::RemoveMedia(id) => {
                 let m = project
@@ -556,6 +705,12 @@ impl Command {
             },
         ])
     }
+}
+
+fn find_clip(project: &Project, target: Target, clip: ClipId) -> Result<&Clip> {
+    track(project, target)?
+        .clip(clip)
+        .ok_or_else(|| Error::NotFound(format!("clip {clip:?}")))
 }
 
 /// Apply `f` to one clip, then re-check the track's layout invariants.
@@ -846,6 +1001,87 @@ mod tests {
             Command::AddMedia(media).apply(&mut fx.project).is_err(),
             "duplicate id"
         );
+        for inv in inverses.iter().rev() {
+            inv.apply(&mut fx.project).unwrap();
+        }
+        assert_eq!(fx.project, before);
+    }
+
+    #[test]
+    fn effect_commands_round_trip_through_undo() {
+        use debut_project::{GradeFx, TransformFx};
+        let mut fx = fixture();
+        let before = fx.project.clone();
+        let a = track(&fx.project, fx.target).unwrap().clips[0].id;
+        let t = fx.target;
+        let cmds = [
+            Command::AddEffect {
+                target: t,
+                clip: a,
+                effect: Effect::Transform(TransformFx::default()),
+                index: None,
+            },
+            Command::AddEffect {
+                target: t,
+                clip: a,
+                effect: Effect::Grade(GradeFx::default()),
+                index: Some(0),
+            },
+            Command::SetParam {
+                target: t,
+                clip: a,
+                effect: 1,
+                param: Param::Opacity,
+                at: None,
+                value: 0.5,
+            },
+            Command::SetParam {
+                target: t,
+                clip: a,
+                effect: 1,
+                param: Param::Opacity,
+                at: Some(sec(2)),
+                value: 1.0,
+            },
+            Command::SetParam {
+                target: t,
+                clip: a,
+                effect: 0,
+                param: Param::Exposure,
+                at: Some(sec(0)),
+                value: -1.0,
+            },
+        ];
+        let mut inverses = Vec::new();
+        for c in &cmds {
+            inverses.push(c.invert(&fx.project).unwrap());
+            c.apply(&mut fx.project).unwrap();
+        }
+        let clip = track(&fx.project, fx.target).unwrap().clips[0].clone();
+        assert_eq!(clip.effects[0].kind(), "grade");
+        assert_eq!(
+            clip.param_at(1, Param::Opacity, sec(1)),
+            Some(0.75),
+            "linear between the constant key and t=2"
+        );
+        assert_eq!(clip.param_at(0, Param::Exposure, sec(5)), Some(-1.0));
+        assert!(Command::SetParam {
+            target: t,
+            clip: a,
+            effect: 0,
+            param: Param::Scale,
+            at: None,
+            value: 2.0
+        }
+        .apply(&mut fx.project)
+        .is_err());
+        assert!(Command::RemoveEffect {
+            target: t,
+            clip: a,
+            index: 5
+        }
+        .apply(&mut fx.project)
+        .is_err());
         for inv in inverses.iter().rev() {
             inv.apply(&mut fx.project).unwrap();
         }
