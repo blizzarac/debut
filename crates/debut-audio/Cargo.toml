@@ -10,3 +10,5 @@ repository.workspace = true
 debut-core.workspace = true
 debut-platform.workspace = true
 thiserror.workspace = true
+debut-project.workspace = true
+serde.workspace = true
