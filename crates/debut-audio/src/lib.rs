@@ -6,6 +6,7 @@ pub mod clock; // PB-02 sample position -> timeline time
 pub mod engine; // renderer (producer) + RtSink (real-time consumer)
 pub mod graph; // AUD-02, AUD-03 gain, pan, mute, solo, stereo bus
 pub mod ring; // SPSC lock-free sample ring
+pub mod sync; // MED-11 audio alignment for multicam
 
 pub mod ducking; // AUD-08 (pending)
 pub mod effects; // AUD-05 EQ, compressor, limiter, de-esser, gate, reverb (pending)
@@ -19,3 +20,4 @@ pub use engine::{
 };
 pub use graph::TrackMix;
 pub use loudness::{normalize_gain, LoudnessMeter};
+pub use sync::{align, Alignment};

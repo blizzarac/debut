@@ -173,15 +173,8 @@ fn clip_layer(
     // is scaled to fill the frame, a title is authored in sequence pixels.
     let (mut src, space, (sw, sh), fit) = match &clip.source {
         ClipSource::Media(_) | ClipSource::Multicam { .. } => {
-            let media = match &clip.source {
-                ClipSource::Media(m) => *m,
-                ClipSource::Multicam { angles, active } => *angles.get(*active)?,
-                _ => unreachable!(),
-            };
-            let src = g.add(Node::Source {
-                media,
-                source_time: clip.source_at(t),
-            });
+            let (media, source_time) = clip.media_at(t)?;
+            let src = g.add(Node::Source { media, source_time });
             let (sw, sh) = info.dimensions(media);
             let fit = (w as f32 / sw as f32).min(h as f32 / sh as f32);
             (src, info.color_space(media), (sw, sh), fit)

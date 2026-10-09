@@ -275,6 +275,25 @@ impl Clip {
         self.source_in + (t - self.timeline_in) * self.speed
     }
 
+    /// The media that plays at `t` and its source time, with the active
+    /// multicam angle's offset applied. `None` for titles, nested sequences and
+    /// multicam clips without a valid active angle.
+    pub fn media_at(&self, t: Rational) -> Option<(MediaId, Rational)> {
+        match &self.source {
+            ClipSource::Media(m) => Some((*m, self.source_at(t))),
+            ClipSource::Multicam {
+                angles,
+                active,
+                offsets,
+            } => {
+                let m = *angles.get(*active)?;
+                let off = offsets.get(*active).copied().unwrap_or(Rational::ZERO);
+                Some((m, self.source_at(t) + off))
+            }
+            _ => None,
+        }
+    }
+
     pub fn source_out(&self) -> Rational {
         self.source_at(self.timeline_out())
     }
@@ -355,9 +374,13 @@ pub enum ClipSource {
     /// Nested sequence / compound clip (TL-07).
     Sequence(SequenceId),
     /// Multicam clip; `active` is the currently switched angle (MED-11, TL-08).
+    /// `offsets[i]` is added to the source time of angle `i` so all angles line
+    /// up (from audio sync or slate); missing entries mean zero.
     Multicam {
         angles: Vec<MediaId>,
         active: usize,
+        #[serde(default)]
+        offsets: Vec<Rational>,
     },
     /// Generated text clip (GFX-01); rendered by the engine's title cache.
     Title(crate::title::Title),

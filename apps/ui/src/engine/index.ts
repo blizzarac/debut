@@ -51,6 +51,11 @@ export interface SmartRule {
   value: string;
 }
 
+export interface MulticamSync {
+  offsets: number[];
+  confidences: number[];
+}
+
 export interface BinInfo {
   id: string;
   name: string;
@@ -100,6 +105,8 @@ export interface ClipInfo {
   /** Multicam clips: angle count and the active angle. */
   angles: number | null;
   angle: number | null;
+  /** Per-angle head offsets in seconds (audio sync). */
+  angle_offsets: number[] | null;
   timeline_in: number;
   duration: number;
   source_in: number;
@@ -332,8 +339,9 @@ export interface MediaApi {
   addTitle(at: number, text: string, template?: string): Promise<string>;
   titleTemplates(): Promise<TitleTemplate[]>;
   setTitle(track: string, clip: string, title: TitleInfo): Promise<void>;
-  /** Inserts a multicam clip of two or more media at `at` (shortest angle sets the length). */
-  addMulticam(at: number, media: string[]): Promise<void>;
+  /** Inserts a multicam clip of two or more media at `at` (shortest angle sets the length);
+   * with `sync`, angles are aligned to the first by audio. */
+  addMulticam(at: number, media: string[], sync?: boolean): Promise<MulticamSync>;
   /** Switch a multicam clip's angle; with `cut`, blade at the playhead first and switch the tail. Returns the switched clip id. */
   switchAngle(track: string, clip: string, angle: number, cut: boolean): Promise<string>;
   edit(op: EditOp): Promise<void>;

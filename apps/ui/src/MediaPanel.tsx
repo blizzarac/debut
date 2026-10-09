@@ -17,7 +17,7 @@ export function MediaPanel({
   bins: BinInfo[];
   onChanged: () => void;
   onInsert: (m: MediaInfo) => void;
-  onMulticam: (ids: string[]) => void;
+  onMulticam: (ids: string[], sync: boolean) => void;
   onStatus: (s: string) => void;
 }) {
   const [path, setPath] = useState("");
@@ -186,9 +186,14 @@ export function MediaPanel({
           Smart
         </button>
         {shown.length >= 2 && (
-          <button onClick={() => onMulticam(shown.map((m) => m.id))} title="Insert the listed media as one multicam clip at the playhead; keys 1–9 switch angles">
-            Multicam ({shown.length})
-          </button>
+          <>
+            <button onClick={() => onMulticam(shown.map((m) => m.id), false)} title="Insert the listed media as one multicam clip at the playhead; keys 1–9 switch angles">
+              Multicam ({shown.length})
+            </button>
+            <button onClick={() => onMulticam(shown.map((m) => m.id), true)} title="Same, aligning the angles to the first one by their audio">
+              Sync by audio
+            </button>
+          </>
         )}
       </div>
     </div>

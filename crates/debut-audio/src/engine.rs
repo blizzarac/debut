@@ -303,9 +303,8 @@ fn render_span_depth(
             let t = Rational::new(a, sr);
             let off = (a - start) as usize;
             let ch = match &clip.source {
-                ClipSource::Media(m) => source.read(*m, clip.source_at(t), n, &mut clip_buf)?,
-                ClipSource::Multicam { angles, active } => match angles.get(*active) {
-                    Some(m) => source.read(*m, clip.source_at(t), n, &mut clip_buf)?,
+                ClipSource::Media(_) | ClipSource::Multicam { .. } => match clip.media_at(t) {
+                    Some((m, st)) => source.read(m, st, n, &mut clip_buf)?,
                     None => continue,
                 },
                 ClipSource::Sequence(id) => {

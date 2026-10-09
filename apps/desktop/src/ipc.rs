@@ -523,6 +523,8 @@ pub struct ClipDto {
     /// Multicam clips: number of angles and the active one (MED-11, TL-08).
     pub angles: Option<usize>,
     pub angle: Option<usize>,
+    /// Per-angle head offsets in seconds, from audio sync.
+    pub angle_offsets: Option<Vec<f64>>,
     pub timeline_in: f64,
     pub duration: f64,
     pub source_in: f64,
@@ -596,6 +598,12 @@ fn sequence_dto(seq: &Sequence) -> SequenceDto {
                         },
                         angle: match &c.source {
                             ClipSource::Multicam { active, .. } => Some(*active),
+                            _ => None,
+                        },
+                        angle_offsets: match &c.source {
+                            ClipSource::Multicam { offsets, .. } => {
+                                Some(offsets.iter().map(|o| secs(*o)).collect())
+                            }
                             _ => None,
                         },
                         timeline_in: secs(c.timeline_in),
@@ -887,6 +895,43 @@ impl Session {
     /// the first video track and, when every angle has audio, on the first
     /// audio track, at `at` seconds. Its length is the shortest angle (MED-11).
     pub fn add_multicam(&mut self, at: f64, media: Vec<String>) -> Result<(), String> {
+        self.add_multicam_synced(at, media, false).map(|_| ())
+    }
+
+    /// Mono audio of the first `seconds` of `media` at 48 kHz, for sync.
+    fn audio_head(&self, media: MediaId, seconds: f64) -> Result<Vec<f32>, String> {
+        let path = self
+            .project()
+            .and_then(|p| p.media.iter().find(|m| m.id == media))
+            .map(|m| m.path.clone())
+            .ok_or("unknown media")?;
+        let dec = FfmpegDecoder::open(&path).map_err(|e| e.to_string())?;
+        if dec.audio_info().is_none() {
+            return Err(format!("{path} has no audio to sync on"));
+        }
+        let sr = 48_000u32;
+        let mut cache = debut_engine::SampleCache::new(sr);
+        cache.add(media, Box::new(dec)).map_err(|e| e.to_string())?;
+        let frames = (seconds * sr as f64) as usize;
+        let mut buf = Vec::new();
+        let ch =
+            debut_audio::SampleSource::read(&mut cache, media, Rational::ZERO, frames, &mut buf)
+                .map_err(|e| e.to_string())? as usize;
+        Ok(buf
+            .chunks(ch.max(1))
+            .map(|f| f.iter().sum::<f32>() / ch.max(1) as f32)
+            .collect())
+    }
+
+    /// `add_multicam`, optionally aligning every angle to the first by audio
+    /// (MED-11). Returns the per-angle offsets in seconds and the sync
+    /// confidences (empty when not syncing).
+    pub fn add_multicam_synced(
+        &mut self,
+        at: f64,
+        media: Vec<String>,
+        sync: bool,
+    ) -> Result<MulticamSyncDto, String> {
         if media.len() < 2 {
             return Err("a multicam clip needs at least two angles".into());
         }
@@ -911,8 +956,52 @@ impl Session {
             duration = duration.min(p.2);
             all_audio &= p.3;
         }
+        // Audio sync: offsets relative to angle 0, each angle's usable length
+        // shrinks by what it must skip at the head.
+        let mut offsets = vec![Rational::ZERO; angles.len()];
+        let mut confidences = Vec::new();
+        if sync {
+            const HEAD_SECONDS: f64 = 60.0;
+            const MAX_OFFSET_S: f32 = 30.0;
+            // Read at most a minute, and never past the end of a short take.
+            let head = |s: &Self, m: &MediaId| {
+                let len = s
+                    .probed
+                    .get(m)
+                    .map(|p| p.2.as_f64())
+                    .unwrap_or(HEAD_SECONDS);
+                s.audio_head(*m, len.min(HEAD_SECONDS))
+            };
+            let reference = head(self, &angles[0])?;
+            for (i, m) in angles.iter().enumerate().skip(1) {
+                let other = head(self, m)?;
+                let al = debut_audio::align(&reference, &other, 48_000, MAX_OFFSET_S)
+                    .ok_or("recordings are too short to sync")?;
+                // `other` lags by `offset`: it must start that far in.
+                offsets[i] = fr.snap(Rational::new(al.offset_samples, 48_000));
+                confidences.push(al.confidence);
+            }
+            // A negative offset means the reference lags: shift everything so the
+            // smallest offset is zero and no angle starts before its material.
+            let min = offsets.iter().copied().fold(Rational::ZERO, Rational::min);
+            for o in &mut offsets {
+                *o -= min;
+            }
+            for (i, m) in angles.iter().enumerate() {
+                let p = self.probed.get(m).ok_or("unknown media")?;
+                duration = duration.min(p.2 - offsets[i]);
+            }
+        }
         let duration = fr.snap(duration).max(fr.frame_duration());
-        let source = ClipSource::Multicam { angles, active: 0 };
+        let result = MulticamSyncDto {
+            offsets: offsets.iter().map(|o| secs(*o)).collect(),
+            confidences,
+        };
+        let source = ClipSource::Multicam {
+            angles,
+            active: 0,
+            offsets,
+        };
         let mut cmds = Vec::new();
         let mut targets = vec![video];
         if let (Some(a), true) = (audio, all_audio) {
@@ -937,7 +1026,8 @@ impl Session {
                 &mut self.ids,
             ));
         }
-        self.exec(Command::Group(cmds))
+        self.exec(Command::Group(cmds))?;
+        Ok(result)
     }
 
     /// Switch a multicam clip to `angle`. With `cut` and the playhead strictly
@@ -951,7 +1041,10 @@ impl Session {
         cut: bool,
     ) -> Result<String, String> {
         let (target, clip_id, c) = self.clip_ref(track, clip)?;
-        let ClipSource::Multicam { angles, .. } = &c.source else {
+        let ClipSource::Multicam {
+            angles, offsets, ..
+        } = &c.source
+        else {
             return Err("not a multicam clip".into());
         };
         if angle >= angles.len() {
@@ -960,6 +1053,7 @@ impl Session {
         let source = ClipSource::Multicam {
             angles: angles.clone(),
             active: angle,
+            offsets: offsets.clone(),
         };
         let at = self.playhead();
         let mut cmds = Vec::new();
@@ -2499,9 +2593,22 @@ pub enum EditOp {
     },
 }
 
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct MulticamSyncDto {
+    /// Per-angle head offsets in seconds (angle order).
+    pub offsets: Vec<f64>,
+    /// Sync confidence per angle after the first, 0..1; empty without sync.
+    pub confidences: Vec<f32>,
+}
+
 #[tauri::command]
-pub fn add_multicam(state: State<'_, Shared>, at: f64, media: Vec<String>) -> Result<(), String> {
-    lock(&state).add_multicam(at, media)
+pub fn add_multicam(
+    state: State<'_, Shared>,
+    at: f64,
+    media: Vec<String>,
+    sync: Option<bool>,
+) -> Result<MulticamSyncDto, String> {
+    lock(&state).add_multicam_synced(at, media, sync.unwrap_or(false))
 }
 
 #[tauri::command]
@@ -3013,6 +3120,18 @@ mod tests {
             id_str(id.0)
         };
         // add_multicam targets the first video track, which is now the empty one.
+        // Synced first: identical takes line up at 0 with a confident match.
+        let synced = s
+            .add_multicam_synced(0.0, vec![m.id.clone(), m2.id.clone()], true)
+            .unwrap();
+        assert_eq!(
+            synced.offsets,
+            vec![0.0, 0.0],
+            "identical takes line up at 0"
+        );
+        assert!(synced.confidences[0] > 0.9, "{:?}", synced.confidences);
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.sync_player().unwrap();
         s.add_multicam(0.0, vec![m.id.clone(), m2.id.clone()])
             .unwrap();
         let dto = sequence_dto(s.first_sequence().unwrap());

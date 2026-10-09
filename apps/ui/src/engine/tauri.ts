@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  MulticamSync,
   SmartRule,
   CaptionSettings,
   BinInfo,
@@ -92,8 +93,8 @@ class TauriMedia implements MediaApi {
   setTitle(track: string, clip: string, title: TitleInfo) {
     return invoke<void>("set_title", { track, clip, title });
   }
-  addMulticam(at: number, media: string[]) {
-    return invoke<void>("add_multicam", { at, media });
+  addMulticam(at: number, media: string[], sync = false) {
+    return invoke<MulticamSync>("add_multicam", { at, media, sync });
   }
   switchAngle(track: string, clip: string, angle: number, cut: boolean) {
     return invoke<string>("switch_angle", { track, clip, angle, cut });

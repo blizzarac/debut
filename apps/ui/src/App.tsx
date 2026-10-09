@@ -94,9 +94,17 @@ export default function App() {
     }
   }
 
-  async function addMulticam(ids: string[]) {
+  async function addMulticam(ids: string[], sync: boolean) {
     if (!engine?.media || ids.length < 2) return;
-    await engine.media.addMulticam(tick?.position ?? 0, ids).catch((err) => setStatus(`multicam failed: ${err}`));
+    try {
+      const r = await engine.media.addMulticam(tick?.position ?? 0, ids, sync);
+      if (sync) {
+        const low = r.confidences.filter((c) => c < 0.3).length;
+        setStatus(`multicam synced: offsets ${r.offsets.map((o) => o.toFixed(2) + "s").join(", ")}${low ? ` · ${low} angle(s) with weak audio match` : ""}`);
+      }
+    } catch (err) {
+      setStatus(`multicam failed: ${err}`);
+    }
     await refresh(engine);
   }
 
