@@ -1000,6 +1000,53 @@ fn waveform_peaks_build_in_the_background() {
     assert!(s.waveform("not-an-id", 0.0, 1.0, 10).is_err());
 }
 
+/// Snap points and closing gaps through the session (TL-06).
+#[test]
+fn snap_points_and_close_gaps() {
+    let Fx {
+        mut s,
+        v,
+        m,
+        clip_id,
+        ..
+    } = fixture("snap_points_and_close_gaps");
+    // Fixture: V1 holds 0.4..2.4. Add a second take at 4.0 on V1, leaving a gap.
+    s.add_clip(&v, &m.id, 4.0).unwrap();
+    s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+    let pts = s.snap_points(None).unwrap();
+    let at = |t: f64| {
+        pts.iter()
+            .find(|p| (p.t - t).abs() < 1e-9)
+            .map(|p| p.kind.as_str())
+    };
+    assert_eq!(at(0.0), Some("start"));
+    assert_eq!(at(1.0), Some("playhead"));
+    assert_eq!(
+        (at(0.4), at(2.4), at(4.0), at(6.0)),
+        (Some("edge"), Some("edge"), Some("edge"), Some("edge"))
+    );
+    // Excluding the dragged clip drops its edges (A1 still has 0.4 / 2.4).
+    let second = sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[1]
+        .id
+        .clone();
+    let without = s.snap_points(Some(second)).unwrap();
+    assert!(!without.iter().any(|p| (p.t - 4.0).abs() < 1e-9));
+    assert!(s.snap_points(Some("nope".into())).is_err());
+    // Close the gap on V1: the second take ripples to 2.4; undo restores 4.0.
+    s.edit(EditOp::CloseGaps { track: v.clone() }).unwrap();
+    let dto = sequence_dto(s.first_sequence().unwrap());
+    let clips = &dto.tracks[0].clips;
+    assert_eq!(
+        (clips[0].id.as_str(), clips[1].timeline_in),
+        (clip_id.as_str(), 2.4)
+    );
+    s.undo().unwrap();
+    assert_eq!(
+        sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[1].timeline_in,
+        4.0
+    );
+}
+
 /// Timeline and clip markers (TL-10).
 #[test]
 fn markers_edit_export_undo() {

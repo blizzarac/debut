@@ -238,9 +238,46 @@ pub enum EditOp {
         start: f64,
         end: f64,
     },
+    /// Remove the gaps between clips on a track, rippling later clips left (TL-06).
+    CloseGaps {
+        track: String,
+    },
+}
+
+/// A place an edit may snap to (TL-06).
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct SnapPointDto {
+    pub t: f64,
+    /// "start", "playhead", "edge" or "marker".
+    pub kind: String,
 }
 
 impl Session {
+    /// Where a drag may snap to: sequence start, playhead, every clip edge and
+    /// marker, leaving out the clip being dragged.
+    pub fn snap_points(&self, exclude: Option<String>) -> Result<Vec<SnapPointDto>, String> {
+        let exclude = match exclude {
+            Some(c) => Some(ClipId(parse_id(&c)?)),
+            None => None,
+        };
+        let seq = self.first_sequence()?;
+        Ok(
+            debut_timeline::snap_targets(seq, seq.frame_rate.snap(self.playhead()), exclude)
+                .into_iter()
+                .map(|s| SnapPointDto {
+                    t: secs(s.t),
+                    kind: match s.kind {
+                        debut_timeline::SnapKind::SequenceStart => "start",
+                        debut_timeline::SnapKind::Playhead => "playhead",
+                        debut_timeline::SnapKind::ClipEdge => "edge",
+                        debut_timeline::SnapKind::Marker => "marker",
+                    }
+                    .into(),
+                })
+                .collect(),
+        )
+    }
+
     /// Create the first sequence (sized from the first media, else 1080p25) with
     /// one video and one audio track, if the project has none.
     pub fn ensure_sequence(&mut self) -> Result<SequenceDto, String> {
@@ -377,6 +414,7 @@ impl Session {
                 frames_of(end, fr),
                 ids,
             )),
+            EditOp::CloseGaps { track } => debut_timeline::close_gaps(project, target(&track)?),
             EditOp::Lift { track, start, end } => Ok(Command::lift(
                 target(&track)?,
                 frames_of(start, fr),

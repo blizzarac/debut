@@ -30,6 +30,7 @@ pub fn run() {
             ipc::import_media,
             ipc::media_list,
             ipc::waveform,
+            ipc::snap_points,
             ipc::relink_media,
             ipc::bins,
             ipc::add_bin,

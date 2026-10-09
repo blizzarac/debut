@@ -6,11 +6,25 @@ const RULER_H = 22;
 const HEADER_W = 64;
 const EDGE = 8;
 
-type Drag = { track: TrackInfo; clip: ClipInfo; mode: "head" | "tail" | "body"; startX: number; delta: number };
+type Drag = {
+  track: TrackInfo;
+  clip: ClipInfo;
+  mode: "head" | "tail" | "body";
+  startX: number;
+  delta: number;
+  /** Snap targets in seconds, once the engine has sent them. */
+  targets: number[] | null;
+  /** The target the dragged edge is snapped to, if any. */
+  snapAt: number | null;
+};
+
+/** How close (in pixels) an edge must come to a target to snap (TL-06). */
+const SNAP_PX = 8;
 
 /** Tracks as rows, clips as blocks. Click the ruler to seek; drag a clip body to
- * slide it, drag an edge to ripple-trim; buttons blade at the playhead and
- * ripple-delete the selected clip. */
+ * slide it, drag an edge to ripple-trim, with edges snapping to the playhead,
+ * other clips and markers (S toggles); buttons blade at the playhead,
+ * ripple-delete the selected clip and close gaps. */
 export type Selection = { track: string; clip: string } | null;
 
 export function Timeline({
@@ -44,6 +58,16 @@ export function Timeline({
   }, [media, seq]);
   const setSelected = onSelect;
   const [drag, setDrag] = useState<Drag | null>(null);
+  const [snapOn, setSnapOn] = useState(true);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "s" && !e.ctrlKey && !e.metaKey && !e.altKey) setSnapOn((v) => !v);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const svg = useRef<SVGSVGElement>(null);
   const fps = seq.frame_rate[0] / seq.frame_rate[1];
   const length = Math.max(seq.duration + 5, 10);
@@ -54,7 +78,7 @@ export function Timeline({
     const rect = svg.current!.getBoundingClientRect();
     return Math.max(0, (clientX - rect.left - HEADER_W) / pxPerSec);
   };
-  const snap = (t: number) => Math.round(t * fps) / fps;
+  const toFrame = (t: number) => Math.round(t * fps) / fps;
 
   const run = async (op: EditOp) => {
     try {
@@ -67,7 +91,25 @@ export function Timeline({
 
   const onMouseMove = (e: React.MouseEvent) => {
     if (!drag) return;
-    setDrag({ ...drag, delta: snap((e.clientX - drag.startX) / pxPerSec) });
+    const raw = (e.clientX - drag.startX) / pxPerSec;
+    let delta = toFrame(raw);
+    let snapAt: number | null = null;
+    if (snapOn && drag.targets) {
+      const { clip, mode } = drag;
+      const edges = mode === "head" ? [clip.timeline_in] : mode === "tail" ? [clip.timeline_in + clip.duration] : [clip.timeline_in, clip.timeline_in + clip.duration];
+      let best = SNAP_PX / pxPerSec;
+      for (const edge of edges) {
+        for (const t of drag.targets) {
+          const d = Math.abs(edge + raw - t);
+          if (d <= best) {
+            best = d;
+            delta = toFrame(t - edge);
+            snapAt = t;
+          }
+        }
+      }
+    }
+    setDrag({ ...drag, delta, snapAt });
   };
   const onMouseUp = () => {
     if (!drag) return;
@@ -87,7 +129,7 @@ export function Timeline({
         <button
           onClick={() => {
             const t = selected ? seq.tracks.find((t) => t.id === selected.track) : seq.tracks[0];
-            if (t) run({ kind: "blade", track: t.id, at: snap(position) });
+            if (t) run({ kind: "blade", track: t.id, at: toFrame(position) });
           }}
         >
           Blade at playhead
@@ -116,6 +158,15 @@ export function Timeline({
           {selectedClip?.transition_in ? "Remove dissolve" : "Dissolve in"}
         </button>
         <button
+          title="Close the gaps between clips on the selected clip's track (or V1)"
+          onClick={() => {
+            const t = selected ? seq.tracks.find((t) => t.id === selected.track) : seq.tracks[0];
+            if (t) run({ kind: "close_gaps", track: t.id });
+          }}
+        >
+          Close gaps
+        </button>
+        <button
           disabled={!selectedClip}
           title="Collapse the selected clip's span on every track into a nested sequence"
           onClick={() => selectedClip && run({ kind: "nest", start: selectedClip.timeline_in, end: selectedClip.timeline_in + selectedClip.duration })}
@@ -125,7 +176,7 @@ export function Timeline({
         <button
           title="Add a 5 s title of the chosen template at the playhead on a free video track"
           onClick={async () => {
-            const id = await media.addTitle(snap(position), template === "lower_third" ? "Name" : "Title", template).catch(() => null);
+            const id = await media.addTitle(toFrame(position), template === "lower_third" ? "Name" : "Title", template).catch(() => null);
             if (id) onEdited();
           }}
         >
@@ -152,6 +203,9 @@ export function Timeline({
           </button>
         )}
         <span style={{ flex: 1 }} />
+        <button onClick={() => setSnapOn((v) => !v)} title="Snap edges to the playhead, clip edges and markers while dragging (S)" style={{ fontWeight: snapOn ? 600 : 400, background: snapOn ? "#fde68a" : undefined }}>
+          Snap {snapOn ? "on" : "off"}
+        </button>
         <label style={{ fontSize: 12 }}>
           zoom <input type="range" min={20} max={600} value={pxPerSec} onChange={(e) => setPxPerSec(Number(e.target.value))} />
         </label>
@@ -159,7 +213,7 @@ export function Timeline({
       <div style={{ overflowX: "auto", border: "1px solid #ddd", userSelect: "none" }}>
         <svg ref={svg} width={width} height={height} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp} style={{ display: "block" }}>
           {/* ruler */}
-          <rect x={HEADER_W} y={0} width={width - HEADER_W} height={RULER_H} fill="#f0f0f0" onMouseDown={(e) => player.transport({ kind: "seek", t: snap(xToTime(e.clientX)) })} />
+          <rect x={HEADER_W} y={0} width={width - HEADER_W} height={RULER_H} fill="#f0f0f0" onMouseDown={(e) => player.transport({ kind: "seek", t: toFrame(xToTime(e.clientX)) })} />
           {Array.from({ length: Math.ceil(length) + 1 }, (_, s) => (
             <g key={s}>
               <line x1={HEADER_W + s * pxPerSec} y1={RULER_H - 8} x2={HEADER_W + s * pxPerSec} y2={RULER_H} stroke="#888" />
@@ -209,7 +263,11 @@ export function Timeline({
                   const start = (mode: Drag["mode"]) => (e: React.MouseEvent) => {
                     e.stopPropagation();
                     setSelected({ track: track.id, clip: clip.id });
-                    setDrag({ track, clip, mode, startX: e.clientX, delta: 0 });
+                    setDrag({ track, clip, mode, startX: e.clientX, delta: 0, targets: null, snapAt: null });
+                    media
+                      .snapPoints?.(clip.id)
+                      .then((pts) => setDrag((d) => (d && d.clip.id === clip.id ? { ...d, targets: pts.map((p) => p.t) } : d)))
+                      .catch(() => {});
                   };
                   return (
                     <g key={clip.id}>
@@ -235,6 +293,9 @@ export function Timeline({
               </g>
             );
           })}
+          {drag?.snapAt != null && (
+            <line x1={HEADER_W + drag.snapAt * pxPerSec} y1={RULER_H} x2={HEADER_W + drag.snapAt * pxPerSec} y2={height} stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4 3" pointerEvents="none" />
+          )}
           {/* playhead */}
           <line x1={HEADER_W + position * pxPerSec} y1={0} x2={HEADER_W + position * pxPerSec} y2={height} stroke="#e11" strokeWidth={2} pointerEvents="none" />
         </svg>

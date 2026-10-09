@@ -207,7 +207,14 @@ export type EditOp =
   | { kind: "extract"; track: string; start: number; end: number }
   | { kind: "lift"; track: string; start: number; end: number }
   | { kind: "transition"; track: string; clip: string; duration: number | null }
-  | { kind: "nest"; start: number; end: number };
+  | { kind: "nest"; start: number; end: number }
+  | { kind: "close_gaps"; track: string };
+
+/** A place a drag may snap to: sequence start, playhead, clip edge or marker. */
+export interface SnapPoint {
+  t: number;
+  kind: "start" | "playhead" | "edge" | "marker";
+}
 
 export type ParamName =
   | "scale"
@@ -331,6 +338,8 @@ export interface MediaApi {
   importMedia(path: string): Promise<MediaInfo>;
   /** Every media in the project (also after opening a file). */
   mediaList(): Promise<MediaInfo[]>;
+  /** Snap targets for a drag, leaving out the clip being dragged. */
+  snapPoints?(exclude: string | null): Promise<SnapPoint[]>;
   /** [min, max] audio peaks of a media between source times; null while still being built. */
   waveform?(media: string, start: number, end: number, buckets: number): Promise<[number, number][] | null>;
   bins(): Promise<BinInfo[]>;

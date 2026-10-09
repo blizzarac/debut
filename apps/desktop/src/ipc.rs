@@ -484,3 +484,11 @@ pub fn waveform(
 ) -> Result<Option<Vec<[f32; 2]>>, String> {
     lock(&state).waveform(&media, start, end, buckets)
 }
+
+#[tauri::command]
+pub fn snap_points(
+    state: State<'_, Shared>,
+    exclude: Option<String>,
+) -> Result<Vec<SnapPointDto>, String> {
+    lock(&state).snap_points(exclude)
+}

@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  SnapPoint,
   CodecCapabilities,
   MulticamSync,
   SmartRule,
@@ -45,6 +46,9 @@ class TauriMedia implements MediaApi {
   }
   mediaList() {
     return invoke<MediaInfo[]>("media_list");
+  }
+  snapPoints(exclude: string | null) {
+    return invoke<SnapPoint[]>("snap_points", { exclude });
   }
   waveform(media: string, start: number, end: number, buckets: number) {
     return invoke<[number, number][] | null>("waveform", { media, start, end, buckets });
