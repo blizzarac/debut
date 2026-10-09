@@ -1601,6 +1601,110 @@ impl Session {
         })
     }
 
+    /// Track the picture under a mask effect from the playhead for `seconds`
+    /// (FX-06) and keyframe the mask's position to follow it. Returns the
+    /// number of keys written and the weakest match quality met; stops early
+    /// when the match drops below `MIN_MATCH`.
+    pub fn track_mask(
+        &mut self,
+        track: &str,
+        clip: &str,
+        effect: usize,
+        seconds: f64,
+    ) -> Result<TrackResultDto, String> {
+        const MIN_MATCH: f32 = 0.5;
+        let (target, clip_id, c) = self.clip_ref(track, clip)?;
+        let (seq_w, seq_h, fr) = {
+            let s = self.first_sequence()?;
+            (s.width as f32, s.height as f32, s.frame_rate)
+        };
+        let Some(Effect::Mask(m)) = c.effects.get(effect) else {
+            return Err("not a mask effect".into());
+        };
+        let start = fr.snap(self.playhead()).max(c.timeline_in);
+        let end = (start + frames_of(seconds, fr)).min(c.timeline_out());
+        if end <= start {
+            return Err("nothing to track: move the playhead inside the clip".into());
+        }
+        let (media, _) = c.media_at(start).ok_or("only media clips can be tracked")?;
+        let (sw, sh) = self
+            .probed
+            .get(&media)
+            .map(|p| (p.0 as f32, p.1 as f32))
+            .ok_or("media not probed")?;
+        // Sequence <-> source frame coordinates through the fit used by compose.
+        let fit = (seq_w / sw).min(seq_h / sh);
+        let to_src = |x: f32, y: f32| [x / fit + sw * 0.5, y / fit + sh * 0.5];
+        let to_seq = |p: [f32; 2]| [(p[0] - sw * 0.5) * fit, (p[1] - sh * 0.5) * fit];
+        let local0 = start - c.timeline_in;
+        let center = to_src(m.x.eval(local0) as f32, m.y.eval(local0) as f32);
+        let size = ((m.width.eval(local0).min(m.height.eval(local0)) as f32 / fit) * 0.5)
+            .clamp(8.0, 64.0) as u32;
+        let search = (size / 2).max(4);
+
+        if self.player.is_none() {
+            self.sync_player()?;
+        }
+        let player = self.player.as_mut().ok_or("no player")?;
+        use debut_render::FrameProvider;
+        let mut t = start;
+        let (w, h, px) = player
+            .frames
+            .frame(media, c.source_at(t))
+            .map_err(|e| e.to_string())?;
+        let mut tracker = debut_render::Tracker::new(&px, w, h, center, size, search);
+        let (mut cx, mut cy) = (m.x.clone(), m.y.clone());
+        let mut keys = 0usize;
+        let mut weakest = 1.0f32;
+        let set = |curve: &mut debut_core::Curve, at: Rational, v: f32| {
+            curve.set(at, v as f64, debut_core::Interp::Linear);
+        };
+        let first = to_seq(center);
+        set(&mut cx, local0, first[0]);
+        set(&mut cy, local0, first[1]);
+        keys += 1;
+        loop {
+            t += fr.frame_duration();
+            if t >= end {
+                break;
+            }
+            let (w, h, px) = player
+                .frames
+                .frame(media, c.source_at(t))
+                .map_err(|e| e.to_string())?;
+            let (pos, score) = tracker.step(&px, w, h);
+            weakest = weakest.min(score);
+            if score < MIN_MATCH {
+                break;
+            }
+            let p = to_seq(pos);
+            let local = t - c.timeline_in;
+            set(&mut cx, local, p[0]);
+            set(&mut cy, local, p[1]);
+            keys += 1;
+        }
+        self.exec(Command::Group(vec![
+            Command::SetCurve {
+                target,
+                clip: clip_id,
+                effect,
+                param: Param::MaskX,
+                curve: cx,
+            },
+            Command::SetCurve {
+                target,
+                clip: clip_id,
+                effect,
+                param: Param::MaskY,
+                curve: cy,
+            },
+        ]))?;
+        Ok(TrackResultDto {
+            keys,
+            weakest_match: weakest,
+        })
+    }
+
     /// Change an effect's non-animated options (FX-04 shape/invert, FX-05 key
     /// colour); fields left `None` keep their value.
     pub fn set_effect_options(
@@ -1708,6 +1812,24 @@ pub fn add_effect(
     kind: String,
 ) -> Result<(), String> {
     lock(&state).add_effect(&track, &clip, &kind)
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct TrackResultDto {
+    pub keys: usize,
+    /// Weakest normalised match met, 1 = identical; below 0.5 the track stopped.
+    pub weakest_match: f32,
+}
+
+#[tauri::command]
+pub fn track_mask(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    effect: usize,
+    seconds: f64,
+) -> Result<TrackResultDto, String> {
+    lock(&state).track_mask(&track, &clip, effect, seconds)
 }
 
 #[tauri::command]
@@ -2997,6 +3119,51 @@ mod tests {
         assert!(
             at(&inverted, 1, 1) > 0 || at(&inverted, 2, 30) > 0,
             "corners show"
+        );
+        // Tracking (FX-06): the fixture's pattern is static apart from its
+        // digits, so a track over a static patch keeps the mask put and the
+        // keys land on frames.
+        s.set_effect_options(
+            &v,
+            &clip_id,
+            mask_ix,
+            EffectOptions {
+                invert: Some(false),
+                shape: Some(MaskShape::Rectangle),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        s.set_param(&v, &clip_id, mask_ix, Param::MaskX, -10.0, false)
+            .unwrap();
+        s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+        let tr = s.track_mask(&v, &clip_id, mask_ix, 0.4).unwrap();
+        assert_eq!(tr.keys, 10, "{tr:?}");
+        assert!(tr.weakest_match > 0.5, "{tr:?}");
+        let fx = s.clip_effects(&v, &clip_id).unwrap();
+        let mx = fx[mask_ix]
+            .params
+            .iter()
+            .find(|p| p.name == Param::MaskX)
+            .unwrap();
+        assert!(
+            mx.animated && (mx.value + 10.0).abs() < 3.0,
+            "{:?}",
+            mx.value
+        );
+        assert!(
+            s.track_mask(&v, &clip_id, 0, 1.0).is_err(),
+            "grade is not a mask"
+        );
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.sync_player().unwrap();
+        assert!(
+            !s.clip_effects(&v, &clip_id).unwrap()[mask_ix]
+                .params
+                .iter()
+                .find(|p| p.name == Param::MaskX)
+                .unwrap()
+                .animated
         );
         // Polygon: switching with no points seeds a diamond; a thin triangle at the
         // left edge leaves the right side black.

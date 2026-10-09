@@ -21,7 +21,7 @@ pub mod lut;
 pub mod nodes; // FX-04 masks, FX-05 chroma key
 pub mod ofx; // FX-15 OpenFX bridge over PluginHost (pending)
 pub mod scopes; // PB-08 waveform, vectorscope, histogram
-pub mod tracking; // FX-04, FX-06 (pending)
+pub mod tracking; // FX-06 point tracker
 
 pub use backend::{encode_rgba8, Backend, BlendMode, FrameProvider, Rgba, Transform2D};
 pub use cache::RenderCache;
@@ -96,3 +96,4 @@ pub use graph::{Graph, Image8, ImageRef, LutRef, Node, NodeId};
 pub use lut::Lut3d;
 pub use nodes::{ChromaKey, Mask, MaskShape, PolyMask, POLY_MAX_POINTS};
 pub use scopes::Scopes;
+pub use tracking::Tracker;

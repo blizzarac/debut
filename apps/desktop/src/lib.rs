@@ -53,6 +53,7 @@ pub fn run() {
             ipc::add_effect,
             ipc::remove_effect,
             ipc::set_effect_options,
+            ipc::track_mask,
             ipc::set_param,
             ipc::set_track_mix,
             ipc::add_insert,

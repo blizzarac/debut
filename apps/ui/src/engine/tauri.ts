@@ -146,6 +146,9 @@ class TauriEffects implements EffectsApi {
   setOptions(track: string, clip: string, index: number, options: EffectOptions) {
     return invoke<void>("set_effect_options", { track, clip, index, options });
   }
+  trackMask(track: string, clip: string, effect: number, seconds: number) {
+    return invoke<{ keys: number; weakest_match: number }>("track_mask", { track, clip, effect, seconds });
+  }
   removeEffect(track: string, clip: string, index: number) {
     return invoke<void>("remove_effect", { track, clip, index });
   }

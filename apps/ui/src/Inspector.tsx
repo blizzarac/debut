@@ -26,6 +26,7 @@ const RANGES: Record<ParamName, [number, number, number]> = {
 /** Effect stack of the selected clip. Sliders set constants, or keyframes at
  * the playhead when the key toggle is on (FX-01). */
 export function Inspector({ effects, selected, position, onChanged }: { effects: EffectsApi; selected: Selection; position: number; onChanged: () => void }) {
+  const [trackNote, setTrackNote] = useState("");
   const [stack, setStack] = useState<EffectInfo[]>([]);
   const [keyframe, setKeyframe] = useState(false);
 
@@ -71,6 +72,23 @@ export function Inspector({ effects, selected, position, onChanged }: { effects:
               <label>
                 <input type="checkbox" checked={fx.options.invert ?? false} onChange={(e) => act(effects.setOptions(selected.track, selected.clip, fx.index, { invert: e.target.checked }))} /> invert
               </label>
+              {effects.trackMask && (
+                <button
+                  title="Follow the picture under the mask from the playhead for 5 s, keyframing mask_x / mask_y"
+                  onClick={() =>
+                    effects
+                      .trackMask!(selected.track, selected.clip, fx.index, 5)
+                      .then((r) => {
+                        setTrackNote(`${r.keys} keys, weakest match ${r.weakest_match.toFixed(2)}`);
+                        onChanged();
+                      })
+                      .catch((e) => setTrackNote(String(e)))
+                  }
+                >
+                  Track 5 s
+                </button>
+              )}
+              {trackNote && <span style={{ color: "#666" }}>{trackNote}</span>}
             </div>
           )}
           {fx.kind === "mask" && fx.options.shape === "polygon" && (

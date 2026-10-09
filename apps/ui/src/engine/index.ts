@@ -252,6 +252,8 @@ export interface EffectsApi {
   removeEffect(track: string, clip: string, index: number): Promise<void>;
   /** Change non-animated options; omitted fields keep their value. */
   setOptions(track: string, clip: string, effect: number, options: EffectOptions): Promise<void>;
+  /** Track the picture under a mask from the playhead for `seconds`, keyframing its position. */
+  trackMask?(track: string, clip: string, effect: number, seconds: number): Promise<{ keys: number; weakest_match: number }>;
   /** Set as a constant, or keyframe at the playhead when `keyframe` is true. */
   setParam(track: string, clip: string, effect: number, param: ParamName, value: number, keyframe: boolean): Promise<void>;
 }
