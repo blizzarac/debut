@@ -48,6 +48,31 @@ pub enum Command {
     /// Merge the two clips meeting at `at` if the second continues the first. No-op
     /// otherwise. The first clip's ID survives.
     Join { target: Target, at: Rational },
+    /// Move a clip's head by `delta` keeping its tail and source in sync
+    /// (positive shortens). The clip must stay non-empty and non-overlapping.
+    TrimHead {
+        target: Target,
+        clip: ClipId,
+        delta: Rational,
+    },
+    /// Move a clip's tail by `delta` (positive lengthens).
+    TrimTail {
+        target: Target,
+        clip: ClipId,
+        delta: Rational,
+    },
+    /// Change which part of the source plays without moving the clip (TL-04 slip).
+    Slip {
+        target: Target,
+        clip: ClipId,
+        delta: Rational,
+    },
+    /// Move a clip along the timeline by `delta`; nothing else moves.
+    Move {
+        target: Target,
+        clip: ClipId,
+        delta: Rational,
+    },
     /// One undo step made of several commands, applied in order.
     Group(Vec<Command>),
     /// Inverse of a primitive that did nothing.
@@ -118,14 +143,16 @@ impl Command {
             } => {
                 let tr = track_mut(project, *target)?;
                 let (s, e) = span_with(*start, *end, clips);
-                clear_range(tr, s, e, *split_id);
-                tr.clips.extend(clips.iter().cloned());
-                tr.sort();
-                if !tr.is_consistent() {
+                let mut next = tr.clone();
+                clear_range(&mut next, s, e, *split_id);
+                next.clips.extend(clips.iter().cloned());
+                next.sort();
+                if !next.is_consistent() || next.clips.iter().any(|c| c.timeline_in.is_negative()) {
                     return Err(Error::InvalidArgument(
-                        "replace produced overlapping clips".into(),
+                        "replace produced an invalid layout".into(),
                     ));
                 }
+                tr.clips = next.clips;
                 Ok(())
             }
             Command::Shift { target, from, by } => {
@@ -139,14 +166,16 @@ impl Command {
                         "shift point lies inside a clip".into(),
                     ));
                 }
-                for c in tr.clips.iter_mut().filter(|c| c.timeline_in >= *from) {
+                let mut next = tr.clone();
+                for c in next.clips.iter_mut().filter(|c| c.timeline_in >= *from) {
                     c.timeline_in += *by;
                 }
-                if !tr.is_consistent() || tr.clips.iter().any(|c| c.timeline_in.is_negative()) {
+                if !next.is_consistent() || next.clips.iter().any(|c| c.timeline_in.is_negative()) {
                     return Err(Error::InvalidArgument(
                         "shift produced an invalid layout".into(),
                     ));
                 }
+                tr.clips = next.clips;
                 Ok(())
             }
             Command::Blade {
@@ -173,6 +202,47 @@ impl Command {
                 }
                 Ok(())
             }
+            Command::TrimHead {
+                target,
+                clip,
+                delta,
+            } => edit_clip(project, *target, *clip, |c| {
+                let t = c.timeline_in + *delta;
+                if t >= c.timeline_out() {
+                    return Err(Error::InvalidArgument("trim would empty the clip".into()));
+                }
+                c.source_in = c.source_at(t);
+                c.duration = c.timeline_out() - t;
+                c.timeline_in = t;
+                Ok(())
+            }),
+            Command::TrimTail {
+                target,
+                clip,
+                delta,
+            } => edit_clip(project, *target, *clip, |c| {
+                if c.duration + *delta <= Rational::ZERO {
+                    return Err(Error::InvalidArgument("trim would empty the clip".into()));
+                }
+                c.duration += *delta;
+                Ok(())
+            }),
+            Command::Slip {
+                target,
+                clip,
+                delta,
+            } => edit_clip(project, *target, *clip, |c| {
+                c.source_in += *delta;
+                Ok(())
+            }),
+            Command::Move {
+                target,
+                clip,
+                delta,
+            } => edit_clip(project, *target, *clip, |c| {
+                c.timeline_in += *delta;
+                Ok(())
+            }),
             Command::Group(cmds) => {
                 for c in cmds {
                     c.apply(project)?;
@@ -241,6 +311,42 @@ impl Command {
                     None => Command::Noop,
                 })
             }
+            Command::TrimHead {
+                target,
+                clip,
+                delta,
+            } => Ok(Command::TrimHead {
+                target: *target,
+                clip: *clip,
+                delta: -*delta,
+            }),
+            Command::TrimTail {
+                target,
+                clip,
+                delta,
+            } => Ok(Command::TrimTail {
+                target: *target,
+                clip: *clip,
+                delta: -*delta,
+            }),
+            Command::Slip {
+                target,
+                clip,
+                delta,
+            } => Ok(Command::Slip {
+                target: *target,
+                clip: *clip,
+                delta: -*delta,
+            }),
+            Command::Move {
+                target,
+                clip,
+                delta,
+            } => Ok(Command::Move {
+                target: *target,
+                clip: *clip,
+                delta: -*delta,
+            }),
             Command::Group(cmds) => {
                 let mut scratch = project.clone();
                 let mut inverses = Vec::with_capacity(cmds.len());
@@ -336,6 +442,34 @@ impl Command {
             },
         ])
     }
+}
+
+/// Apply `f` to one clip, then re-check the track's layout invariants.
+fn edit_clip(
+    project: &mut Project,
+    target: Target,
+    clip: ClipId,
+    f: impl FnOnce(&mut Clip) -> Result<()>,
+) -> Result<()> {
+    let tr = track_mut(project, target)?;
+    let i = tr
+        .clip_index(clip)
+        .ok_or_else(|| Error::NotFound(format!("clip {clip:?}")))?;
+    let mut next = tr.clone();
+    f(&mut next.clips[i])?;
+    if next.clips[i].timeline_in.is_negative() {
+        return Err(Error::InvalidArgument(
+            "clip would start before zero".into(),
+        ));
+    }
+    next.sort();
+    if !next.is_consistent() {
+        return Err(Error::InvalidArgument(
+            "edit produced overlapping clips".into(),
+        ));
+    }
+    tr.clips = next.clips;
+    Ok(())
 }
 
 /// Index of the first clip of a joinable pair meeting exactly at `at`.
@@ -527,6 +661,32 @@ mod tests {
             tail_id: fx.ids.fresh(),
         };
         assert_eq!(blade.invert(&fx.project).unwrap(), Command::Noop);
+    }
+
+    #[test]
+    fn a_rejected_apply_leaves_the_project_untouched() {
+        let mut fx = fixture();
+        let before = fx.project.clone();
+        let b = track(&fx.project, fx.target).unwrap().clips[1].id;
+        assert!(Command::Move {
+            target: fx.target,
+            clip: b,
+            delta: sec(6)
+        }
+        .apply(&mut fx.project)
+        .is_err());
+        assert!(Command::Shift {
+            target: fx.target,
+            from: sec(25),
+            by: sec(-20)
+        }
+        .apply(&mut fx.project)
+        .is_err());
+        let big = fx.clip(-5, 3, 0);
+        assert!(Command::overwrite(fx.target, big, &mut fx.ids)
+            .apply(&mut fx.project)
+            .is_err());
+        assert_eq!(fx.project, before);
     }
 
     #[test]
