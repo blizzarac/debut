@@ -3,7 +3,7 @@
 
 use debut_audio::normalize_gain;
 use debut_command::{Command, MarkerTarget, Target};
-use debut_core::id::{BinId, CaptionId, MarkerId};
+use debut_core::id::{BinId, CaptionId, MarkerId, TemplateId};
 use debut_core::{ClipId, FrameRate, IdGen, MediaId, Rational, SequenceId, TrackId};
 use debut_engine::{Player, Stats, Workspace};
 use debut_export::{export, measure_loudness, ExportJob, ExportQueue, JobId, JobState, Preset};
@@ -18,8 +18,8 @@ use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
     schema, AudioEffect, Bin, Caption, CaptionSettings, Clip, ClipSource, Effect, EqBand, EqKind,
-    GradeFx, KeyFx, Marker, MaskFx, MaskShape, Param, Project, Sequence, Title, TitleStyle, Track,
-    TrackKind, TrackMix, TransformFx, Transition, TransitionKind,
+    GradeFx, KeyFx, Marker, MaskFx, MaskShape, Param, Project, SavedTitleTemplate, Sequence, Title,
+    TitleStyle, Track, TrackKind, TrackMix, TransformFx, Transition, TransitionKind,
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
@@ -1082,16 +1082,65 @@ impl Session {
         self.add_title_from(at, text, None)
     }
 
-    /// Title templates (GFX-02) the app can offer.
+    /// Title templates (GFX-02) the app can offer: built-ins, then the
+    /// project's saved ones (ids prefixed `saved:`).
     pub fn title_templates(&self) -> Vec<TemplateDto> {
-        debut_graphics::TEMPLATES
+        let mut out: Vec<TemplateDto> = debut_graphics::TEMPLATES
             .iter()
             .map(|t| TemplateDto {
                 id: t.id.to_string(),
                 name: t.name.to_string(),
                 description: t.description.to_string(),
+                saved: false,
             })
-            .collect()
+            .collect();
+        if let Some(p) = self.project() {
+            out.extend(p.title_templates.iter().map(|t| TemplateDto {
+                id: format!("saved:{}", id_str(t.id.0)),
+                name: t.name.clone(),
+                description: format!(
+                    "Saved: {} px {}{}",
+                    t.style.size_px,
+                    t.style.font,
+                    if t.effects.is_empty() {
+                        ""
+                    } else {
+                        ", animated"
+                    }
+                ),
+                saved: true,
+            }));
+        }
+        out
+    }
+
+    /// Save a title clip's style and effect stack as a named template.
+    pub fn save_title_template(
+        &mut self,
+        track: &str,
+        clip: &str,
+        name: String,
+    ) -> Result<String, String> {
+        let (_, _, c) = self.clip_ref(track, clip)?;
+        let ClipSource::Title(title) = &c.source else {
+            return Err("not a title clip".into());
+        };
+        let template = SavedTitleTemplate {
+            id: self.ids.fresh(),
+            name,
+            style: title.style.clone(),
+            effects: c.effects.clone(),
+        };
+        let id = format!("saved:{}", id_str(template.id.0));
+        self.exec(Command::AddTitleTemplate(template))?;
+        Ok(id)
+    }
+
+    pub fn remove_title_template(&mut self, id: &str) -> Result<(), String> {
+        let raw = id
+            .strip_prefix("saved:")
+            .ok_or("built-in templates cannot be removed")?;
+        self.exec(Command::RemoveTitleTemplate(TemplateId(parse_id(raw)?)))
     }
 
     /// `add_title` with a template: style and animated Transform sized for
@@ -1142,6 +1191,20 @@ impl Session {
                 },
                 Vec::new(),
             ),
+            Some(id) if id.starts_with("saved:") => {
+                let raw = TemplateId(parse_id(&id["saved:".len()..])?);
+                let t = self
+                    .project()
+                    .and_then(|p| p.title_templates.iter().find(|t| t.id == raw))
+                    .ok_or_else(|| format!("unknown saved template {id}"))?;
+                (
+                    Title {
+                        text,
+                        style: t.style.clone(),
+                    },
+                    t.effects.clone(),
+                )
+            }
             Some(id) => {
                 let built =
                     debut_graphics::build_title_template(id, &text, size.0, size.1, duration)
@@ -2627,6 +2690,8 @@ pub struct TemplateDto {
     pub id: String,
     pub name: String,
     pub description: String,
+    /// True for a project-saved template (removable), false for a built-in.
+    pub saved: bool,
 }
 
 #[tauri::command]
@@ -2642,6 +2707,21 @@ pub fn add_title(
 #[tauri::command]
 pub fn title_templates(state: State<'_, Shared>) -> Vec<TemplateDto> {
     lock(&state).title_templates()
+}
+
+#[tauri::command]
+pub fn save_title_template(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    name: String,
+) -> Result<String, String> {
+    lock(&state).save_title_template(&track, &clip, name)
+}
+
+#[tauri::command]
+pub fn remove_title_template(state: State<'_, Shared>, id: String) -> Result<(), String> {
+    lock(&state).remove_title_template(&id)
 }
 
 #[tauri::command]
@@ -3017,6 +3097,49 @@ mod tests {
         s.transport(TransportAction::Seek { t: 2.0 }).unwrap();
         let (_, _, parked) = s.frame_pixels().unwrap();
         assert_ne!(parked, no_lt, "visible once parked");
+        // Save that look as a project template and make a new title from it.
+        let saved = s
+            .save_title_template(&lt_track, &lt, "My lower third".into())
+            .unwrap();
+        assert!(
+            s.save_title_template(&v, &clip_id, "x".into()).is_err(),
+            "media clips are not titles"
+        );
+        let list = s.title_templates();
+        let mine = list.iter().find(|t| t.id == saved).unwrap();
+        assert!(mine.saved && mine.description.contains("animated"));
+        assert_eq!(
+            list.iter().filter(|t| !t.saved).count(),
+            debut_graphics::TEMPLATES.len()
+        );
+        let copy = s
+            .add_title_from(3.0, "Again".into(), Some(saved.clone()))
+            .unwrap();
+        let dto = sequence_dto(s.first_sequence().unwrap());
+        let (copy_track, copy_clip) = dto
+            .tracks
+            .iter()
+            .find_map(|t| {
+                t.clips
+                    .iter()
+                    .find(|c| c.id == copy)
+                    .map(|c| (t.id.clone(), c))
+            })
+            .unwrap();
+        assert_eq!(copy_clip.title.as_ref().unwrap().style.min_width_px, 32.0);
+        assert_eq!(s.clip_effects(&copy_track, &copy).unwrap().len(), 1);
+        s.edit(EditOp::Lift {
+            track: copy_track,
+            start: 3.0,
+            end: 8.0,
+        })
+        .unwrap();
+        assert!(s.remove_title_template("title").is_err());
+        s.remove_title_template(&saved).unwrap();
+        assert!(s.title_templates().iter().all(|t| !t.saved));
+        s.workspace_mut().unwrap().undo().unwrap();
+        assert!(s.title_templates().iter().any(|t| t.saved));
+        s.remove_title_template(&saved).unwrap();
         s.edit(EditOp::Lift {
             track: lt_track.clone(),
             start: 1.0,

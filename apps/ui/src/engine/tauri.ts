@@ -90,6 +90,12 @@ class TauriMedia implements MediaApi {
   titleTemplates() {
     return invoke<TitleTemplate[]>("title_templates");
   }
+  saveTitleTemplate(track: string, clip: string, name: string) {
+    return invoke<string>("save_title_template", { track, clip, name });
+  }
+  removeTitleTemplate(id: string) {
+    return invoke<void>("remove_title_template", { id });
+  }
   setTitle(track: string, clip: string, title: TitleInfo) {
     return invoke<void>("set_title", { track, clip, title });
   }

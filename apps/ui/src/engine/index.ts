@@ -88,6 +88,8 @@ export interface TitleTemplate {
   id: string;
   name: string;
   description: string;
+  /** Project-saved (removable) rather than built-in. */
+  saved: boolean;
 }
 
 export interface TitleInfo {
@@ -338,6 +340,9 @@ export interface MediaApi {
   /** Adds a 5 s title at `at` on a free video track (adds a track if needed); returns the clip id. */
   addTitle(at: number, text: string, template?: string): Promise<string>;
   titleTemplates(): Promise<TitleTemplate[]>;
+  /** Save a title clip's style and effects as a project template; returns its id. */
+  saveTitleTemplate(track: string, clip: string, name: string): Promise<string>;
+  removeTitleTemplate(id: string): Promise<void>;
   setTitle(track: string, clip: string, title: TitleInfo): Promise<void>;
   /** Inserts a multicam clip of two or more media at `at` (shortest angle sets the length);
    * with `sync`, angles are aligned to the first by audio. */

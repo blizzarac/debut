@@ -43,6 +43,8 @@ pub fn run() {
             ipc::add_clip,
             ipc::add_title,
             ipc::title_templates,
+            ipc::save_title_template,
+            ipc::remove_title_template,
             ipc::add_multicam,
             ipc::switch_angle,
             ipc::set_title,

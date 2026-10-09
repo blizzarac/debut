@@ -28,6 +28,7 @@ id_type!(MediaId);
 id_type!(BinId);
 id_type!(MarkerId);
 id_type!(CaptionId);
+id_type!(TemplateId);
 
 /// Deterministic ID generator (splitmix64 over a 128-bit state). Commands carry the
 /// IDs they create, so replaying a log never calls this; only fresh edits do.

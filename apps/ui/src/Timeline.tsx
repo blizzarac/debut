@@ -36,11 +36,12 @@ export function Timeline({
   onOpenNested?: (sequence: string) => void;
 }) {
   const [pxPerSec, setPxPerSec] = useState(120);
-  const [templates, setTemplates] = useState<TitleTemplate[]>([{ id: "title", name: "Title", description: "" }]);
+  const [templates, setTemplates] = useState<TitleTemplate[]>([{ id: "title", name: "Title", description: "", saved: false }]);
   const [template, setTemplate] = useState("title");
   useEffect(() => {
+    // Re-read after edits so templates saved in the Inspector show up.
     media.titleTemplates().then(setTemplates).catch(() => {});
-  }, [media]);
+  }, [media, seq]);
   const setSelected = onSelect;
   const [drag, setDrag] = useState<Drag | null>(null);
   const svg = useRef<SVGSVGElement>(null);
@@ -133,10 +134,23 @@ export function Timeline({
         <select value={template} onChange={(e) => setTemplate(e.target.value)} title="Title template">
           {templates.map((t) => (
             <option key={t.id} value={t.id} title={t.description}>
+              {t.saved ? "★ " : ""}
               {t.name}
             </option>
           ))}
         </select>
+        {templates.find((t) => t.id === template)?.saved && (
+          <button
+            title="Delete this saved template"
+            onClick={async () => {
+              await media.removeTitleTemplate(template).catch(() => {});
+              setTemplate("title");
+              onEdited();
+            }}
+          >
+            ×
+          </button>
+        )}
         <span style={{ flex: 1 }} />
         <label style={{ fontSize: 12 }}>
           zoom <input type="range" min={20} max={600} value={pxPerSec} onChange={(e) => setPxPerSec(Number(e.target.value))} />

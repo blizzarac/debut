@@ -22,7 +22,7 @@ pub use marker::{marker_list, Marker};
 pub use sequence::{
     Clip, ClipSource, Layer, Sequence, Track, TrackKind, TrackMix, Transition, TransitionKind,
 };
-pub use title::{TextAlign, Title, TitleStyle};
+pub use title::{SavedTitleTemplate, TextAlign, Title, TitleStyle};
 
 use debut_core::{ProjectId, SequenceId};
 use serde::{Deserialize, Serialize};
@@ -35,6 +35,9 @@ pub struct Project {
     pub bins: Vec<bin::Bin>,
     pub media: Vec<media_ref::MediaRef>,
     pub sequences: Vec<Sequence>,
+    /// User-saved title templates (GFX-02).
+    #[serde(default)]
+    pub title_templates: Vec<title::SavedTitleTemplate>,
 }
 
 impl Project {
@@ -46,6 +49,7 @@ impl Project {
             bins: Vec::new(),
             media: Vec::new(),
             sequences: Vec::new(),
+            title_templates: Vec::new(),
         }
     }
 

@@ -9,7 +9,7 @@
 //!
 //! Insert and extract are groups built by the constructors at the bottom.
 
-use debut_core::id::{BinId, CaptionId, MarkerId};
+use debut_core::id::{BinId, CaptionId, MarkerId, TemplateId};
 use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
@@ -17,7 +17,7 @@ use debut_project::{
     AudioEffect, Clip, ClipSource, Effect, Marker, Param, Project, Sequence, Track, TrackMix,
     Transition,
 };
-use debut_project::{Bin, Caption, CaptionSettings};
+use debut_project::{Bin, Caption, CaptionSettings, SavedTitleTemplate};
 use serde::{Deserialize, Serialize};
 
 /// Where a marker lives: on the sequence, or on one clip (clip-local time).
@@ -181,6 +181,9 @@ pub enum Command {
         clip: ClipId,
         transition: Option<Transition>,
     },
+    // ---- title templates (GFX-02) ----
+    AddTitleTemplate(SavedTitleTemplate),
+    RemoveTitleTemplate(TemplateId),
     // ---- bins (MED-07) ----
     AddBin(Bin),
     RemoveBin(BinId),
@@ -596,6 +599,22 @@ impl Command {
                 tr.clips[i].transition_in = *transition;
                 Ok(())
             }
+            Command::AddTitleTemplate(t) => {
+                if project.title_templates.iter().any(|x| x.id == t.id) {
+                    return Err(Error::InvalidArgument("template id already exists".into()));
+                }
+                project.title_templates.push(t.clone());
+                Ok(())
+            }
+            Command::RemoveTitleTemplate(id) => {
+                let i = project
+                    .title_templates
+                    .iter()
+                    .position(|t| t.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("template {id:?}")))?;
+                project.title_templates.remove(i);
+                Ok(())
+            }
             Command::AddBin(b) => {
                 if project.bins.iter().any(|x| x.id == b.id) {
                     return Err(Error::InvalidArgument("bin id already exists".into()));
@@ -993,6 +1012,13 @@ impl Command {
                 clip: *clip,
                 transition: find_clip(project, *target, *clip)?.transition_in,
             }),
+            Command::AddTitleTemplate(t) => Ok(Command::RemoveTitleTemplate(t.id)),
+            Command::RemoveTitleTemplate(id) => project
+                .title_templates
+                .iter()
+                .find(|t| t.id == *id)
+                .map(|t| Command::AddTitleTemplate(t.clone()))
+                .ok_or_else(|| Error::NotFound(format!("template {id:?}"))),
             Command::AddBin(b) => Ok(Command::RemoveBin(b.id)),
             Command::RemoveBin(id) => project
                 .bins

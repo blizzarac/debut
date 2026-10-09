@@ -74,3 +74,13 @@ impl Title {
         h.finish()
     }
 }
+
+/// A user-saved title look (GFX-02): style plus the effect stack (animated
+/// Transform and the like) captured from a title clip, re-used for new ones.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedTitleTemplate {
+    pub id: debut_core::id::TemplateId,
+    pub name: String,
+    pub style: TitleStyle,
+    pub effects: Vec<crate::effect::Effect>,
+}

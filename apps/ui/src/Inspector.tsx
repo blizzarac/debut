@@ -130,6 +130,7 @@ function fromHex(h: string, alpha: number): Rgba {
  * blur / Apply so each change is one undoable command. */
 export function TitleEditor({ media, selected, title, onChanged }: { media: MediaApi; selected: Selection; title: TitleInfo; onChanged: () => void }) {
   const [draft, setDraft] = useState<TitleInfo>(title);
+  const [templateName, setTemplateName] = useState("");
   useEffect(() => setDraft(title), [title]);
   if (!selected) return null;
   const style = draft.style;
@@ -182,6 +183,16 @@ export function TitleEditor({ media, selected, title, onChanged }: { media: Medi
       <div style={row}>
         <button disabled={!dirty} onClick={apply}>Apply</button>
         <button disabled={!dirty} onClick={() => setDraft(title)}>Revert</button>
+      </div>
+      <div style={row}>
+        <input value={templateName} onChange={(e) => setTemplateName(e.target.value)} placeholder="template name" style={{ flex: 1, minWidth: 0 }} />
+        <button
+          disabled={!templateName || dirty}
+          title="Save this title's style and animation as a project template (apply pending edits first)"
+          onClick={() => media.saveTitleTemplate(selected.track, selected.clip, templateName).then(() => { setTemplateName(""); onChanged(); })}
+        >
+          Save as template
+        </button>
       </div>
     </div>
   );
