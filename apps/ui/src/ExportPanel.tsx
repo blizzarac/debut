@@ -87,6 +87,9 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
             <button onClick={() => interchange("otio")} disabled={!output} title="OpenTimelineIO of the whole sequence">
               OTIO
             </button>
+            <button onClick={() => interchange("fcpxml")} disabled={!output} title="Final Cut Pro XML of the whole sequence">
+              FCPXML
+            </button>
           </>
         )}
       </div>

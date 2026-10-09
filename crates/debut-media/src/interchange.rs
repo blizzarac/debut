@@ -27,7 +27,7 @@ fn media_of<'a>(
     media.iter().find(|m| m.id == id).map(|m| (m, source))
 }
 
-fn file_name(path: &str) -> &str {
+pub(crate) fn file_name(path: &str) -> &str {
     path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
@@ -210,7 +210,7 @@ fn time_range(start: i64, duration: i64, rate: FrameRate) -> Value {
 }
 
 /// `file://` URL for a path, escaping what URLs do not allow.
-fn file_url(path: &str) -> String {
+pub(crate) fn file_url(path: &str) -> String {
     let mut out = String::from("file://");
     if !path.starts_with('/') {
         out.push('/');

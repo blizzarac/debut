@@ -1389,8 +1389,14 @@ fn interchange_writes_edl_and_otio() {
         serde_json::from_str(&std::fs::read_to_string(otio).unwrap()).unwrap();
     assert_eq!(otio["OTIO_SCHEMA"], "Timeline.1");
     assert!(!otio["tracks"]["children"].as_array().unwrap().is_empty());
-    let bad = dir.join("cut.xml").to_string_lossy().into_owned();
-    assert!(s.export_interchange(&bad, "fcpxml").is_err());
+    let fcp = dir.join("cut.fcpxml").to_string_lossy().into_owned();
+    s.export_interchange(&fcp, "fcpxml").unwrap();
+    let fcp = std::fs::read_to_string(fcp).unwrap();
+    assert!(fcp.contains("<fcpxml version=\"1.10\">") && fcp.contains("<asset-clip "));
+    // The probed 2 s fixture length is the asset duration.
+    assert!(fcp.contains(r#"duration="2s" hasVideo="1""#), "{fcp}");
+    let bad = dir.join("cut.aaf").to_string_lossy().into_owned();
+    assert!(s.export_interchange(&bad, "aaf").is_err());
 }
 
 /// Timeline and clip markers (TL-10).

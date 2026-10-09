@@ -317,15 +317,20 @@ impl Session {
         }
     }
 
-    /// Write the active sequence as an edit decision list for another
-    /// application (MED-12): `"edl"` is CMX3600 for the first video and audio
-    /// track, `"otio"` is OpenTimelineIO JSON for the whole sequence.
+    /// Write the active sequence for another application (MED-12): `"edl"`
+    /// is CMX3600 for the first video and audio track, `"otio"`
+    /// OpenTimelineIO JSON and `"fcpxml"` Final Cut Pro XML for the whole
+    /// sequence.
     pub fn export_interchange(&self, path: &str, format: &str) -> Result<(), String> {
         let project = self.project().ok_or("no project open")?;
         let seq = self.first_sequence()?;
         let text = match format {
             "edl" => debut_media::interchange::edl(seq, &project.media),
             "otio" => debut_media::interchange::otio(seq, project),
+            "fcpxml" => {
+                let durations = self.probed.iter().map(|(id, p)| (*id, p.2)).collect();
+                debut_media::fcpxml::fcpxml(seq, project, &durations)
+            }
             other => return Err(format!("unknown interchange format {other}")),
         };
         self.store

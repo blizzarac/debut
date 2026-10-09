@@ -188,7 +188,7 @@ export interface ExportStatus {
   error: string | null;
 }
 
-export type InterchangeFormat = "edl" | "otio";
+export type InterchangeFormat = "edl" | "otio" | "fcpxml";
 
 export interface ExportApi {
   presets(): Promise<ExportPreset[]>;
