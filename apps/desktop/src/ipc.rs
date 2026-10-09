@@ -306,6 +306,30 @@ pub fn relink_media(state: State<'_, Shared>, media: String, path: String) -> Re
 }
 
 #[tauri::command]
+pub fn create_proxies(
+    state: State<'_, Shared>,
+    media: Vec<String>,
+    divisor: u8,
+) -> Result<(), String> {
+    lock(&state).create_proxies(media, divisor)
+}
+
+#[tauri::command]
+pub fn proxy_status(state: State<'_, Shared>) -> Result<Vec<ProxyStatusDto>, String> {
+    lock(&state).proxy_status()
+}
+
+#[tauri::command]
+pub fn use_proxies(state: State<'_, Shared>) -> bool {
+    lock(&state).use_proxies()
+}
+
+#[tauri::command]
+pub fn set_use_proxies(state: State<'_, Shared>, on: bool) -> Result<(), String> {
+    lock(&state).set_use_proxies(on)
+}
+
+#[tauri::command]
 pub fn media_list(state: State<'_, Shared>) -> Result<Vec<MediaDto>, String> {
     lock(&state).media_list()
 }

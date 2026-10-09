@@ -52,6 +52,9 @@ pub struct FfmpegDecoder {
     video_queue: VecDeque<VideoFrame>,
     audio_queue: VecDeque<AudioBlock>,
     eof: bool,
+    /// Streams to decode; packets of a switched-off stream are dropped.
+    want_video: bool,
+    want_audio: bool,
 }
 
 // The FFmpeg contexts are only ever touched from the thread that owns the decoder.
@@ -152,6 +155,8 @@ impl FfmpegDecoder {
             audio,
             video_queue: VecDeque::new(),
             audio_queue: VecDeque::new(),
+            want_video: true,
+            want_audio: true,
             eof: false,
         })
     }
@@ -240,7 +245,7 @@ impl FfmpegDecoder {
                 Err(e) => return Err(err(e)),
             }
             let idx = packet.stream();
-            if self.video.as_ref().is_some_and(|v| v.index == idx) {
+            if self.want_video && self.video.as_ref().is_some_and(|v| v.index == idx) {
                 self.video
                     .as_mut()
                     .unwrap()
@@ -248,7 +253,7 @@ impl FfmpegDecoder {
                     .send_packet(&packet)
                     .map_err(err)?;
                 self.drain_video()?;
-            } else if self.audio.as_ref().is_some_and(|a| a.index == idx) {
+            } else if self.want_audio && self.audio.as_ref().is_some_and(|a| a.index == idx) {
                 self.audio
                     .as_mut()
                     .unwrap()
@@ -287,8 +292,19 @@ impl Decoder for FfmpegDecoder {
         Ok(())
     }
 
+    fn select(&mut self, video: bool, audio: bool) {
+        self.want_video = video;
+        self.want_audio = audio;
+        if !video {
+            self.video_queue.clear();
+        }
+        if !audio {
+            self.audio_queue.clear();
+        }
+    }
+
     fn next_video(&mut self) -> Result<Option<VideoFrame>> {
-        if self.video.is_none() {
+        if self.video.is_none() || !self.want_video {
             return Ok(None);
         }
         self.pump(true)?;
@@ -296,7 +312,7 @@ impl Decoder for FfmpegDecoder {
     }
 
     fn next_audio(&mut self) -> Result<Option<AudioBlock>> {
-        if self.audio.is_none() {
+        if self.audio.is_none() || !self.want_audio {
             return Ok(None);
         }
         self.pump(false)?;
@@ -765,6 +781,26 @@ mod tests {
         // ~2 s of audio (encoder priming may add or trim a few frames).
         assert!((90_000..=100_000).contains(&total), "{total} samples");
         assert!(peak > 0.1 && peak <= 1.0, "peak {peak}");
+    }
+
+    #[test]
+    fn selecting_one_stream_leaves_the_other_unbuffered() {
+        let mut d = FfmpegDecoder::open(FIXTURE).unwrap();
+        d.select(true, false);
+        let mut frames = 0;
+        while d.next_video().unwrap().is_some() {
+            frames += 1;
+        }
+        assert_eq!(frames, 50);
+        assert!(d.audio_queue.is_empty());
+        assert!(d.next_audio().unwrap().is_none());
+        let mut d = FfmpegDecoder::open(FIXTURE).unwrap();
+        d.select(false, true);
+        let mut blocks = 0;
+        while d.next_audio().unwrap().is_some() {
+            blocks += 1;
+        }
+        assert!(blocks > 0 && d.video_queue.is_empty());
     }
 
     #[test]

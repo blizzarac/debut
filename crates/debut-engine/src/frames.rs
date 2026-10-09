@@ -104,7 +104,9 @@ impl FrameSource {
         Some(img)
     }
 
-    pub fn add(&mut self, media: MediaId, decoder: Box<dyn Decoder>) -> Result<()> {
+    pub fn add(&mut self, media: MediaId, mut decoder: Box<dyn Decoder>) -> Result<()> {
+        // Video only: otherwise the decoder queues all the audio it passes.
+        decoder.select(true, false);
         let info = decoder
             .video_info()
             .ok_or_else(|| Error::InvalidArgument("media has no video stream".into()))?;

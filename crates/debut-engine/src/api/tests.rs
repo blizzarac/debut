@@ -1171,6 +1171,59 @@ fn music_track_ducks_under_dialogue() {
         .is_some());
 }
 
+/// Proxies: built in the background, played while switched on, ignored once
+/// stale (MED-05).
+#[test]
+fn proxies_build_in_the_background_and_switch_the_player() {
+    let Fx {
+        mut s,
+        m,
+        path,
+        dir: _dir,
+        ..
+    } = fixture("proxies_build_in_the_background_and_switch_the_player");
+    let mid = MediaId(parse_id(&m.id).unwrap());
+    assert_eq!(s.proxy_status().unwrap()[0].state, "none");
+    assert!(s.create_proxies(vec![m.id.clone()], 3).is_err());
+    s.create_proxies(vec![m.id.clone()], 2).unwrap();
+    let mut status = s.proxy_status().unwrap().remove(0);
+    for _ in 0..200 {
+        if status.state == "ready" || status.state == "failed" {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        status = s.proxy_status().unwrap().remove(0);
+    }
+    assert_eq!(status.state, "ready", "{status:?}");
+    let proxy = status.path.clone().unwrap();
+    assert!(proxy.starts_with(path.trim_end_matches(".debut")) && proxy.ends_with(".proxy2.mp4"));
+
+    s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+    let full = s.frame_pixels().unwrap().2;
+    let dims = |s: &Session| s.player.as_ref().unwrap().frames.dimensions(mid);
+    assert_eq!(dims(&s), Some((64, 36)));
+    s.set_use_proxies(true).unwrap();
+    assert!(s.use_proxies());
+    assert_eq!(dims(&s), Some((32, 18)), "video decodes from the proxy");
+    // Same framing and roughly the same picture at a quarter of the pixels.
+    let small = s.frame_pixels().unwrap().2;
+    let diff = (sum(&full) as f64 - sum(&small) as f64).abs() / sum(&full) as f64;
+    assert!(diff < 0.1, "proxy picture differs by {diff}");
+    s.set_use_proxies(false).unwrap();
+    assert_eq!(dims(&s), Some((64, 36)));
+
+    // A marker naming another source makes the proxy stale.
+    s.store
+        .write(
+            &debut_media::proxy::marker_path(&proxy),
+            br#"{"source":"/elsewhere.mov","divisor":2}"#,
+        )
+        .unwrap();
+    assert_eq!(s.proxy_status().unwrap()[0].state, "none");
+    s.set_use_proxies(true).unwrap();
+    assert_eq!(dims(&s), Some((64, 36)), "stale proxy is not used");
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

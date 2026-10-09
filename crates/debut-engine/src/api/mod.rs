@@ -32,12 +32,15 @@ mod media;
 mod mixer;
 mod multicam;
 mod playback;
+mod proxies;
 mod timeline;
 mod titles;
 mod waveforms;
 
 pub use self::mixer::DuckDto;
 use self::mixer::*;
+use self::proxies::ProxyJobs;
+pub use self::proxies::ProxyStatusDto;
 use self::waveforms::WaveformCache;
 pub use self::{
     captions::*, effects::*, export::*, markers::*, media::*, multicam::*, playback::*,
@@ -59,6 +62,9 @@ pub struct Session {
     offline: std::collections::HashSet<MediaId>,
     /// Waveform peaks per media, built in the background (AUD-04).
     waveforms: WaveformCache,
+    /// Proxy jobs (MED-05) and whether the player decodes from proxies.
+    proxies: ProxyJobs,
+    use_proxies: bool,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -114,6 +120,8 @@ impl Session {
             active: None,
             offline: Default::default(),
             waveforms: Default::default(),
+            proxies: Default::default(),
+            use_proxies: false,
             player: None,
             audio_out: None,
             backend: AnyBackend::detect(),
@@ -326,9 +334,15 @@ impl Session {
             self.player = None;
             return Ok(());
         };
-        let media: Vec<(MediaId, String)> = self
+        // (id, original, file to decode video from: a proxy when in use).
+        let media: Vec<(MediaId, String, String)> = self
             .project()
-            .map(|p| p.media.iter().map(|m| (m.id, m.path.clone())).collect())
+            .map(|p| {
+                p.media
+                    .iter()
+                    .map(|m| (m.id, m.path.clone(), self.video_path(m.id, &m.path)))
+                    .collect()
+            })
             .unwrap_or_default();
         if self.player.is_none() {
             let (mut player, sink) = Player::new(seq.clone());
@@ -339,13 +353,13 @@ impl Session {
             self.player = Some(player);
         }
         let player = self.player.as_mut().unwrap();
-        for (id, path) in media {
+        for (id, path, video_path) in media {
             if player.frames.dimensions(id).is_some() {
                 continue;
             }
             // A missing or unreadable file must not take the whole project down:
             // its clips show the offline slate until it is relinked (MED-05).
-            let video = match self.platform.open_decoder(&path) {
+            let video = match self.platform.open_decoder(&video_path) {
                 Ok(d) => d,
                 Err(_) => {
                     self.offline.insert(id);
@@ -353,15 +367,22 @@ impl Session {
                 }
             };
             self.offline.remove(&id);
-            let has_audio = video.audio_info().is_some();
-            let audio = if has_audio {
-                Some(
-                    self.platform
-                        .open_decoder(&path)
-                        .map_err(|e| e.to_string())?,
-                )
+            // Audio always comes from the original (proxies are video only).
+            let audio = if video_path == path {
+                if video.audio_info().is_some() {
+                    Some(
+                        self.platform
+                            .open_decoder(&path)
+                            .map_err(|e| e.to_string())?,
+                    )
+                } else {
+                    None
+                }
             } else {
-                None
+                self.platform
+                    .open_decoder(&path)
+                    .ok()
+                    .filter(|d| d.audio_info().is_some())
             };
             player
                 .add_media(id, Some(video), audio)

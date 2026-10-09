@@ -361,6 +361,14 @@ export interface MarkersApi {
   exportList(path: string): Promise<number>;
 }
 
+export interface ProxyStatus {
+  media: string;
+  state: "none" | "queued" | "running" | "ready" | "failed";
+  progress: number;
+  error: string | null;
+  path: string | null;
+}
+
 export interface MediaApi {
   importMedia(path: string): Promise<MediaInfo>;
   /** Every media in the project (also after opening a file). */
@@ -379,6 +387,12 @@ export interface MediaApi {
   assignMedia(media: string, bin: string | null): Promise<void>;
   /** Point a media at another file; the player reloads it. */
   relinkMedia(media: string, path: string): Promise<void>;
+  /** Build 1/2 or 1/4 resolution proxies in the background (MED-05). */
+  createProxies?(media: string[], divisor: 2 | 4): Promise<void>;
+  proxyStatus?(): Promise<ProxyStatus[]>;
+  useProxies?(): Promise<boolean>;
+  /** Play video from proxies where they exist; export always uses originals. */
+  setUseProxies?(on: boolean): Promise<void>;
   ensureSequence(): Promise<SequenceInfo>;
   sequence(): Promise<SequenceInfo>;
   /** Every sequence in the project; one is active (shown in the timeline). */

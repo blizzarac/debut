@@ -21,6 +21,7 @@ import type {
   Duck,
   ExportApi,
   InterchangeFormat,
+  ProxyStatus,
   ExportPreset,
   ExportStatus,
   FileStatus,
@@ -78,6 +79,18 @@ class TauriMedia implements MediaApi {
   }
   relinkMedia(media: string, path: string) {
     return invoke<void>("relink_media", { media, path });
+  }
+  createProxies(media: string[], divisor: 2 | 4) {
+    return invoke<void>("create_proxies", { media, divisor });
+  }
+  proxyStatus() {
+    return invoke<ProxyStatus[]>("proxy_status");
+  }
+  useProxies() {
+    return invoke<boolean>("use_proxies");
+  }
+  setUseProxies(on: boolean) {
+    return invoke<void>("set_use_proxies", { on });
   }
   ensureSequence() {
     return invoke<SequenceInfo>("ensure_sequence");

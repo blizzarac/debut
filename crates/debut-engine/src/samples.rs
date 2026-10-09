@@ -42,7 +42,10 @@ impl SampleCache {
         self.sequences = all.iter().map(|s| (s.id, Arc::new(s.clone()))).collect();
     }
 
-    pub fn add(&mut self, media: MediaId, decoder: Box<dyn Decoder>) -> Result<()> {
+    pub fn add(&mut self, media: MediaId, mut decoder: Box<dyn Decoder>) -> Result<()> {
+        // Audio only: otherwise the decoder converts and queues every video
+        // frame it passes.
+        decoder.select(false, true);
         let info = decoder
             .audio_info()
             .ok_or_else(|| Error::InvalidArgument("media has no audio stream".into()))?;

@@ -1,8 +1,9 @@
-import { useState } from "react";
-import type { BinInfo, MediaApi, MediaInfo, RuleField } from "./engine";
+import { useEffect, useState } from "react";
+import type { BinInfo, MediaApi, MediaInfo, ProxyStatus, RuleField } from "./engine";
 
 /** Media and bins (MED-07): import, filter by bin or search, assign media to
- * manual bins, create manual or smart (file-name) bins. */
+ * manual bins, create manual or smart (file-name) bins; build proxies and
+ * switch playback to them (MED-05). */
 export function MediaPanel({
   media,
   list,
@@ -28,7 +29,27 @@ export function MediaPanel({
   const [ruleValue, setRuleValue] = useState("");
   const [tagging, setTagging] = useState<string | null>(null);
   const [relink, setRelink] = useState<{ id: string; path: string } | null>(null);
+  const [proxies, setProxies] = useState<Record<string, ProxyStatus>>({});
+  const [proxyDiv, setProxyDiv] = useState<2 | 4>(2);
+  const [useProxies, setUseProxies] = useState(false);
   const act = (p: Promise<unknown>) => p.then(onChanged).catch((e) => onStatus(String(e)));
+
+  // Poll proxy jobs; quickly while one runs, slowly otherwise.
+  const busy = Object.values(proxies).some((p) => p.state === "queued" || p.state === "running");
+  useEffect(() => {
+    if (!media.proxyStatus) return;
+    const load = () =>
+      media
+        .proxyStatus!()
+        .then((all) => setProxies(Object.fromEntries(all.map((p) => [p.media, p]))))
+        .catch(() => {});
+    load();
+    const id = setInterval(load, busy ? 500 : 3000);
+    return () => clearInterval(id);
+  }, [media, busy, list.length]);
+  useEffect(() => {
+    media.useProxies?.().then(setUseProxies).catch(() => {});
+  }, [media]);
   const name = (m: MediaInfo) => m.path.split("/").pop() ?? m.path;
   const q = search.toLowerCase();
   const shown = list.filter((m) => (!bin || m.bins.includes(bin)) && (!q || name(m).toLowerCase().includes(q) || m.keywords.some((k) => k.toLowerCase().includes(q))));
@@ -97,6 +118,44 @@ export function MediaPanel({
       <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
         <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="search names" style={{ flex: 1, minWidth: 0 }} />
       </div>
+      {media.createProxies && (
+        <div style={{ display: "flex", gap: 4, alignItems: "center", margin: "4px 0", color: "#555" }} title="Small copies for smooth editing; export always uses the original files">
+          proxies
+          <select value={proxyDiv} onChange={(e) => setProxyDiv(Number(e.target.value) as 2 | 4)}>
+            <option value={2}>½ size</option>
+            <option value={4}>¼ size</option>
+          </select>
+          <button
+            disabled={shown.length === 0}
+            onClick={() =>
+              media
+                .createProxies!(
+                  shown.filter((m) => m.online && proxies[m.id]?.state !== "ready").map((m) => m.id),
+                  proxyDiv,
+                )
+                .then(() => media.proxyStatus?.().then((all) => setProxies(Object.fromEntries(all.map((p) => [p.media, p])))))
+                .catch((e) => onStatus(String(e)))
+            }
+          >
+            Create for listed
+          </button>
+          <label>
+            <input
+              type="checkbox"
+              checked={useProxies}
+              onChange={(e) => {
+                const on = e.target.checked;
+                media
+                  .setUseProxies!(on)
+                  .then(() => setUseProxies(on))
+                  .then(onChanged)
+                  .catch((err) => onStatus(String(err)));
+              }}
+            />{" "}
+            use proxies
+          </label>
+        </div>
+      )}
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {shown.map((m) => (
           <li key={m.id} style={{ padding: "4px 2px", borderBottom: "1px solid #eee", display: "grid", gridTemplateColumns: "1fr auto auto", gap: 4, alignItems: "center" }}>
@@ -107,6 +166,7 @@ export function MediaPanel({
                 </button>
               )}
               {name(m)} · {m.width}×{m.height} · {m.duration.toFixed(2)}s
+              <ProxyBadge status={proxies[m.id]} />
             </span>
             {manual.length > 0 ? (
               <select value={m.bins.find((b) => manual.some((x) => x.id === b)) ?? ""} onChange={(e) => act(media.assignMedia(m.id, e.target.value || null))} title="Bin">
@@ -198,4 +258,23 @@ export function MediaPanel({
       </div>
     </div>
   );
+}
+
+/** "proxy" when ready, a percentage while building, "proxy failed" with the reason. */
+function ProxyBadge({ status }: { status: ProxyStatus | undefined }) {
+  if (!status || status.state === "none") return null;
+  const style: React.CSSProperties = { marginLeft: 6, padding: "0 4px", borderRadius: 3, fontSize: 10, border: "1px solid #ccc" };
+  if (status.state === "ready")
+    return (
+      <span style={{ ...style, color: "#16a34a", borderColor: "#16a34a" }} title={status.path ?? ""}>
+        proxy
+      </span>
+    );
+  if (status.state === "failed")
+    return (
+      <span style={{ ...style, color: "#c33", borderColor: "#c33" }} title={status.error ?? ""}>
+        proxy failed
+      </span>
+    );
+  return <span style={style}>proxy {Math.round(status.progress * 100)}%</span>;
 }

@@ -49,6 +49,10 @@ pub trait Decoder: Send {
     fn next_video(&mut self) -> Result<Option<VideoFrame>>;
     /// Next audio block in presentation order; `None` at end of stream.
     fn next_audio(&mut self) -> Result<Option<AudioBlock>>;
+    /// Decode only these streams. A reader that pulls one kind should switch
+    /// the other off, or the decoder buffers it while searching. Both are on
+    /// by default.
+    fn select(&mut self, _video: bool, _audio: bool) {}
 }
 
 pub trait Encoder: Send {
