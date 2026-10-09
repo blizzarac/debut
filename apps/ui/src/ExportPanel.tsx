@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { CodecCapabilities, ExportApi, ExportPreset, ExportStatus } from "./engine";
+import type { CodecCapabilities, ExportApi, ExportPreset, ExportStatus, InterchangeFormat } from "./engine";
 
 /** Queue exports with a delivery preset and optional loudness normalization; shows
  * progress, integrated LUFS and true peak per job (EXP-02, EXP-03, AUD-06). */
@@ -13,6 +13,7 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
   const [caps, setCaps] = useState<CodecCapabilities | null>(null);
   const [jobs, setJobs] = useState<ExportStatus[]>([]);
   const [error, setError] = useState("");
+  const [note, setNote] = useState("");
 
   useEffect(() => {
     exporter.presets().then((p) => {
@@ -42,6 +43,19 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
     }
   }
 
+  /** EDL/OTIO go next to the movie path: same name, the format's extension. */
+  async function interchange(format: InterchangeFormat) {
+    setError("");
+    setNote("");
+    const path = output.replace(/\.[^./\\]*$/, "") + "." + format;
+    try {
+      await exporter.interchange!(path, format);
+      setNote(`Wrote ${path}`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
   return (
     <div style={{ fontSize: 12 }}>
       <div style={{ display: "flex", gap: 4, alignItems: "center", flexWrap: "wrap" }}>
@@ -65,8 +79,19 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
         <button onClick={start} disabled={!output || !preset}>
           Export
         </button>
+        {exporter.interchange && (
+          <>
+            <button onClick={() => interchange("edl")} disabled={!output} title="CMX3600 EDL of the first video and audio track">
+              EDL
+            </button>
+            <button onClick={() => interchange("otio")} disabled={!output} title="OpenTimelineIO of the whole sequence">
+              OTIO
+            </button>
+          </>
+        )}
       </div>
       {error && <p style={{ color: "#c33" }}>{error}</p>}
+      {note && <p style={{ color: "#666" }}>{note}</p>}
       <ul style={{ listStyle: "none", padding: 0, margin: "6px 0 0" }}>
         {jobs.map((j) => (
           <li key={j.id} style={{ borderTop: "1px solid #eee", padding: "4px 0" }}>

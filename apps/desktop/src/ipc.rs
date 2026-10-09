@@ -171,6 +171,15 @@ pub fn export_start(
 }
 
 #[tauri::command]
+pub fn export_interchange(
+    state: State<'_, Shared>,
+    path: String,
+    format: String,
+) -> Result<(), String> {
+    lock(&state).export_interchange(&path, &format)
+}
+
+#[tauri::command]
 pub fn codec_capabilities(state: State<'_, Shared>) -> CodecCapabilitiesDto {
     lock(&state).codec_capabilities()
 }

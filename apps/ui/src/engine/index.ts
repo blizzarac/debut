@@ -161,12 +161,16 @@ export interface ExportStatus {
   error: string | null;
 }
 
+export type InterchangeFormat = "edl" | "otio";
+
 export interface ExportApi {
   presets(): Promise<ExportPreset[]>;
   /** Queue an export of the whole sequence; `normalize` is a LUFS target or null. */
   start(output: string, preset: string, normalize: number | null, captionSidecar?: boolean, hardware?: boolean): Promise<number>;
   /** Hardware encoders that open on this machine and hardware decoders compiled in. */
   capabilities?(): Promise<CodecCapabilities>;
+  /** Write the active sequence as an EDL or OpenTimelineIO file for another application. */
+  interchange?(path: string, format: InterchangeFormat): Promise<void>;
   status(): Promise<ExportStatus[]>;
   pause(id: number): Promise<void>;
   resume(id: number): Promise<void>;

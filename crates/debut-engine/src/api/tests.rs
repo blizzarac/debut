@@ -1047,6 +1047,25 @@ fn snap_points_and_close_gaps() {
     );
 }
 
+/// EDL and OpenTimelineIO export (MED-12).
+#[test]
+fn interchange_writes_edl_and_otio() {
+    let Fx { s, dir, .. } = fixture("interchange_writes_edl_and_otio");
+    let edl = dir.join("cut.edl").to_string_lossy().into_owned();
+    let otio = dir.join("cut.otio").to_string_lossy().into_owned();
+    s.export_interchange(&edl, "edl").unwrap();
+    s.export_interchange(&otio, "otio").unwrap();
+    let edl = std::fs::read_to_string(edl).unwrap();
+    assert!(edl.starts_with("TITLE: "), "{edl}");
+    assert!(edl.contains("001  ") && edl.contains("* FROM CLIP NAME: "));
+    let otio: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(otio).unwrap()).unwrap();
+    assert_eq!(otio["OTIO_SCHEMA"], "Timeline.1");
+    assert!(!otio["tracks"]["children"].as_array().unwrap().is_empty());
+    let bad = dir.join("cut.xml").to_string_lossy().into_owned();
+    assert!(s.export_interchange(&bad, "fcpxml").is_err());
+}
+
 /// Timeline and clip markers (TL-10).
 #[test]
 fn markers_edit_export_undo() {

@@ -11,3 +11,4 @@ debut-core.workspace = true
 debut-platform.workspace = true
 debut-project.workspace = true
 thiserror.workspace = true
+serde_json.workspace = true
