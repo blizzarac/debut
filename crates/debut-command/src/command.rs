@@ -194,6 +194,12 @@ pub enum Command {
         media: MediaId,
         bin: Option<BinId>,
     },
+    /// Keywords and star rating of a media (MED-08).
+    SetMediaTags {
+        media: MediaId,
+        keywords: Vec<String>,
+        rating: u8,
+    },
     // ---- project structure (MED-07, TL-01) ----------------------------------
     AddMedia(MediaRef),
     RemoveMedia(MediaId),
@@ -633,6 +639,27 @@ impl Command {
                 }
                 Ok(())
             }
+            Command::SetMediaTags {
+                media,
+                keywords,
+                rating,
+            } => {
+                if *rating > 5 {
+                    return Err(Error::InvalidArgument("rating is 0..=5".into()));
+                }
+                let m = project
+                    .media
+                    .iter_mut()
+                    .find(|m| m.id == *media)
+                    .ok_or_else(|| Error::NotFound(format!("media {media:?}")))?;
+                m.keywords = keywords
+                    .iter()
+                    .map(|k| k.trim().to_string())
+                    .filter(|k| !k.is_empty())
+                    .collect();
+                m.rating = *rating;
+                Ok(())
+            }
             Command::AddMedia(m) => {
                 if project.media.iter().any(|x| x.id == m.id) {
                     return Err(Error::InvalidArgument("media id already exists".into()));
@@ -975,6 +1002,16 @@ impl Command {
                     .find(|b| !b.is_smart() && b.items.contains(media))
                     .map(|b| b.id),
             }),
+            Command::SetMediaTags { media, .. } => project
+                .media
+                .iter()
+                .find(|m| m.id == *media)
+                .map(|m| Command::SetMediaTags {
+                    media: *media,
+                    keywords: m.keywords.clone(),
+                    rating: m.rating,
+                })
+                .ok_or_else(|| Error::NotFound(format!("media {media:?}"))),
             Command::AddMedia(m) => Ok(Command::RemoveMedia(m.id)),
             Command::RemoveMedia(id) => {
                 let m = project
@@ -1406,6 +1443,8 @@ mod tests {
             online: true,
             metadata: Default::default(),
             proxies: vec![],
+            keywords: vec![],
+            rating: 0,
         };
         let seq = Sequence::new(fx.ids.fresh(), "second", FrameRate::FPS_25, 16, 9);
         let track = Track::new(fx.ids.fresh(), TrackKind::Audio);

@@ -30,6 +30,8 @@ pub fn run() {
             ipc::media_list,
             ipc::bins,
             ipc::add_bin,
+            ipc::add_smart_bin,
+            ipc::set_media_tags,
             ipc::rename_bin,
             ipc::remove_bin,
             ipc::assign_media,

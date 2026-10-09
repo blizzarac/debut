@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  SmartRule,
   CaptionSettings,
   BinInfo,
   TitleTemplate,
@@ -48,6 +49,12 @@ class TauriMedia implements MediaApi {
   }
   addBin(name: string, filter?: string) {
     return invoke<string>("add_bin", { name, filter: filter ?? null });
+  }
+  addSmartBin(name: string, rule: SmartRule) {
+    return invoke<string>("add_smart_bin", { name, rule });
+  }
+  setMediaTags(media: string, keywords: string[], rating: number) {
+    return invoke<void>("set_media_tags", { media, keywords, rating });
   }
   renameBin(id: string, name: string) {
     return invoke<void>("rename_bin", { id, name });

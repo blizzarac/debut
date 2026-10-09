@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { BinInfo, MediaApi, MediaInfo } from "./engine";
+import type { BinInfo, MediaApi, MediaInfo, RuleField } from "./engine";
 
 /** Media and bins (MED-07): import, filter by bin or search, assign media to
  * manual bins, create manual or smart (file-name) bins. */
@@ -24,9 +24,13 @@ export function MediaPanel({
   const [bin, setBin] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [newBin, setNewBin] = useState("");
+  const [ruleField, setRuleField] = useState<RuleField>("name");
+  const [ruleValue, setRuleValue] = useState("");
+  const [tagging, setTagging] = useState<string | null>(null);
   const act = (p: Promise<unknown>) => p.then(onChanged).catch((e) => onStatus(String(e)));
   const name = (m: MediaInfo) => m.path.split("/").pop() ?? m.path;
-  const shown = list.filter((m) => (!bin || m.bins.includes(bin)) && (!search || name(m).toLowerCase().includes(search.toLowerCase())));
+  const q = search.toLowerCase();
+  const shown = list.filter((m) => (!bin || m.bins.includes(bin)) && (!q || name(m).toLowerCase().includes(q) || m.keywords.some((k) => k.toLowerCase().includes(q))));
   const manual = bins.filter((b) => !b.smart);
   const chip = (active: boolean): React.CSSProperties => ({
     padding: "2px 8px",
@@ -113,6 +117,33 @@ export function MediaPanel({
             <button onClick={() => onInsert(m)} title="Insert at playhead">
               +
             </button>
+            <div style={{ gridColumn: "1 / -1", display: "flex", gap: 4, alignItems: "center", color: "#666" }}>
+              <span title="rating" style={{ letterSpacing: 1, cursor: "pointer" }}>
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <span key={n} onClick={() => act(media.setMediaTags(m.id, m.keywords, m.rating === n ? 0 : n))} style={{ color: n <= m.rating ? "#f59e0b" : "#ccc" }}>
+                    ★
+                  </span>
+                ))}
+              </span>
+              {tagging === m.id ? (
+                <input
+                  autoFocus
+                  defaultValue={m.keywords.join(", ")}
+                  placeholder="keywords, comma separated"
+                  style={{ flex: 1, minWidth: 0 }}
+                  onBlur={(e) => {
+                    setTagging(null);
+                    const kws = e.target.value.split(",").map((k) => k.trim()).filter(Boolean);
+                    if (kws.join("|") !== m.keywords.join("|")) act(media.setMediaTags(m.id, kws, m.rating));
+                  }}
+                  onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()}
+                />
+              ) : (
+                <span onClick={() => setTagging(m.id)} title="click to edit keywords" style={{ flex: 1, cursor: "text", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                  {m.keywords.length ? m.keywords.join(", ") : "add keywords…"}
+                </span>
+              )}
+            </div>
           </li>
         ))}
       </ul>
@@ -122,7 +153,23 @@ export function MediaPanel({
         <button disabled={!newBin} onClick={() => { act(media.addBin(newBin)); setNewBin(""); }}>
           Bin
         </button>
-        <button disabled={!newBin} title="Smart bin: media whose file name contains the name" onClick={() => { act(media.addBin(newBin, newBin)); setNewBin(""); }}>
+        <select value={ruleField} onChange={(e) => setRuleField(e.target.value as RuleField)} title="Smart bin rule">
+          <option value="name">name contains</option>
+          <option value="keyword">keyword is</option>
+          <option value="rating">rating ≥</option>
+          <option value="path">path contains</option>
+        </select>
+        <input value={ruleValue} onChange={(e) => setRuleValue(e.target.value)} placeholder={ruleField === "rating" ? "1–5" : "value"} style={{ width: 70 }} />
+        <button
+          disabled={!newBin || !ruleValue}
+          title="Smart bin: members are the media matching the rule"
+          onClick={() => {
+            const op = ruleField === "rating" ? "gte" : ruleField === "keyword" ? "eq" : "contains";
+            act(media.addSmartBin(newBin, { field: ruleField, op, value: ruleValue }));
+            setNewBin("");
+            setRuleValue("");
+          }}
+        >
           Smart
         </button>
         {shown.length >= 2 && (

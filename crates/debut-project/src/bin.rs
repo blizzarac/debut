@@ -70,19 +70,46 @@ impl Bin {
 impl SmartRule {
     pub fn matches(&self, media: &crate::media_ref::MediaRef) -> bool {
         let name = media.path.rsplit('/').next().unwrap_or(&media.path);
-        let text = match self.field.as_str() {
-            "name" => name.to_string(),
-            "path" => media.path.clone(),
-            "reel" => media.metadata.reel.clone().unwrap_or_default(),
-            "camera" => media.metadata.camera.clone().unwrap_or_default(),
-            "audio" => (media.metadata.audio_channels > 0).to_string(),
-            _ => return false,
+        let value = self.value.to_lowercase();
+        let text_op = |a: &str| match self.op.as_str() {
+            "contains" => a.contains(&value),
+            "eq" | "is" => a == value,
+            "starts" => a.starts_with(&value),
+            _ => false,
         };
-        let (a, b) = (text.to_lowercase(), self.value.to_lowercase());
-        match self.op.as_str() {
-            "contains" => a.contains(&b),
-            "eq" | "is" => a == b,
-            "starts" => a.starts_with(&b),
+        match self.field.as_str() {
+            "name" => text_op(&name.to_lowercase()),
+            "path" => text_op(&media.path.to_lowercase()),
+            "reel" => text_op(
+                &media
+                    .metadata
+                    .reel
+                    .clone()
+                    .unwrap_or_default()
+                    .to_lowercase(),
+            ),
+            "camera" => text_op(
+                &media
+                    .metadata
+                    .camera
+                    .clone()
+                    .unwrap_or_default()
+                    .to_lowercase(),
+            ),
+            "audio" => text_op(&(media.metadata.audio_channels > 0).to_string()),
+            // Any keyword may satisfy the rule.
+            "keyword" => media.keywords.iter().any(|k| text_op(&k.to_lowercase())),
+            "rating" => {
+                let Ok(n) = value.trim().parse::<u8>() else {
+                    return false;
+                };
+                match self.op.as_str() {
+                    "gte" | ">=" => media.rating >= n,
+                    "eq" | "is" | "==" => media.rating == n,
+                    "lte" | "<=" => media.rating <= n,
+                    _ => false,
+                }
+            }
             _ => false,
         }
     }
@@ -106,9 +133,23 @@ mod tests {
                 ..Default::default()
             },
             proxies: vec![],
+            keywords: vec![],
+            rating: 0,
         };
-        let a = m("/shoot/Interview_A.mov", 2, &mut ids);
+        let mut a = m("/shoot/Interview_A.mov", 2, &mut ids);
         let b = m("/shoot/broll_02.mp4", 0, &mut ids);
+        a.keywords = vec!["CEO".into(), "wide".into()];
+        a.rating = 4;
+        let rule = |field: &str, op: &str, value: &str| SmartRule {
+            field: field.into(),
+            op: op.into(),
+            value: value.into(),
+        };
+        assert!(
+            rule("keyword", "eq", "ceo").matches(&a) && !rule("keyword", "eq", "ceo").matches(&b)
+        );
+        assert!(rule("rating", "gte", "4").matches(&a) && !rule("rating", "gte", "5").matches(&a));
+        assert!(!rule("rating", "gte", "x").matches(&a));
         let mut manual = Bin::manual(ids.fresh(), "Selects");
         manual.items.push(b.id);
         assert!(!manual.contains(&a) && manual.contains(&b));

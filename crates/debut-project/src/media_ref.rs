@@ -11,6 +11,12 @@ pub struct MediaRef {
     pub online: bool,
     pub metadata: MediaMetadata,
     pub proxies: Vec<Proxy>,
+    /// Free-form keywords for search and smart bins (MED-08).
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    /// 0 = unrated, else 1..=5 stars (MED-08).
+    #[serde(default)]
+    pub rating: u8,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]

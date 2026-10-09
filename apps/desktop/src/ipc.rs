@@ -474,6 +474,10 @@ pub struct MediaDto {
     /// Bins this media is in (manual membership and smart matches).
     #[serde(default)]
     pub bins: Vec<String>,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default)]
+    pub rating: u8,
 }
 
 #[derive(Serialize)]
@@ -481,9 +485,17 @@ pub struct BinDto {
     pub id: String,
     pub name: String,
     pub smart: bool,
-    /// The smart bin's file-name filter, if that is what it is.
+    /// The smart bin's rule as "field op value", if it is a smart bin.
     pub filter: Option<String>,
     pub count: usize,
+}
+
+/// A smart-bin rule as the app sends it.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RuleDto {
+    pub field: String,
+    pub op: String,
+    pub value: String,
 }
 
 #[derive(Serialize)]
@@ -600,6 +612,8 @@ impl Session {
                 ..Default::default()
             },
             proxies: vec![],
+            keywords: vec![],
+            rating: 0,
         };
         self.probed
             .insert(id, (v.width, v.height, v.duration, has_audio));
@@ -613,6 +627,8 @@ impl Session {
             frame_rate: [v.frame_rate.0.num, v.frame_rate.0.den],
             has_audio,
             bins: Vec::new(),
+            keywords: Vec::new(),
+            rating: 0,
         })
     }
 
@@ -656,6 +672,8 @@ impl Session {
                         .filter(|b| b.contains(m))
                         .map(|b| id_str(b.id.0))
                         .collect(),
+                    keywords: m.keywords.clone(),
+                    rating: m.rating,
                 }
             })
             .collect())
@@ -670,10 +688,13 @@ impl Session {
                 name: b.name.clone(),
                 smart: b.is_smart(),
                 filter: match &b.kind {
-                    debut_project::BinKind::Smart { rules } => rules
-                        .iter()
-                        .find(|r| r.field == "name" && r.op == "contains")
-                        .map(|r| r.value.clone()),
+                    debut_project::BinKind::Smart { rules } => Some(
+                        rules
+                            .iter()
+                            .map(|r| format!("{} {} {}", r.field, r.op, r.value))
+                            .collect::<Vec<_>>()
+                            .join(" and "),
+                    ),
                     _ => None,
                 },
                 count: p.media.iter().filter(|m| b.contains(m)).count(),
@@ -683,13 +704,60 @@ impl Session {
 
     /// New bin; with `filter` it is a smart bin matching file names containing it.
     pub fn add_bin(&mut self, name: String, filter: Option<String>) -> Result<String, String> {
+        match filter.filter(|f| !f.trim().is_empty()) {
+            Some(f) => self.add_smart_bin(
+                name,
+                RuleDto {
+                    field: "name".into(),
+                    op: "contains".into(),
+                    value: f.trim().to_string(),
+                },
+            ),
+            None => {
+                let id: BinId = self.ids.fresh();
+                self.exec(Command::AddBin(Bin::manual(id, name)))?;
+                Ok(id_str(id.0))
+            }
+        }
+    }
+
+    /// New smart bin with one rule (name/path/keyword contains, rating gte, ...).
+    pub fn add_smart_bin(&mut self, name: String, rule: RuleDto) -> Result<String, String> {
+        const FIELDS: &[&str] = &[
+            "name", "path", "reel", "camera", "audio", "keyword", "rating",
+        ];
+        if !FIELDS.contains(&rule.field.as_str()) {
+            return Err(format!("unknown rule field {}", rule.field));
+        }
         let id: BinId = self.ids.fresh();
-        let bin = match filter.filter(|f| !f.trim().is_empty()) {
-            Some(f) => Bin::name_contains(id, name, f.trim()),
-            None => Bin::manual(id, name),
+        let bin = Bin {
+            id,
+            name,
+            kind: debut_project::BinKind::Smart {
+                rules: vec![debut_project::SmartRule {
+                    field: rule.field,
+                    op: rule.op,
+                    value: rule.value,
+                }],
+            },
+            items: Vec::new(),
         };
         self.exec(Command::AddBin(bin))?;
         Ok(id_str(id.0))
+    }
+
+    /// Keywords (comma separated or a list) and a 0..=5 rating for a media.
+    pub fn set_media_tags(
+        &mut self,
+        media: &str,
+        keywords: Vec<String>,
+        rating: u8,
+    ) -> Result<(), String> {
+        self.exec(Command::SetMediaTags {
+            media: MediaId(parse_id(media)?),
+            keywords,
+            rating,
+        })
     }
 
     pub fn rename_bin(&mut self, id: &str, name: String) -> Result<(), String> {
@@ -2256,6 +2324,25 @@ pub fn add_bin(
 }
 
 #[tauri::command]
+pub fn add_smart_bin(
+    state: State<'_, Shared>,
+    name: String,
+    rule: RuleDto,
+) -> Result<String, String> {
+    lock(&state).add_smart_bin(name, rule)
+}
+
+#[tauri::command]
+pub fn set_media_tags(
+    state: State<'_, Shared>,
+    media: String,
+    keywords: Vec<String>,
+    rating: u8,
+) -> Result<(), String> {
+    lock(&state).set_media_tags(&media, keywords, rating)
+}
+
+#[tauri::command]
 pub fn rename_bin(state: State<'_, Shared>, id: String, name: String) -> Result<(), String> {
     lock(&state).rename_bin(&id, name)
 }
@@ -2940,7 +3027,7 @@ mod tests {
         assert_eq!((by(&selects).count, by(&selects).smart), (1, false));
         assert_eq!(
             (by(&tests).count, by(&tests).filter.as_deref()),
-            (2, Some("test_"))
+            (2, Some("name contains test_"))
         );
         s.rename_bin(&selects, "Keepers".into()).unwrap();
         s.assign_media(&m.id, None).unwrap();
@@ -2957,6 +3044,66 @@ mod tests {
         assert_eq!(s.bins().unwrap().len(), 1);
         s.workspace_mut().unwrap().undo().unwrap();
         assert_eq!(s.bins().unwrap().len(), 2);
+        // Keywords and ratings feed smart bins (MED-08).
+        s.set_media_tags(&m.id, vec!["hero".into(), " wide ".into(), "".into()], 5)
+            .unwrap();
+        assert!(s.set_media_tags(&m.id, vec![], 7).is_err());
+        let tagged = s
+            .media_list()
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == m.id)
+            .unwrap();
+        assert_eq!(
+            (tagged.keywords.as_slice(), tagged.rating),
+            (["hero".to_string(), "wide".to_string()].as_slice(), 5)
+        );
+        let stars = s
+            .add_smart_bin(
+                "Five stars".into(),
+                RuleDto {
+                    field: "rating".into(),
+                    op: "gte".into(),
+                    value: "5".into(),
+                },
+            )
+            .unwrap();
+        let heroes = s
+            .add_smart_bin(
+                "Hero".into(),
+                RuleDto {
+                    field: "keyword".into(),
+                    op: "eq".into(),
+                    value: "Hero".into(),
+                },
+            )
+            .unwrap();
+        assert!(s
+            .add_smart_bin(
+                "bad".into(),
+                RuleDto {
+                    field: "nope".into(),
+                    op: "eq".into(),
+                    value: "".into()
+                }
+            )
+            .is_err());
+        let bins = s.bins().unwrap();
+        let by = |id: &str| bins.iter().find(|b| b.id == id).unwrap();
+        assert_eq!((by(&stars).count, by(&heroes).count), (1, 1));
+        assert_eq!(by(&stars).filter.as_deref(), Some("rating gte 5"));
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.workspace_mut().unwrap().undo().unwrap();
+        assert_eq!(
+            s.media_list()
+                .unwrap()
+                .into_iter()
+                .find(|x| x.id == m.id)
+                .unwrap()
+                .rating,
+            0
+        );
         s.remove_bin(&selects).unwrap();
         s.remove_bin(&tests).unwrap();
 

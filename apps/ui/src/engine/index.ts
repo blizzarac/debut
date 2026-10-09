@@ -36,6 +36,17 @@ export interface MediaInfo {
   has_audio: boolean;
   /** Ids of the bins this media is in (manual and smart). */
   bins: string[];
+  keywords: string[];
+  /** 0 = unrated, else 1..5. */
+  rating: number;
+}
+
+export type RuleField = "name" | "path" | "keyword" | "rating" | "reel" | "camera" | "audio";
+
+export interface SmartRule {
+  field: RuleField;
+  op: "contains" | "eq" | "starts" | "gte" | "lte";
+  value: string;
 }
 
 export interface BinInfo {
@@ -301,6 +312,8 @@ export interface MediaApi {
   bins(): Promise<BinInfo[]>;
   /** With `filter`, a smart bin matching file names containing it. */
   addBin(name: string, filter?: string): Promise<string>;
+  addSmartBin(name: string, rule: SmartRule): Promise<string>;
+  setMediaTags(media: string, keywords: string[], rating: number): Promise<void>;
   renameBin(id: string, name: string): Promise<void>;
   removeBin(id: string): Promise<void>;
   assignMedia(media: string, bin: string | null): Promise<void>;
