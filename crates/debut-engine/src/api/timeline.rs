@@ -91,6 +91,17 @@ pub struct ClipDto {
     pub duration: f64,
     pub source_in: f64,
     pub transition_in: Option<f64>,
+    /// Constant speed (1 normal, 0 freeze, negative reverse) and the ramp
+    /// that overrides it when non-empty (TL-09).
+    pub speed: f64,
+    pub ramp: Vec<SpeedKeyDto>,
+}
+
+/// One speed-ramp key in clip-local seconds.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct SpeedKeyDto {
+    pub at: f64,
+    pub speed: f64,
 }
 
 #[derive(Serialize)]
@@ -172,6 +183,15 @@ pub(crate) fn sequence_dto(seq: &Sequence) -> SequenceDto {
                         duration: secs(c.duration),
                         source_in: secs(c.source_in),
                         transition_in: c.transition_in.map(|t| secs(t.duration)),
+                        speed: c.speed.as_f64(),
+                        ramp: c
+                            .ramp
+                            .iter()
+                            .map(|k| SpeedKeyDto {
+                                at: secs(k.at),
+                                speed: k.speed,
+                            })
+                            .collect(),
                     })
                     .collect(),
             })
@@ -241,6 +261,20 @@ pub enum EditOp {
     /// Remove the gaps between clips on a track, rippling later clips left (TL-06).
     CloseGaps {
         track: String,
+    },
+    /// Constant speed keeping the clip's material (TL-09); `ripple` moves the
+    /// rest of the track, otherwise a longer clip stops at the next one.
+    Speed {
+        track: String,
+        clip: String,
+        speed: f64,
+        ripple: bool,
+    },
+    /// Replace the clip's speed ramp; empty clears it.
+    Ramp {
+        track: String,
+        clip: String,
+        keys: Vec<SpeedKeyDto>,
     },
 }
 
@@ -415,6 +449,34 @@ impl Session {
                 ids,
             )),
             EditOp::CloseGaps { track } => debut_timeline::close_gaps(project, target(&track)?),
+            EditOp::Speed {
+                track,
+                clip: c,
+                speed,
+                ripple,
+            } => {
+                if !speed.is_finite() {
+                    return Err("speed must be a number".into());
+                }
+                // Thousandths are plenty for a speed and keep the rationals small.
+                let speed = Rational::new((speed * 1000.0).round() as i64, 1000);
+                debut_timeline::set_speed(project, target(&track)?, clip(&c)?, speed, ripple)
+            }
+            EditOp::Ramp {
+                track,
+                clip: c,
+                keys,
+            } => debut_timeline::set_ramp(
+                project,
+                target(&track)?,
+                clip(&c)?,
+                keys.iter()
+                    .map(|k| SpeedKey {
+                        at: frames_of(k.at, fr),
+                        speed: k.speed,
+                    })
+                    .collect(),
+            ),
             EditOp::Lift { track, start, end } => Ok(Command::lift(
                 target(&track)?,
                 frames_of(start, fr),

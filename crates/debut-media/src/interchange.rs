@@ -116,11 +116,15 @@ pub fn edl(seq: &Sequence, media: &[MediaRef]) -> String {
                 ));
                 continue;
             };
-            let src_out = src_in + (rec_out - rec_in) * clip.speed;
+            let src_out = media_of(clip, media, rec_out)
+                .map(|(_, s)| s)
+                .unwrap_or(src_in + (rec_out - rec_in) * clip.speed);
             event += 1;
+            // Source in/out ascend even when the clip plays backwards; the M2
+            // line carries the direction.
             let (si, so) = (
-                source_frame(m, src_in, rate),
-                source_frame(m, src_out, rate),
+                source_frame(m, src_in.min(src_out), rate),
+                source_frame(m, src_in.max(src_out), rate),
             );
             let (ri, ro) = (frames(rec_in, rate), frames(rec_out, rate));
             match (
@@ -138,10 +142,59 @@ pub fn edl(seq: &Sequence, media: &[MediaRef]) -> String {
                 }
                 _ => out.push_str(&line(event, &reel(m), ch, "C", si, so, ri, ro)),
             }
+            if clip.is_retimed() && rec_out > rec_in {
+                // Motion effect: speed in frames per second (mean over a ramp).
+                let mean = (src_out - src_in).as_f64() / (rec_out - rec_in).as_f64();
+                let fps = mean * rate.0.as_f64();
+                out.push_str(&format!(
+                    "M2   {:<8}       {:05.1}                {}\n",
+                    reel(m),
+                    fps,
+                    tc(si, rate)
+                ));
+            }
             out.push_str(&format!("* FROM CLIP NAME: {}\n", file_name(&m.path)));
         }
     }
     out
+}
+
+/// OTIO speed effect: `FreezeFrame.1` for a hold, `LinearTimeWarp.1` for
+/// constant speed, and for a ramp its mean speed with the keys in metadata.
+fn time_warp(clip: &Clip) -> Value {
+    if !clip.is_retimed() {
+        return json!([]);
+    }
+    let len = clip.duration.as_f64();
+    let scalar = if clip.ramp.is_empty() {
+        clip.speed.as_f64()
+    } else if len > 0.0 {
+        clip.source_offset_f64(len) / len
+    } else {
+        1.0
+    };
+    let schema = if scalar == 0.0 && clip.ramp.is_empty() {
+        "FreezeFrame.1"
+    } else {
+        "LinearTimeWarp.1"
+    };
+    let ramp: Vec<Value> = clip
+        .ramp
+        .iter()
+        .map(|k| json!({ "at": k.at.as_f64(), "speed": k.speed }))
+        .collect();
+    let metadata = if ramp.is_empty() {
+        json!({})
+    } else {
+        json!({ "debut": { "speed_ramp": ramp } })
+    };
+    json!([{
+        "OTIO_SCHEMA": schema,
+        "name": "speed",
+        "effect_name": if schema == "FreezeFrame.1" { "FreezeFrame" } else { "LinearTimeWarp" },
+        "time_scalar": scalar,
+        "metadata": metadata,
+    }])
 }
 
 fn rational_time(frames: i64, rate: FrameRate) -> Value {
@@ -262,7 +315,7 @@ fn item(clip: &Clip, project: &Project, rate: FrameRate, depth: usize) -> Value 
         "name": name,
         "source_range": range,
         "media_reference": reference,
-        "effects": [],
+        "effects": time_warp(clip),
         "markers": clip_markers,
         "metadata": {},
     })
@@ -411,6 +464,37 @@ mod tests {
         p.media = vec![a, b];
         p.sequences.push(seq);
         p
+    }
+
+    #[test]
+    fn retimed_clips_carry_motion_effects() {
+        let mut p = project();
+        // A at double speed: record 0..3.5 (up to the dissolve) shows source 10..17.
+        p.sequences[0].tracks[0].clips[0].speed = secs(2);
+        let text = edl(&p.sequences[0], &p.media);
+        let lines: Vec<&str> = text.lines().collect();
+        assert!(
+            lines.contains(
+                &"001  INTERVIE V     C        00:00:10:00 00:00:17:00 00:00:00:00 00:00:03:12"
+            ),
+            "{text}"
+        );
+        assert!(
+            lines.contains(&"M2   INTERVIE       050.0                00:00:10:00"),
+            "{text}"
+        );
+        let tl: Value = serde_json::from_str(&otio(&p.sequences[0], &p)).unwrap();
+        let fx = &tl["tracks"]["children"][0]["children"][0]["effects"][0];
+        assert_eq!(
+            (fx["OTIO_SCHEMA"].as_str(), fx["time_scalar"].as_f64()),
+            (Some("LinearTimeWarp.1"), Some(2.0))
+        );
+        p.sequences[0].tracks[0].clips[0].speed = Rational::ZERO;
+        let tl: Value = serde_json::from_str(&otio(&p.sequences[0], &p)).unwrap();
+        assert_eq!(
+            tl["tracks"]["children"][0]["children"][0]["effects"][0]["OTIO_SCHEMA"],
+            "FreezeFrame.1"
+        );
     }
 
     #[test]

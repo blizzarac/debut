@@ -16,8 +16,9 @@ use debut_platform::{AudioEncodeSettings, EncodeSettings, FileStore, Platform};
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
     schema, AudioEffect, Bin, Caption, CaptionSettings, Clip, ClipSource, Effect, EqBand, EqKind,
-    GradeFx, KeyFx, Marker, MaskFx, MaskShape, Param, Project, SavedTitleTemplate, Sequence, Title,
-    TitleStyle, Track, TrackKind, TrackMix, TransformFx, Transition, TransitionKind,
+    GradeFx, KeyFx, Marker, MaskFx, MaskShape, Param, Project, SavedTitleTemplate, Sequence,
+    SpeedKey, Title, TitleStyle, Track, TrackKind, TrackMix, TransformFx, Transition,
+    TransitionKind,
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};

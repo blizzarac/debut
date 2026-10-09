@@ -10,6 +10,7 @@ pub mod caption;
 pub mod effect;
 pub mod marker;
 pub mod media_ref;
+pub mod retime;
 pub mod schema;
 pub mod sequence;
 pub mod title;
@@ -19,6 +20,7 @@ pub use bin::{Bin, BinKind, SmartRule};
 pub use caption::{Caption, CaptionPosition, CaptionSettings};
 pub use effect::{Effect, GradeFx, KeyFx, MaskFx, MaskShape, Param, TransformFx};
 pub use marker::{marker_list, Marker};
+pub use retime::SpeedKey;
 pub use sequence::{
     Clip, ClipSource, Layer, Sequence, Track, TrackKind, TrackMix, Transition, TransitionKind,
 };

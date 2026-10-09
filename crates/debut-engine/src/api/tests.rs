@@ -1047,6 +1047,80 @@ fn snap_points_and_close_gaps() {
     );
 }
 
+/// Speed changes: slow motion, freeze, ramp, undo (TL-09).
+#[test]
+fn speed_changes_retime_picture_and_undo() {
+    let Fx {
+        mut s, v, clip_id, ..
+    } = fixture("speed_changes_retime_picture_and_undo");
+    let picture = |s: &mut Session, t: f64| {
+        s.transport(TransportAction::Seek { t }).unwrap();
+        s.frame_pixels().unwrap().2
+    };
+    let speed = |s: &mut Session, speed: f64| {
+        s.edit(EditOp::Speed {
+            track: v.clone(),
+            clip: clip_id.clone(),
+            speed,
+            ripple: true,
+        })
+        .unwrap();
+        sequence_dto(s.first_sequence().unwrap())
+            .tracks
+            .remove(0)
+            .clips
+            .remove(0)
+    };
+    // Half speed: the 2 s clip runs 4 s and there is picture past the old end.
+    let c = speed(&mut s, 0.5);
+    assert_eq!((c.duration, c.speed), (4.0, 0.5));
+    assert!(sum(&picture(&mut s, 3.5)) > 0);
+    // Freeze: every frame of the clip is the first one.
+    let c = speed(&mut s, 0.0);
+    assert_eq!(c.duration, 4.0);
+    assert_eq!(picture(&mut s, 0.5), picture(&mut s, 3.0));
+    // A ramp shows in the DTO and moves the picture again.
+    s.edit(EditOp::Ramp {
+        track: v.clone(),
+        clip: clip_id.clone(),
+        keys: vec![
+            SpeedKeyDto {
+                at: 0.0,
+                speed: 0.25,
+            },
+            SpeedKeyDto {
+                at: 2.0,
+                speed: 0.5,
+            },
+        ],
+    })
+    .unwrap();
+    let c = sequence_dto(s.first_sequence().unwrap())
+        .tracks
+        .remove(0)
+        .clips
+        .remove(0);
+    assert_eq!(c.ramp.len(), 2);
+    assert_ne!(picture(&mut s, 0.5), picture(&mut s, 3.0));
+    assert!(s
+        .edit(EditOp::Speed {
+            track: v.clone(),
+            clip: clip_id.clone(),
+            speed: f64::NAN,
+            ripple: true,
+        })
+        .is_err());
+    for _ in 0..3 {
+        s.undo().unwrap();
+    }
+    let c = sequence_dto(s.first_sequence().unwrap())
+        .tracks
+        .remove(0)
+        .clips
+        .remove(0);
+    assert_eq!((c.duration, c.speed, c.ramp.len()), (2.0, 1.0, 0));
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

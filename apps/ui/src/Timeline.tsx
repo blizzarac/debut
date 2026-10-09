@@ -166,6 +166,7 @@ export function Timeline({
         >
           Close gaps
         </button>
+        {selectedClip && selectedClip.media && <SpeedControl clip={selectedClip} track={selected!.track} run={run} />}
         <button
           disabled={!selectedClip}
           title="Collapse the selected clip's span on every track into a nested sequence"
@@ -281,11 +282,20 @@ export function Timeline({
                           pointerEvents="none"
                         />
                       )}
-                      {track.kind === "audio" && clip.media && media.waveform && (
-                        <ClipWaveform media={media} mediaId={clip.media} start={clip.source_in} duration={clip.duration} x={x} y={y + 4} w={w} h={TRACK_H - 8} />
+                      {track.kind === "audio" && clip.media && media.waveform && clip.ramp.length === 0 && clip.speed !== 0 && (
+                        <ClipWaveform
+                          media={media}
+                          mediaId={clip.media}
+                          start={Math.min(clip.source_in, clip.source_in + clip.duration * clip.speed)}
+                          duration={clip.duration * Math.abs(clip.speed)}
+                          x={x}
+                          y={y + 4}
+                          w={w}
+                          h={TRACK_H - 8}
+                        />
                       )}
                       <text x={x + EDGE + 2} y={y + TRACK_H / 2 + 4} fontSize={11} fill="#fff" pointerEvents="none">
-                        {clip.title ? `T “${clip.title.text.slice(0, 18)}”` : clip.angles != null ? `MC ${(clip.angle ?? 0) + 1}/${clip.angles}` : clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s
+                        {clip.title ? `T “${clip.title.text.slice(0, 18)}”` : clip.angles != null ? `MC ${(clip.angle ?? 0) + 1}/${clip.angles}` : clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s{speedLabel(clip)}
                       </text>
                     </g>
                   );
@@ -301,6 +311,54 @@ export function Timeline({
         </svg>
       </div>
     </div>
+  );
+}
+
+/** " · 50%", " · ◀ 100%", " · freeze", " · ramp" or nothing at normal speed. */
+function speedLabel(clip: ClipInfo): string {
+  if (clip.ramp.length) return " · ramp";
+  if (clip.speed === 1) return "";
+  if (clip.speed === 0) return " · freeze";
+  return ` · ${clip.speed < 0 ? "◀ " : ""}${Math.round(Math.abs(clip.speed) * 100)}%`;
+}
+
+/** Speed of the selected clip (TL-09): a percentage applied on Enter or blur,
+ * reverse, freeze, ripple on or off, and a ramp from 100% at the head to the
+ * entered speed at the tail. */
+function SpeedControl({ clip, track, run }: { clip: ClipInfo; track: string; run: (op: EditOp) => void }) {
+  const [pct, setPct] = useState(String(Math.round(Math.abs(clip.speed || 1) * 100)));
+  const [ripple, setRipple] = useState(true);
+  useEffect(() => setPct(String(Math.round(Math.abs(clip.speed || 1) * 100))), [clip.id, clip.speed]);
+  const value = () => Math.max(1, Math.min(10000, Number(pct) || 100)) / 100;
+  const sign = clip.speed < 0 ? -1 : 1;
+  const apply = (speed: number) => run({ kind: "speed", track, clip: clip.id, speed, ripple });
+  return (
+    <span style={{ display: "inline-flex", gap: 4, alignItems: "center", border: "1px solid #ddd", borderRadius: 4, padding: "0 4px" }} title="Clip speed: keeps the material, so the clip gets longer or shorter">
+      Speed
+      <input
+        value={pct}
+        onChange={(e) => setPct(e.target.value)}
+        onKeyDown={(e) => e.key === "Enter" && apply(sign * value())}
+        onBlur={() => value() !== Math.abs(clip.speed) && clip.speed !== 0 && apply(sign * value())}
+        style={{ width: 44 }}
+      />
+      %
+      <label title="Play backwards">
+        <input type="checkbox" checked={clip.speed < 0} onChange={(e) => apply((e.target.checked ? -1 : 1) * value())} /> reverse
+      </label>
+      <button onClick={() => apply(clip.speed === 0 ? 1 : 0)} title="Hold the clip's first frame for its whole length">
+        {clip.speed === 0 ? "Unfreeze" : "Freeze"}
+      </button>
+      <button
+        onClick={() => run({ kind: "ramp", track, clip: clip.id, keys: clip.ramp.length ? [] : [{ at: 0, speed: 1 }, { at: clip.duration, speed: sign * value() }] })}
+        title="Ramp from 100% at the head to the entered speed at the tail; the clip keeps its length"
+      >
+        {clip.ramp.length ? "Clear ramp" : "Ramp"}
+      </button>
+      <label title="Move later clips on the track when the clip changes length">
+        <input type="checkbox" checked={ripple} onChange={(e) => setRipple(e.target.checked)} /> ripple
+      </label>
+    </span>
   );
 }
 

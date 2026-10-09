@@ -16,7 +16,7 @@ use crate::ring::{ring, Consumer, Producer};
 use debut_core::{MediaId, Rational, Result, SequenceId};
 use debut_platform::audio_out::AudioCallback;
 use debut_project::AudioEffect;
-use debut_project::{ClipSource, Sequence, TrackKind};
+use debut_project::{Clip, ClipSource, Sequence, TrackKind};
 use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -284,6 +284,7 @@ fn render_span_depth(
         .iter()
         .any(|t| t.kind == TrackKind::Audio && t.mix.solo);
     let mut clip_buf = Vec::new();
+    let mut retimed = Vec::new();
     let mut track_buf = vec![0.0f32; frames * CHANNELS];
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio) {
         let mix = TrackMix::from(track.mix);
@@ -304,6 +305,9 @@ fn render_span_depth(
             let off = (a - start) as usize;
             let ch = match &clip.source {
                 ClipSource::Media(_) | ClipSource::Multicam { .. } => match clip.media_at(t) {
+                    Some((m, _)) if clip.is_retimed() => {
+                        read_retimed(source, clip, m, t, n, sr, &mut retimed, &mut clip_buf)?
+                    }
                     Some((m, st)) => source.read(m, st, n, &mut clip_buf)?,
                     None => continue,
                 },
@@ -348,6 +352,61 @@ fn render_span_depth(
         }
     }
     Ok(())
+}
+
+/// Read `n` samples of a retimed clip starting at timeline `t` into `out`
+/// (TL-09): the source span the speed curve covers is read once, then each
+/// output sample interpolates at its own source position. Pitch follows speed
+/// (varispeed); a frozen clip is silent.
+#[allow(clippy::too_many_arguments)]
+fn read_retimed(
+    source: &mut dyn SampleSource,
+    clip: &Clip,
+    media: MediaId,
+    t: Rational,
+    n: usize,
+    sr: i64,
+    span: &mut Vec<f32>,
+    out: &mut Vec<f32>,
+) -> Result<u16> {
+    // Source seconds at the clip's start (multicam offset included).
+    let Some((_, base)) = clip.media_at(clip.timeline_in) else {
+        return Ok(1);
+    };
+    let base = base.as_f64();
+    let local0 = (t - clip.timeline_in).as_f64();
+    let rate = sr as f64;
+    let pos: Vec<f64> = (0..n)
+        .map(|i| (base + clip.source_offset_f64(local0 + i as f64 / rate)) * rate)
+        .collect();
+    let lo = pos.iter().copied().fold(f64::INFINITY, f64::min);
+    let hi = pos.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    out.clear();
+    if n == 0 || hi - lo < 1e-6 {
+        out.resize(n, 0.0);
+        return Ok(1);
+    }
+    let first = lo.floor() as i64;
+    let count = (hi.ceil() as i64 - first + 2) as usize;
+    let ch = source.read(media, Rational::new(first, sr), count, span)?;
+    let c = ch.max(1) as usize;
+    let avail = span.len() / c;
+    if avail == 0 {
+        out.resize(n * c, 0.0);
+        return Ok(ch);
+    }
+    out.reserve(n * c);
+    for p in pos {
+        let x = (p - first as f64).max(0.0);
+        let i0 = (x.floor() as usize).min(avail - 1);
+        let i1 = (i0 + 1).min(avail - 1);
+        let f = (x - i0 as f64).clamp(0.0, 1.0) as f32;
+        for k in 0..c {
+            let (a, b) = (span[i0 * c + k], span[i1 * c + k]);
+            out.push(a + (b - a) * f);
+        }
+    }
+    Ok(ch)
 }
 
 impl RtSink {
@@ -454,6 +513,44 @@ mod tests {
         assert!((out[2 * 299] - 480_199.0 * c).abs() < 0.5);
         assert_eq!(sink.underruns.load(Ordering::Relaxed), 0);
         assert_eq!(clock.position_samples(), 48_000 - 100 + 300);
+    }
+
+    #[test]
+    fn retimed_clips_resample_their_source() {
+        let mut ids = IdGen::new(9);
+        let (mut seq, _) = seq(&mut ids);
+        let c = std::f32::consts::FRAC_1_SQRT_2;
+        let render = |seq: &Sequence, at: i64| {
+            let mut bus = vec![0.0; 2 * 4];
+            let mut inserts = Inserts::default();
+            render_span(seq, &mut inserts, &mut Ramp, at, 4, 48_000, &mut bus).unwrap();
+            bus.iter().step_by(2).map(|s| s / c).collect::<Vec<f32>>()
+        };
+        // Double speed: 100 samples into the clip plays source sample 200.
+        seq.tracks[0].clips[0].speed = Rational::from_int(2);
+        let got = render(&seq, 48_100);
+        for (i, v) in got.iter().enumerate() {
+            assert!((v - (480_200.0 + 2.0 * i as f32)).abs() < 0.5, "{got:?}");
+        }
+        // Reverse: plays down from the source in-point.
+        seq.tracks[0].clips[0].speed = Rational::from_int(-1);
+        let got = render(&seq, 48_100);
+        assert!(
+            (got[0] - 479_900.0).abs() < 0.5 && got[1] < got[0],
+            "{got:?}"
+        );
+        // Freeze is silent.
+        seq.tracks[0].clips[0].speed = Rational::ZERO;
+        assert!(render(&seq, 48_100).iter().all(|v| *v == 0.0));
+        // A ramp at a constant 1/2: source advances half a sample per sample.
+        let clip = &mut seq.tracks[0].clips[0];
+        clip.speed = Rational::ONE;
+        clip.ramp = vec![debut_project::SpeedKey {
+            at: Rational::ZERO,
+            speed: 0.5,
+        }];
+        let got = render(&seq, 48_100);
+        assert!((got[0] - 480_050.0).abs() < 0.5 && (got[1] - got[0] - 0.5).abs() < 1e-3);
     }
 
     /// Ramp media plus one nested sequence.

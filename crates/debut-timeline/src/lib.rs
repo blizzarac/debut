@@ -10,8 +10,9 @@ pub mod select; // TL-05 track targeting, patching, linked selection (pending)
 pub mod shortcuts; // TL-12 keymaps with NLE presets (pending)
 pub mod snap; // TL-06 snap targets, gap removal
 pub mod snapshot; // TL-14 versions and compare (pending)
-pub mod speed; // TL-09 constant, ramps, reverse, freeze (pending)
+pub mod speed; // TL-09 constant, reverse, freeze, ramps
 
 pub use edit::{three_point, EditMode, EditPoints};
 pub use snap::{close_gaps, snap_targets, SnapKind, SnapTarget};
+pub use speed::{set_ramp, set_speed};
 pub use trim::{ripple_head, ripple_tail, roll, slide, slip};

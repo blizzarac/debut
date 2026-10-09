@@ -14,8 +14,8 @@ use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
 use debut_project::{
-    AudioEffect, Clip, ClipSource, Effect, Marker, Param, Project, Sequence, Track, TrackMix,
-    Transition,
+    AudioEffect, Clip, ClipSource, Effect, Marker, Param, Project, Sequence, SpeedKey, Track,
+    TrackMix, Transition,
 };
 use debut_project::{Bin, Caption, CaptionSettings, SavedTitleTemplate};
 use serde::{Deserialize, Serialize};
@@ -142,6 +142,17 @@ pub enum Command {
         target: Target,
         clip: ClipId,
         source: ClipSource,
+    },
+    /// Replace a clip's retiming (TL-09): constant speed, ramp, and the
+    /// source in / duration that keep the chosen material in view. The caller
+    /// makes room on the track first (or shrinks the clip) so nothing overlaps.
+    SetTiming {
+        target: Target,
+        clip: ClipId,
+        speed: Rational,
+        ramp: Vec<SpeedKey>,
+        source_in: Rational,
+        duration: Rational,
     },
     // ---- markers (TL-10) ----------------------------------------------------------
     AddMarker {
@@ -367,9 +378,7 @@ impl Command {
                 if t >= c.timeline_out() {
                     return Err(Error::InvalidArgument("trim would empty the clip".into()));
                 }
-                c.source_in = c.source_at(t);
-                c.duration = c.timeline_out() - t;
-                c.timeline_in = t;
+                c.set_head(t);
                 Ok(())
             }),
             Command::TrimTail {
@@ -485,6 +494,25 @@ impl Command {
                 source,
             } => edit_clip(project, *target, *clip, |c| {
                 c.source = source.clone();
+                Ok(())
+            }),
+            Command::SetTiming {
+                target,
+                clip,
+                speed,
+                ramp,
+                source_in,
+                duration,
+            } => edit_clip(project, *target, *clip, |c| {
+                if *duration <= Rational::ZERO {
+                    return Err(Error::InvalidArgument(
+                        "clip duration must be positive".into(),
+                    ));
+                }
+                c.speed = *speed;
+                c.ramp = ramp.clone();
+                c.source_in = *source_in;
+                c.duration = *duration;
                 Ok(())
             }),
             Command::AddMarker { target, marker } => {
@@ -948,6 +976,17 @@ impl Command {
                 clip: *clip,
                 source: find_clip(project, *target, *clip)?.source.clone(),
             }),
+            Command::SetTiming { target, clip, .. } => {
+                let c = find_clip(project, *target, *clip)?;
+                Ok(Command::SetTiming {
+                    target: *target,
+                    clip: *clip,
+                    speed: c.speed,
+                    ramp: c.ramp.clone(),
+                    source_in: c.source_in,
+                    duration: c.duration,
+                })
+            }
             Command::AddMarker { target, marker } => Ok(Command::RemoveMarker {
                 target: *target,
                 id: marker.id,

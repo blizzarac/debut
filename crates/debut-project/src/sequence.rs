@@ -213,8 +213,11 @@ pub struct Clip {
     pub timeline_in: Rational,
     pub duration: Rational,
     pub source_in: Rational,
-    /// 1 = normal speed; ramps live in the effect stack (TL-09).
+    /// 1 = normal speed, 0 = freeze frame, negative = reverse (TL-09).
     pub speed: Rational,
+    /// Speed ramp in clip-local time; when present it replaces `speed`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ramp: Vec<crate::retime::SpeedKey>,
     /// Applied in order after the input color transform (FX-01, FX-02).
     #[serde(default)]
     pub effects: Vec<crate::effect::Effect>,
@@ -260,6 +263,7 @@ impl Clip {
             duration,
             source_in,
             speed: Rational::ONE,
+            ramp: Vec::new(),
             effects: Vec::new(),
             transition_in: None,
             markers: Vec::new(),
@@ -272,7 +276,27 @@ impl Clip {
 
     /// Source time that plays at timeline time `t` (no bounds check).
     pub fn source_at(&self, t: Rational) -> Rational {
-        self.source_in + (t - self.timeline_in) * self.speed
+        if self.ramp.is_empty() {
+            self.source_in + (t - self.timeline_in) * self.speed
+        } else {
+            let x = (t - self.timeline_in).as_f64();
+            self.source_in + crate::retime::to_rational(crate::retime::offset(&self.ramp, x))
+        }
+    }
+
+    /// `source_at` in seconds for clip-local `x`, without rationals; for
+    /// per-sample audio resampling.
+    pub fn source_offset_f64(&self, x: f64) -> f64 {
+        if self.ramp.is_empty() {
+            x * self.speed.as_f64()
+        } else {
+            crate::retime::offset(&self.ramp, x)
+        }
+    }
+
+    /// Plays at anything other than constant normal speed.
+    pub fn is_retimed(&self) -> bool {
+        !self.ramp.is_empty() || self.speed != Rational::ONE
     }
 
     /// The media that plays at `t` and its source time, with the active
@@ -301,7 +325,14 @@ impl Clip {
     /// Trim the head to start at `t` (keeps the tail in sync with the source).
     pub fn trim_head_to(&mut self, t: Rational) {
         debug_assert!(t >= self.timeline_in && t < self.timeline_out());
+        self.set_head(t);
+    }
+
+    /// Move the head to `t` (earlier extends into the handle, later trims),
+    /// keeping the tail and the source under it in place.
+    pub fn set_head(&mut self, t: Rational) {
         self.source_in = self.source_at(t);
+        crate::retime::rebase(&mut self.ramp, t - self.timeline_in);
         self.duration = self.timeline_out() - t;
         self.timeline_in = t;
     }
@@ -363,6 +394,8 @@ impl Clip {
             && self.effects == next.effects
             && next.transition_in.is_none()
             && self.speed == next.speed
+            && self.ramp.is_empty()
+            && next.ramp.is_empty()
             && self.timeline_out() == next.timeline_in
             && self.source_out() == next.source_in
     }

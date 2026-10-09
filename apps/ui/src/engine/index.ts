@@ -114,6 +114,15 @@ export interface ClipInfo {
   source_in: number;
   /** Dissolve duration from the previous clip, if any. */
   transition_in: number | null;
+  /** Constant speed: 1 normal, 0 freeze, negative reverse. */
+  speed: number;
+  /** Speed ramp in clip-local seconds; overrides `speed` when non-empty. */
+  ramp: SpeedKey[];
+}
+
+export interface SpeedKey {
+  at: number;
+  speed: number;
 }
 
 export interface TrackMix {
@@ -212,7 +221,9 @@ export type EditOp =
   | { kind: "lift"; track: string; start: number; end: number }
   | { kind: "transition"; track: string; clip: string; duration: number | null }
   | { kind: "nest"; start: number; end: number }
-  | { kind: "close_gaps"; track: string };
+  | { kind: "close_gaps"; track: string }
+  | { kind: "speed"; track: string; clip: string; speed: number; ripple: boolean }
+  | { kind: "ramp"; track: string; clip: string; keys: SpeedKey[] };
 
 /** A place a drag may snap to: sequence start, playhead, clip edge or marker. */
 export interface SnapPoint {

@@ -195,7 +195,14 @@ impl FrameProvider for FrameSource {
                 src.recent.push_back(c);
                 break;
             }
-            best = Some(c);
+            // Keep the frames passed on the way: reverse playback (TL-09)
+            // then finds the previous frames here instead of seeking again.
+            if let Some(prev) = best.replace(c) {
+                src.recent.push_back(prev);
+                if src.recent.len() > self.cache_depth {
+                    src.recent.pop_front();
+                }
+            }
             if done {
                 break;
             }
