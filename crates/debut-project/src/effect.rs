@@ -44,6 +44,10 @@ pub struct MaskFx {
     /// `x` / `y` like the other shapes (FX-04).
     #[serde(default)]
     pub points: Vec<[f32; 2]>,
+    /// Bézier handles per point, `[in_x, in_y, out_x, out_y]` relative to it;
+    /// missing or zero makes a corner (FX-04).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub handles: Vec<[f32; 4]>,
 }
 
 impl Default for MaskFx {
@@ -57,6 +61,7 @@ impl Default for MaskFx {
             height: Curve::constant(540.0),
             feather: Curve::constant(20.0),
             points: Vec::new(),
+            handles: Vec::new(),
         }
     }
 }

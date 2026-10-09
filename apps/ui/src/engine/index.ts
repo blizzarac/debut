@@ -278,6 +278,10 @@ export interface EffectOptions {
   color?: [number, number, number];
   /** Polygon mask vertices in sequence pixels from the frame centre. */
   points?: [number, number][];
+  /** Bézier handles per point: [in_x, in_y, out_x, out_y] relative to it; empty = straight edges. */
+  handles?: [number, number, number, number][];
+  /** Setting only: true makes a smooth curve through the points, false makes corners. */
+  smooth?: boolean;
 }
 
 export interface ParamInfo {

@@ -107,6 +107,14 @@ export function Inspector({ effects, selected, position, onChanged }: { effects:
                   if (pts.length >= 3) act(effects.setOptions(selected.track, selected.clip, fx.index, { points: pts }));
                 }}
               />
+              <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }} title="Curve the outline smoothly through the points instead of joining them with straight edges">
+                <input
+                  type="checkbox"
+                  checked={(fx.options.handles ?? []).length > 0}
+                  onChange={(e) => act(effects.setOptions(selected.track, selected.clip, fx.index, { smooth: e.target.checked }))}
+                />
+                smooth curve
+              </span>
             </label>
           )}
           {fx.kind === "key" && (

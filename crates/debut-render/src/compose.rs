@@ -266,8 +266,7 @@ fn clip_layer(
                 match m.shape {
                     debut_project::MaskShape::Polygon => {
                         let mask = PolyMask {
-                            points: m
-                                .points
+                            points: crate::nodes::flatten_outline(&m.points, &m.handles)
                                 .iter()
                                 .map(|p| [center[0] + p[0] * px_scale, center[1] + p[1] * px_scale])
                                 .collect(),

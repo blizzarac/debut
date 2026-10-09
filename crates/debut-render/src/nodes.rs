@@ -71,8 +71,69 @@ impl Mask {
     }
 }
 
-/// Most points a polygon mask may have (the GPU uniform holds this many).
-pub const POLY_MAX_POINTS: usize = 32;
+/// Most outline vertices a polygon mask renders with (the GPU uniform holds
+/// this many); curved outlines are flattened to fit.
+pub const POLY_MAX_POINTS: usize = 64;
+
+/// Most points a user may place on a polygon mask; curves between them are
+/// flattened into the remaining vertex budget.
+pub const POLY_MAX_EDIT_POINTS: usize = 32;
+
+/// Flatten a closed outline whose points carry cubic Bézier handles (FX-04)
+/// into at most [`POLY_MAX_POINTS`] vertices. `handles[i]` is `[in_x, in_y,
+/// out_x, out_y]` relative to `points[i]`; a missing or zero pair makes that
+/// side of the point a corner. Segments without handles stay straight, so a
+/// plain polygon comes back unchanged.
+pub fn flatten_outline(points: &[[f32; 2]], handles: &[[f32; 4]]) -> Vec<[f32; 2]> {
+    let n = points.len().min(POLY_MAX_EDIT_POINTS);
+    let h = |i: usize| handles.get(i).copied().unwrap_or([0.0; 4]);
+    let curved = |i: usize| {
+        let (out, inn) = (h(i), h((i + 1) % n));
+        out[2] != 0.0 || out[3] != 0.0 || inn[0] != 0.0 || inn[1] != 0.0
+    };
+    let c = (0..n).filter(|&i| curved(i)).count();
+    if c == 0 {
+        return points[..n].to_vec();
+    }
+    // Every straight segment adds its start vertex; curves share the rest.
+    let steps = ((POLY_MAX_POINTS - (n - c)) / c).clamp(1, 12);
+    let mut out = Vec::with_capacity(POLY_MAX_POINTS);
+    for i in 0..n {
+        let p0 = points[i];
+        out.push(p0);
+        if !curved(i) {
+            continue;
+        }
+        let p3 = points[(i + 1) % n];
+        let p1 = [p0[0] + h(i)[2], p0[1] + h(i)[3]];
+        let hn = h((i + 1) % n);
+        let p2 = [p3[0] + hn[0], p3[1] + hn[1]];
+        for k in 1..steps {
+            let t = k as f32 / steps as f32;
+            let u = 1.0 - t;
+            let (a, b, c2, d) = (u * u * u, 3.0 * u * u * t, 3.0 * u * t * t, t * t * t);
+            out.push([
+                a * p0[0] + b * p1[0] + c2 * p2[0] + d * p3[0],
+                a * p0[1] + b * p1[1] + c2 * p2[1] + d * p3[1],
+            ]);
+        }
+    }
+    out.truncate(POLY_MAX_POINTS);
+    out
+}
+
+/// Handles that make a smooth closed curve through `points` (Catmull-Rom
+/// tangents: each handle is a sixth of the chord between the neighbours).
+pub fn smooth_handles(points: &[[f32; 2]]) -> Vec<[f32; 4]> {
+    let n = points.len();
+    (0..n)
+        .map(|i| {
+            let (a, b) = (points[(i + n - 1) % n], points[(i + 1) % n]);
+            let (dx, dy) = ((b[0] - a[0]) / 6.0, (b[1] - a[1]) / 6.0);
+            [-dx, -dy, dx, dy]
+        })
+        .collect()
+}
 
 /// A closed polygon mask in output pixel space with a feathered edge (FX-04).
 /// Coverage multiplies the layer's alpha like [`Mask`].
@@ -186,6 +247,30 @@ impl ChromaKey {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn outlines_flatten_curves_and_keep_corners() {
+        let square = [[-12.0, -12.0], [12.0, -12.0], [12.0, 12.0], [-12.0, 12.0]];
+        assert_eq!(
+            flatten_outline(&square, &[]),
+            square.to_vec(),
+            "no handles: unchanged"
+        );
+        let h = smooth_handles(&square);
+        assert_eq!(h[0], [-4.0, 4.0, 4.0, -4.0]);
+        let round = flatten_outline(&square, &h);
+        assert!(round.len() <= POLY_MAX_POINTS && round.len() > 16);
+        // Passes through the points and bulges to -15 at the top midpoint.
+        assert!(square.iter().all(|p| round.contains(p)));
+        let top = round.iter().map(|p| p[1]).fold(f32::MAX, f32::min);
+        assert!((top + 15.0).abs() < 0.1, "{top}");
+        // One curved side among corners: the rest stays straight.
+        let mut one = vec![[0.0; 4]; 4];
+        one[0] = [0.0, 0.0, 4.0, -4.0];
+        let shape = flatten_outline(&square, &one);
+        assert!(shape.len() > 4 && shape.len() <= POLY_MAX_POINTS);
+        assert_eq!(&shape[shape.len() - 3..], &square[1..]);
+    }
 
     #[test]
     fn rectangle_mask_is_hard_without_feather_and_soft_with() {

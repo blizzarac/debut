@@ -324,6 +324,61 @@ fn masks_tracking_and_keying() {
     let (_, _, tri) = s.frame_pixels().unwrap();
     assert!(at(&tri, 4, 18) > 0, "inside the triangle");
     assert_eq!(at(&tri, 60, 18), 0, "right side is cut");
+    // Bézier handles (FX-04): a 24 px square, smoothed, bulges out to about
+    // 15 px at its edge midpoints; clearing the handles squares it again.
+    let square = vec![[-12.0, -12.0], [12.0, -12.0], [12.0, 12.0], [-12.0, 12.0]];
+    let set = |s: &mut Session, opts: EffectOptions| {
+        s.set_effect_options(&v, &clip_id, mask_ix, opts).unwrap();
+        s.frame_pixels().unwrap().2
+    };
+    let sq = set(
+        &mut s,
+        EffectOptions {
+            points: Some(square.clone()),
+            ..Default::default()
+        },
+    );
+    // Count lit pixels: the picture under the mask varies, its extent does not.
+    let lit = |px: &[u8]| {
+        px.chunks(4)
+            .filter(|p| p[3] > 0 && (p[0] | p[1] | p[2]) > 0)
+            .count()
+    };
+    let square_lit = lit(&sq);
+    assert!(square_lit > 0);
+    let round = set(
+        &mut s,
+        EffectOptions {
+            smooth: Some(true),
+            ..Default::default()
+        },
+    );
+    assert!(lit(&round) > square_lit, "the smoothed edges bulge out");
+    let fx = s.clip_effects(&v, &clip_id).unwrap();
+    assert_eq!(
+        fx[mask_ix].options.handles.as_ref().map(|h| h.len()),
+        Some(4)
+    );
+    // Wrong handle count is refused; smooth off makes corners again.
+    assert!(s
+        .set_effect_options(
+            &v,
+            &clip_id,
+            mask_ix,
+            EffectOptions {
+                handles: Some(vec![[0.0; 4]; 3]),
+                ..Default::default()
+            }
+        )
+        .is_err());
+    let back = set(
+        &mut s,
+        EffectOptions {
+            smooth: Some(false),
+            ..Default::default()
+        },
+    );
+    assert_eq!(lit(&back), square_lit);
     assert!(s
         .set_effect_options(
             &v,

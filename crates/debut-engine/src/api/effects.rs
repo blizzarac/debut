@@ -33,6 +33,14 @@ pub struct EffectOptions {
     /// Polygon mask vertices in sequence pixels from the frame centre.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub points: Option<Vec<[f32; 2]>>,
+    /// Bézier handles per point, `[in_x, in_y, out_x, out_y]` relative to it;
+    /// empty = straight edges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handles: Option<Vec<[f32; 4]>>,
+    /// Setting only: true computes even handles for a smooth curve through
+    /// the points, false makes every point a corner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub smooth: Option<bool>,
 }
 
 pub(crate) fn effect_options(e: &Effect) -> EffectOptions {
@@ -42,6 +50,8 @@ pub(crate) fn effect_options(e: &Effect) -> EffectOptions {
             invert: Some(m.invert),
             color: None,
             points: Some(m.points.clone()),
+            handles: Some(m.handles.clone()),
+            smooth: None,
         },
         Effect::ChromaKey(k) => EffectOptions {
             color: Some(k.color),
@@ -227,13 +237,35 @@ impl Session {
                     m.invert = invert;
                 }
                 if let Some(points) = opts.points {
-                    if points.len() > debut_render::POLY_MAX_POINTS {
+                    if points.len() > debut_render::POLY_MAX_EDIT_POINTS {
                         return Err(format!(
                             "a polygon mask takes at most {} points",
-                            debut_render::POLY_MAX_POINTS
+                            debut_render::POLY_MAX_EDIT_POINTS
                         ));
                     }
+                    // New points keep a smooth outline smooth; explicit
+                    // handles below override.
+                    let was_smooth = !m.handles.is_empty();
                     m.points = points;
+                    m.handles = if was_smooth {
+                        debut_render::smooth_handles(&m.points)
+                    } else {
+                        Vec::new()
+                    };
+                }
+                if let Some(handles) = opts.handles {
+                    if !handles.is_empty() && handles.len() != m.points.len() {
+                        return Err("give one handle set per point".into());
+                    }
+                    if handles.iter().flatten().any(|v| !v.is_finite()) {
+                        return Err("handles must be numbers".into());
+                    }
+                    m.handles = handles;
+                }
+                match opts.smooth {
+                    Some(true) => m.handles = debut_render::smooth_handles(&m.points),
+                    Some(false) => m.handles.clear(),
+                    None => {}
                 }
                 // Switching to a polygon with no vertices yet: start from a
                 // diamond the size of the rectangle, so something is visible.

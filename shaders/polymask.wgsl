@@ -1,5 +1,5 @@
 struct Params {
-    points: array<vec4<f32>, 16>,   // two xy points per vec4
+    points: array<vec4<f32>, 32>,   // two xy points per vec4 (POLY_MAX_POINTS / 2)
     count: u32,
     feather: f32,
     invert: u32,
