@@ -1,0 +1,12 @@
+[package]
+name = "debut-platform-web"
+description = "Browser platform layer: WebCodecs, OPFS, AudioWorklet, Web Workers, sandboxed WASM plugins, WebGPU canvas"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true
+debut-platform.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "debut-desktop"
+description = "Tauri desktop shell hosting the shared TypeScript UI over the native engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-engine.workspace = true
+debut-platform-native.workspace = true
+# tauri = "2"   # PLT-10: installer under 50 MB excluding codecs and models

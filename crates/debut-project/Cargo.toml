@@ -1,0 +1,12 @@
+[package]
+name = "debut-project"
+description = "Non-destructive project model: bins, media, sequences, markers, schema versioning and migration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true
+serde.workspace = true
+thiserror.workspace = true

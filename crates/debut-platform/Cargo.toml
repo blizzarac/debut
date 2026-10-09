@@ -1,0 +1,10 @@
+[package]
+name = "debut-platform"
+description = "Platform abstraction interfaces: decoder/encoder, file store, audio out, threads, plugin host, display"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true

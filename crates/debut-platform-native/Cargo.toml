@@ -1,0 +1,12 @@
+[package]
+name = "debut-platform-native"
+description = "Desktop platform layer: FFmpeg + hardware decode, native FS, CoreAudio/WASAPI, native threads, OpenFX/VST3/AU host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true
+debut-platform.workspace = true
+thiserror.workspace = true

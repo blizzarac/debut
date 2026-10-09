@@ -1,0 +1,21 @@
+[package]
+name = "debut-engine"
+description = "Engine facade: wires all subsystems behind one API consumed by the desktop and web shells"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true
+debut-platform.workspace = true
+debut-project.workspace = true
+debut-command.workspace = true
+debut-media.workspace = true
+debut-timeline.workspace = true
+debut-audio.workspace = true
+debut-render.workspace = true
+debut-graphics.workspace = true
+debut-export.workspace = true
+debut-collab.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,60 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/debut-core",
+    "crates/debut-platform",
+    "crates/debut-project",
+    "crates/debut-command",
+    "crates/debut-media",
+    "crates/debut-timeline",
+    "crates/debut-audio",
+    "crates/debut-render",
+    "crates/debut-graphics",
+    "crates/debut-export",
+    "crates/debut-collab",
+    "crates/debut-engine",
+    "crates/debut-platform-native",
+    "crates/debut-platform-web",
+    "apps/desktop",
+    "apps/web",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/blizzarac/debut"
+
+[workspace.dependencies]
+# Internal crates
+debut-core = { path = "crates/debut-core" }
+debut-platform = { path = "crates/debut-platform" }
+debut-project = { path = "crates/debut-project" }
+debut-command = { path = "crates/debut-command" }
+debut-media = { path = "crates/debut-media" }
+debut-timeline = { path = "crates/debut-timeline" }
+debut-audio = { path = "crates/debut-audio" }
+debut-render = { path = "crates/debut-render" }
+debut-graphics = { path = "crates/debut-graphics" }
+debut-export = { path = "crates/debut-export" }
+debut-collab = { path = "crates/debut-collab" }
+debut-engine = { path = "crates/debut-engine" }
+debut-platform-native = { path = "crates/debut-platform-native" }
+debut-platform-web = { path = "crates/debut-platform-web" }
+
+# Shared external deps (kept light until each crate needs them)
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+# Planned, enabled per crate as work starts:
+# wgpu = "27"            # debut-render: Metal / Vulkan / DX12 / WebGPU (NFR-09, PLT-04)
+# ffmpeg-next = "8"      # debut-platform-native: decode/encode (MED-01, EXP-01)
+# cpal = "0.16"          # debut-platform-native: CoreAudio / WASAPI output (AUD)
+# wasm-bindgen = "0.2"   # apps/web: JS bridge (PLT-01)
+# web-sys = "0.3"        # debut-platform-web: WebCodecs, OPFS, AudioWorklet
+# tauri = "2"            # apps/desktop: shell (PLT-10)
+# opentimelineio / fcpxml crates for MED-12 interchange
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

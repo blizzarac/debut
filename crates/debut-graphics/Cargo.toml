@@ -1,0 +1,12 @@
+[package]
+name = "debut-graphics"
+description = "Titles, templates, shape layers, transcription, captions and on-device AI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true
+debut-project.workspace = true
+thiserror.workspace = true

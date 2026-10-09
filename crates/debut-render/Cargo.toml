@@ -1,0 +1,12 @@
+[package]
+name = "debut-render"
+description = "Pull-based GPU render graph on wgpu: compositing, effects, color management, scopes, caching"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true
+debut-platform.workspace = true
+thiserror.workspace = true

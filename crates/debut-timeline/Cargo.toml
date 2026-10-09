@@ -1,0 +1,13 @@
+[package]
+name = "debut-timeline"
+description = "Timeline evaluation: edit and trim operations, conform, speed, nesting, multicam, keyboard shortcuts"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true
+debut-project.workspace = true
+debut-command.workspace = true
+thiserror.workspace = true

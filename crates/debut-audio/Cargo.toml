@@ -1,0 +1,12 @@
+[package]
+name = "debut-audio"
+description = "Real-time audio engine: master clock, mixer, buses, built-in effects, loudness metering"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true
+debut-platform.workspace = true
+thiserror.workspace = true

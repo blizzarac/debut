@@ -1,0 +1,12 @@
+[package]
+name = "debut-collab"
+description = "Collaboration: operation sync, locking, presence, review comments, offline reconciliation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-core.workspace = true
+debut-command.workspace = true
+thiserror.workspace = true
