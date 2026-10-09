@@ -364,9 +364,12 @@ dependencies = [
 name = "debut-export"
 version = "0.1.0"
 dependencies = [
+ "debut-audio",
  "debut-core",
  "debut-platform",
+ "debut-project",
  "debut-render",
+ "serde",
  "thiserror 2.0.21",
 ]
 

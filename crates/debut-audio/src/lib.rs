@@ -13,5 +13,5 @@ pub mod loudness; // AUD-06 LUFS / true peak, normalization targets (pending)
 pub mod waveform; // AUD-04 multi-resolution peak cache (pending)
 
 pub use clock::Clock;
-pub use engine::{AudioRenderer, RtSink, SampleSource, CHANNELS};
+pub use engine::{render_span, AudioRenderer, RtSink, SampleSource, CHANNELS};
 pub use graph::TrackMix;

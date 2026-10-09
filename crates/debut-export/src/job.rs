@@ -1,1 +1,173 @@
-//! TODO
+//! One export: walk the frames of a sequence range through the render graph and
+//! the audio mixer into an [`Encoder`] (EXP-01, EXP-04). Playback and export share
+//! `compose`/`render`/`render_span`, so the file matches the viewer.
+
+use debut_audio::{render_span, SampleSource, TrackMix, CHANNELS};
+use debut_core::{Rational, Result, TrackId};
+use debut_platform::codec::{AudioBlock, Encoder, VideoFrame};
+use debut_project::Sequence;
+use debut_render::compose::{compose, SourceInfo};
+use debut_render::{Backend, FrameProvider, Rgba};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ExportJob {
+    pub sequence: Sequence,
+    /// Inclusive start, exclusive end on the timeline.
+    pub range: (Rational, Rational),
+    pub sample_rate: u32,
+    pub mixes: HashMap<TrackId, TrackMix>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Progress {
+    pub frames_done: u64,
+    pub frames_total: u64,
+}
+
+/// Cooperative control shared with the queue / UI (EXP-03): the job checks it
+/// between frames.
+#[derive(Clone, Default)]
+pub struct Control(Arc<AtomicU8>);
+
+const RUN: u8 = 0;
+const PAUSE: u8 = 1;
+const CANCEL: u8 = 2;
+
+impl Control {
+    pub fn pause(&self) {
+        self.0.store(PAUSE, Ordering::Release);
+    }
+    pub fn resume(&self) {
+        self.0.store(RUN, Ordering::Release);
+    }
+    pub fn cancel(&self) {
+        self.0.store(CANCEL, Ordering::Release);
+    }
+    pub fn is_paused(&self) -> bool {
+        self.0.load(Ordering::Acquire) == PAUSE
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0.load(Ordering::Acquire) == CANCEL
+    }
+}
+
+fn linear_to_srgb(v: f32) -> f32 {
+    let v = v.clamp(0.0, 1.0);
+    if v <= 0.003_130_8 {
+        v * 12.92
+    } else {
+        1.055 * v.powf(1.0 / 2.4) - 0.055
+    }
+}
+
+/// Linear premultiplied f32 -> display-encoded straight RGBA8 (the encoder's input).
+pub fn to_rgba8(px: &[Rgba]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(px.len() * 4);
+    for p in px {
+        let a = p[3];
+        let un = |c: f32| if a > 0.0 { c / a } else { 0.0 };
+        out.push((linear_to_srgb(un(p[0])) * 255.0 + 0.5) as u8);
+        out.push((linear_to_srgb(un(p[1])) * 255.0 + 0.5) as u8);
+        out.push((linear_to_srgb(un(p[2])) * 255.0 + 0.5) as u8);
+        out.push((a.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+    }
+    out
+}
+
+/// Run `job` to completion (or cancellation) on the calling thread. `on_progress`
+/// is called after every frame; while paused the job sleeps between checks.
+#[allow(clippy::too_many_arguments)]
+pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
+    job: &ExportJob,
+    backend: &mut B,
+    frames: &mut S,
+    samples: &mut dyn SampleSource,
+    encoder: &mut dyn Encoder,
+    control: &Control,
+    mut on_progress: impl FnMut(Progress),
+) -> Result<Progress> {
+    let fr = job.sequence.frame_rate;
+    let first = fr.time_to_frame(job.range.0);
+    let last = fr.time_to_frame(job.range.1); // exclusive
+    let total = (last - first).max(0) as u64;
+    let sr = job.sample_rate;
+    let spf = Rational::from_int(sr as i64) * fr.frame_duration();
+    let mut audio_cursor = (job.range.0 * Rational::from_int(sr as i64)).round();
+    let mut progress = Progress {
+        frames_done: 0,
+        frames_total: total,
+    };
+    let mut bus = Vec::new();
+
+    for n in first..last {
+        while control.is_paused() {
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        if control.is_cancelled() {
+            break;
+        }
+        let t = fr.frame_to_time(n);
+        let graph = compose(&job.sequence, t, frames);
+        let img = graph.render(backend, frames)?;
+        let (w, h) = backend.size(&img);
+        let rgba8 = to_rgba8(&backend.download(&img));
+        encoder.push_video(&VideoFrame {
+            pts: t,
+            width: w,
+            height: h,
+            rgba8,
+        })?;
+
+        // Audio up to the end of this frame; exact per-frame counts at any rate.
+        let next_cursor = (Rational::from_int(n + 1) * spf
+            + job.range.0 * Rational::from_int(sr as i64)
+            - Rational::from_int(first) * spf)
+            .round();
+        let count = (next_cursor - audio_cursor).max(0) as usize;
+        if count > 0 {
+            bus.clear();
+            bus.resize(count * CHANNELS, 0.0);
+            render_span(
+                &job.sequence,
+                &job.mixes,
+                samples,
+                audio_cursor,
+                count,
+                sr,
+                &mut bus,
+            )?;
+            encoder.push_audio(&AudioBlock {
+                pts: Rational::new(audio_cursor, sr as i64),
+                channels: CHANNELS as u16,
+                sample_rate: sr,
+                samples: bus.clone(),
+            })?;
+            audio_cursor = next_cursor;
+        }
+
+        progress.frames_done += 1;
+        on_progress(progress);
+    }
+    Ok(progress)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rgba8_conversion_unpremultiplies_and_encodes_srgb() {
+        let px = to_rgba8(&[
+            [1.0, 0.0, 0.2158605, 1.0],
+            [0.25, 0.25, 0.25, 0.5],
+            [0.0; 4],
+        ]);
+        assert_eq!(&px[..4], &[255, 0, 128, 255]);
+        // 0.25 / 0.5 = 0.5 linear -> 188 sRGB
+        assert_eq!(&px[4..8], &[188, 188, 188, 128]);
+        assert_eq!(&px[8..], &[0, 0, 0, 0]);
+    }
+}

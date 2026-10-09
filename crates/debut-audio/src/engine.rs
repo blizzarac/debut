@@ -139,43 +139,15 @@ impl AudioRenderer {
 
         self.scratch.clear();
         self.scratch.resize(src_frames * CHANNELS, 0.0);
-        let any_solo = seq
-            .tracks
-            .iter()
-            .any(|t| self.mixes.get(&t.id).is_some_and(|m| m.solo));
-        let mut clip_buf = Vec::new();
-        for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio) {
-            let mix = self.mixes.get(&track.id).copied().unwrap_or_default();
-            if !mix.audible(any_solo) {
-                continue;
-            }
-            for clip in &track.clips {
-                let cin = (clip.timeline_in * Rational::from_int(sr)).round();
-                let cout = (clip.timeline_out() * Rational::from_int(sr)).round();
-                let (a, b) = (cin.max(start), cout.min(end));
-                if b <= a {
-                    continue;
-                }
-                let media = match &clip.source {
-                    ClipSource::Media(m) => *m,
-                    ClipSource::Multicam { angles, active } => match angles.get(*active) {
-                        Some(m) => *m,
-                        None => continue,
-                    },
-                    ClipSource::Sequence(_) => continue,
-                };
-                let n = (b - a) as usize;
-                let t = Rational::new(a, sr);
-                let ch = source.read(media, clip.source_at(t), n, &mut clip_buf)?;
-                let off = (a - start) as usize;
-                mix_into(
-                    &mut self.scratch[off * CHANNELS..(off + n) * CHANNELS],
-                    &clip_buf,
-                    ch,
-                    &mix,
-                );
-            }
-        }
+        render_span(
+            seq,
+            &self.mixes,
+            source,
+            start,
+            src_frames,
+            sr as u32,
+            &mut self.scratch,
+        )?;
 
         // Resample the timeline span to `frames` output frames at `rate`
         // (naive linear; a proper varispeed resampler replaces this).
@@ -201,6 +173,61 @@ impl AudioRenderer {
         self.write_pos += span;
         Ok(())
     }
+}
+
+/// Mix every audible audio track of `seq` over `[start, start + frames)` timeline
+/// samples (at `sample_rate`) into the stereo `bus`, which must already be
+/// `frames * CHANNELS` long and zeroed. Shared by playback and export (EXP-01).
+pub fn render_span(
+    seq: &Sequence,
+    mixes: &HashMap<debut_core::TrackId, TrackMix>,
+    source: &mut dyn SampleSource,
+    start: i64,
+    frames: usize,
+    sample_rate: u32,
+    bus: &mut [f32],
+) -> Result<()> {
+    debug_assert_eq!(bus.len(), frames * CHANNELS);
+    let sr = sample_rate as i64;
+    let end = start + frames as i64;
+    let any_solo = seq
+        .tracks
+        .iter()
+        .any(|t| mixes.get(&t.id).is_some_and(|m| m.solo));
+    let mut clip_buf = Vec::new();
+    for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio) {
+        let mix = mixes.get(&track.id).copied().unwrap_or_default();
+        if !mix.audible(any_solo) {
+            continue;
+        }
+        for clip in &track.clips {
+            let cin = (clip.timeline_in * Rational::from_int(sr)).round();
+            let cout = (clip.timeline_out() * Rational::from_int(sr)).round();
+            let (a, b) = (cin.max(start), cout.min(end));
+            if b <= a {
+                continue;
+            }
+            let media = match &clip.source {
+                ClipSource::Media(m) => *m,
+                ClipSource::Multicam { angles, active } => match angles.get(*active) {
+                    Some(m) => *m,
+                    None => continue,
+                },
+                ClipSource::Sequence(_) => continue,
+            };
+            let n = (b - a) as usize;
+            let t = Rational::new(a, sr);
+            let ch = source.read(media, clip.source_at(t), n, &mut clip_buf)?;
+            let off = (a - start) as usize;
+            mix_into(
+                &mut bus[off * CHANNELS..(off + n) * CHANNELS],
+                &clip_buf,
+                ch,
+                &mix,
+            );
+        }
+    }
+    Ok(())
 }
 
 impl RtSink {

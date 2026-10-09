@@ -9,5 +9,8 @@ repository.workspace = true
 [dependencies]
 debut-core.workspace = true
 debut-platform.workspace = true
+debut-project.workspace = true
 debut-render.workspace = true
+debut-audio.workspace = true
+serde.workspace = true
 thiserror.workspace = true
