@@ -302,6 +302,21 @@ impl Decoder for FfmpegDecoder {
     }
 }
 
+/// Placeholder until the FFmpeg encoder lands (EXP-01).
+pub struct UnimplementedEncoder;
+
+impl debut_platform::Encoder for UnimplementedEncoder {
+    fn push_video(&mut self, _: &VideoFrame) -> Result<()> {
+        Err(Error::Unsupported("encoding not implemented".into()))
+    }
+    fn push_audio(&mut self, _: &AudioBlock) -> Result<()> {
+        Err(Error::Unsupported("encoding not implemented".into()))
+    }
+    fn finish(self: Box<Self>) -> Result<()> {
+        Err(Error::Unsupported("encoding not implemented".into()))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,20 +381,5 @@ mod tests {
             last = f.pts;
         }
         assert_eq!(last, FrameRate::FPS_25.frame_to_time(49));
-    }
-}
-
-/// Placeholder until the FFmpeg encoder lands (EXP-01).
-pub struct UnimplementedEncoder;
-
-impl debut_platform::Encoder for UnimplementedEncoder {
-    fn push_video(&mut self, _: &VideoFrame) -> Result<()> {
-        Err(Error::Unsupported("encoding not implemented".into()))
-    }
-    fn push_audio(&mut self, _: &AudioBlock) -> Result<()> {
-        Err(Error::Unsupported("encoding not implemented".into()))
-    }
-    fn finish(self: Box<Self>) -> Result<()> {
-        Err(Error::Unsupported("encoding not implemented".into()))
     }
 }
