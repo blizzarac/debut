@@ -71,5 +71,9 @@ wasm-pack build apps/web --target web        # browser (once wasm-bindgen is ena
 6. ~~`apps/web` builds for wasm32~~ Done (wasm-bindgen API over the command log). Still open: `debut-platform-web` implementations (WebCodecs, OPFS, AudioWorklet), browser render-match test.
 7. Timeline: ~~trim tools and three-point editing~~ Done. Still open: selection/patching, snapping, speed ramps, shortcuts, snapshots.
 8. ~~Shells: Tauri desktop app and the shared TypeScript UI~~ Done: Tauri 2 shell with media/edit/transport IPC, React UI with viewer, transport (JKL) and timeline (ripple trim, slide, blade, extract, lift); verified end to end headless (Rust test) and visually under Xvfb. Known gap: frames cross IPC as RGBA8 per tick, fine for proxies but not full-res 4K — the viewer needs a shared GPU surface next.
-9. Browser: `debut-platform-web` (WebCodecs, OPFS, AudioWorklet) so the wasm engine can decode and play.
-10. Color (OCIO pipeline, LUTs) and audio effects/loudness.
+9. ~~Color (transfer functions, primaries, LUTs, primary grade) and audio effects/loudness~~ Done: managed pipeline on both backends with conformance tests; per-clip effect stack with keyframes and an Inspector; audio inserts per track, BS.1770 loudness, export normalization.
+10. ~~Project files~~ Done: `Workspace` with JSON-lines journal, autosave, rotating backups, crash recovery; Save/Open in the app.
+11. ~~Export + mixer UI~~ Done: queue worker thread, presets, loudness normalization, per-job progress; mixer strips with inserts.
+12. ~~Dissolves and scopes~~ Done: `Clip.transition_in` centred on the cut with handle checks, `Track::layer_at`, Dissolve node in `compose`; CPU waveform/vectorscope/histogram.
+13. Browser: `debut-platform-web` (WebCodecs, OPFS, AudioWorklet) so the wasm engine can decode and play.
+14. Still open from the requirements: masks/keys/tracking, titles and captions, transcription, multicam switching UI, markers, bins, nested sequences in the renderer, hardware decode/encode, OpenFX/VST hosts, collaboration, GPU-surface viewer.

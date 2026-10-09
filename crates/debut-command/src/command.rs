@@ -12,7 +12,9 @@
 use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
-use debut_project::{AudioEffect, Clip, Effect, Param, Project, Sequence, Track, TrackMix};
+use debut_project::{
+    AudioEffect, Clip, Effect, Param, Project, Sequence, Track, TrackMix, Transition,
+};
 use serde::{Deserialize, Serialize};
 
 /// Which track a primitive operates on.
@@ -116,6 +118,12 @@ pub enum Command {
     SetTrackMix {
         target: Target,
         mix: TrackMix,
+    },
+    /// Set or clear the transition into `clip` from its predecessor (FX-03).
+    SetTransition {
+        target: Target,
+        clip: ClipId,
+        transition: Option<Transition>,
     },
     // ---- project structure (MED-07, TL-01) ----------------------------------
     AddMedia(MediaRef),
@@ -368,6 +376,45 @@ impl Command {
                 track_mut(project, *target)?.mix = *mix;
                 Ok(())
             }
+            Command::SetTransition {
+                target,
+                clip,
+                transition,
+            } => {
+                let tr = track_mut(project, *target)?;
+                let i = tr
+                    .clip_index(*clip)
+                    .ok_or_else(|| Error::NotFound(format!("clip {clip:?}")))?;
+                if let Some(t) = transition {
+                    if t.duration <= Rational::ZERO {
+                        return Err(Error::InvalidArgument(
+                            "transition needs a positive duration".into(),
+                        ));
+                    }
+                    let prev = i
+                        .checked_sub(1)
+                        .map(|p| &tr.clips[p])
+                        .filter(|p| p.timeline_out() == tr.clips[i].timeline_in);
+                    let Some(prev) = prev else {
+                        return Err(Error::InvalidArgument(
+                            "no adjacent clip before this one".into(),
+                        ));
+                    };
+                    let c = &tr.clips[i];
+                    if c.source_in < t.half() * c.speed {
+                        return Err(Error::InvalidArgument(
+                            "not enough head handle for the transition".into(),
+                        ));
+                    }
+                    if t.duration > c.duration || t.duration > prev.duration {
+                        return Err(Error::InvalidArgument(
+                            "transition longer than a clip".into(),
+                        ));
+                    }
+                }
+                tr.clips[i].transition_in = *transition;
+                Ok(())
+            }
             Command::AddMedia(m) => {
                 if project.media.iter().any(|x| x.id == m.id) {
                     return Err(Error::InvalidArgument("media id already exists".into()));
@@ -598,6 +645,11 @@ impl Command {
             Command::SetTrackMix { target, .. } => Ok(Command::SetTrackMix {
                 target: *target,
                 mix: track(project, *target)?.mix,
+            }),
+            Command::SetTransition { target, clip, .. } => Ok(Command::SetTransition {
+                target: *target,
+                clip: *clip,
+                transition: find_clip(project, *target, *clip)?.transition_in,
             }),
             Command::AddMedia(m) => Ok(Command::RemoveMedia(m.id)),
             Command::RemoveMedia(id) => {
@@ -1111,6 +1163,75 @@ mod tests {
         for inv in inverses.iter().rev() {
             inv.apply(&mut fx.project).unwrap();
         }
+        assert_eq!(fx.project, before);
+    }
+
+    #[test]
+    fn transitions_need_an_adjacent_clip_and_handles() {
+        use debut_project::{Transition, TransitionKind};
+        let mut fx = fixture();
+        let t = fx.target;
+        let (a, b, c) = {
+            let cl = &track(&fx.project, t).unwrap().clips;
+            (cl[0].id, cl[1].id, cl[2].id)
+        };
+        let d = Transition {
+            kind: TransitionKind::Dissolve,
+            duration: sec(2),
+        };
+        // A has no predecessor; C's predecessor is not adjacent (gap 20..25); B has no head handle.
+        assert!(Command::SetTransition {
+            target: t,
+            clip: a,
+            transition: Some(d)
+        }
+        .apply(&mut fx.project)
+        .is_err());
+        assert!(Command::SetTransition {
+            target: t,
+            clip: c,
+            transition: Some(d)
+        }
+        .apply(&mut fx.project)
+        .is_err());
+        assert!(Command::SetTransition {
+            target: t,
+            clip: b,
+            transition: Some(d)
+        }
+        .apply(&mut fx.project)
+        .is_err());
+        // Slip B 1 s into its source: now it has a 1 s handle, enough for a 2 s dissolve.
+        Command::Slip {
+            target: t,
+            clip: b,
+            delta: sec(1),
+        }
+        .apply(&mut fx.project)
+        .unwrap();
+        let before = fx.project.clone();
+        let set = Command::SetTransition {
+            target: t,
+            clip: b,
+            transition: Some(d),
+        };
+        let inv = set.invert(&fx.project).unwrap();
+        set.apply(&mut fx.project).unwrap();
+        let tr = track(&fx.project, t).unwrap();
+        assert_eq!(tr.clips[1].transition_in, Some(d));
+        match tr.layer_at(sec(10)) {
+            Some(debut_project::Layer::Transition { from, to, progress }) => {
+                assert_eq!((from.id, to.id), (a, b));
+                assert!((progress - 0.5).abs() < 1e-6);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert!(matches!(tr.layer_at(sec(8)), Some(debut_project::Layer::Single(c)) if c.id == a));
+        assert!(
+            matches!(tr.layer_at(sec(9)), Some(debut_project::Layer::Transition { progress, .. }) if progress == 0.0)
+        );
+        assert!(matches!(tr.layer_at(sec(12)), Some(debut_project::Layer::Single(c)) if c.id == b));
+        inv.apply(&mut fx.project).unwrap();
         assert_eq!(fx.project, before);
     }
 

@@ -8,7 +8,7 @@ use crate::graph::{Graph, LutRef, Node, NodeId};
 use crate::lut::Lut3d;
 use debut_core::color::ColorSpace;
 use debut_core::Rational;
-use debut_project::{ClipSource, Effect, Param, Sequence, TrackKind};
+use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, TrackKind};
 use std::sync::Arc;
 
 /// Source frame dimensions are needed to fit a clip onto the canvas; the caller
@@ -37,88 +37,31 @@ pub fn compose(seq: &Sequence, t: Rational, info: &dyn SourceInfo) -> Graph {
         color: [0.0, 0.0, 0.0, 1.0],
     });
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Video) {
-        let Some(clip) = track.clip_at(t) else {
+        let Some(layer) = track.layer_at(t) else {
             continue;
         };
-        let media = match &clip.source {
-            ClipSource::Media(m) => *m,
-            ClipSource::Multicam { angles, active } => match angles.get(*active) {
-                Some(m) => *m,
+        let (node, opacity) = match layer {
+            Layer::Single(clip) => match clip_layer(&mut g, clip, t, (w, h), info) {
+                Some(l) => l,
                 None => continue,
             },
-            // Nested sequences render recursively once Source can hold a sub-graph.
-            ClipSource::Sequence(_) => continue,
-        };
-        let mut src = g.add(Node::Source {
-            media,
-            source_time: clip.source_at(t),
-        });
-        if let Ok(xf) = ColorTransform::between(&info.color_space(media), &WORKING) {
-            if !xf.is_identity() {
-                src = g.add(Node::ColorTransform { input: src, xf });
-            }
-        }
-        let (sw, sh) = info.dimensions(media);
-        let fit = (w as f32 / sw as f32).min(h as f32 / sh as f32);
-        let local = t - clip.timeline_in;
-        // Transform effect (first one wins); defaults fit the frame to the canvas.
-        let (mut scale, mut rotation, mut dx, mut dy, mut opacity) =
-            (1.0f32, 0.0f32, 0.0f32, 0.0f32, 1.0f32);
-        if let Some(Effect::Transform(_)) = clip.effect("transform") {
-            let i = clip.effect_index("transform").unwrap();
-            let v = |p: Param| clip.param_at(i, p, t).unwrap_or(0.0) as f32;
-            scale = v(Param::Scale);
-            rotation = v(Param::Rotation).to_radians();
-            dx = v(Param::X);
-            dy = v(Param::Y);
-            opacity = v(Param::Opacity).clamp(0.0, 1.0);
-        }
-        let xf = Transform2D::from_srt(
-            (sw, sh),
-            (w, h),
-            (fit * scale, fit * scale),
-            rotation,
-            (dx, dy),
-        );
-        let mut node = g.add(Node::Transform {
-            input: src,
-            xf,
-            w,
-            h,
-        });
-        for effect in &clip.effects {
-            match effect {
-                Effect::Grade(_) => {
-                    let i = clip
-                        .effects
-                        .iter()
-                        .position(|e| std::ptr::eq(e, effect))
-                        .unwrap();
-                    let v = |p: Param| effect.value(p, local).unwrap_or(0.0) as f32;
-                    let _ = i;
-                    let grade = Grade {
-                        exposure: v(Param::Exposure),
-                        contrast: v(Param::Contrast),
-                        saturation: v(Param::Saturation),
-                        temperature: v(Param::Temperature),
-                        tint: v(Param::Tint),
-                        ..Grade::default()
-                    };
-                    if !grade.is_identity() {
-                        node = g.add(Node::Grade { input: node, grade });
-                    }
-                }
-                Effect::Lut { hash, .. } => {
-                    if let Some(lut) = info.lut(*hash) {
-                        node = g.add(Node::Lut3d {
-                            input: node,
-                            lut: LutRef(lut),
+            Layer::Transition { from, to, progress } => {
+                let a = clip_layer(&mut g, from, t, (w, h), info);
+                let b = clip_layer(&mut g, to, t, (w, h), info);
+                match (a, b) {
+                    (Some((na, oa)), Some((nb, ob))) => {
+                        let node = g.add(Node::Dissolve {
+                            a: na,
+                            b: nb,
+                            progress,
                         });
+                        (node, oa + (ob - oa) * progress)
                     }
+                    (Some(l), None) | (None, Some(l)) => l,
+                    (None, None) => continue,
                 }
-                Effect::Transform(_) => {}
             }
-        }
+        };
         acc = g.add(Node::Blend {
             bottom: acc,
             top: node,
@@ -128,6 +71,88 @@ pub fn compose(seq: &Sequence, t: Rational, info: &dyn SourceInfo) -> Graph {
     }
     g.set_output(acc);
     g
+}
+
+/// One clip's node chain at sequence time `t` (which may lie in its transition
+/// handle, outside `[timeline_in, timeline_out)`): source, input transform, fit +
+/// user transform, then its effect stack. Returns the node and the blend opacity.
+fn clip_layer(
+    g: &mut Graph,
+    clip: &Clip,
+    t: Rational,
+    canvas: (u32, u32),
+    info: &dyn SourceInfo,
+) -> Option<(NodeId, f32)> {
+    let (w, h) = canvas;
+    let media = match &clip.source {
+        ClipSource::Media(m) => *m,
+        ClipSource::Multicam { angles, active } => *angles.get(*active)?,
+        // Nested sequences render recursively once Source can hold a sub-graph.
+        ClipSource::Sequence(_) => return None,
+    };
+    let mut src = g.add(Node::Source {
+        media,
+        source_time: clip.source_at(t),
+    });
+    if let Ok(xf) = ColorTransform::between(&info.color_space(media), &WORKING) {
+        if !xf.is_identity() {
+            src = g.add(Node::ColorTransform { input: src, xf });
+        }
+    }
+    let (sw, sh) = info.dimensions(media);
+    let fit = (w as f32 / sw as f32).min(h as f32 / sh as f32);
+    let local = t - clip.timeline_in;
+    let (mut scale, mut rotation, mut dx, mut dy, mut opacity) =
+        (1.0f32, 0.0f32, 0.0f32, 0.0f32, 1.0f32);
+    if let Some(i) = clip.effect_index("transform") {
+        let v = |p: Param| clip.param_at(i, p, t).unwrap_or(0.0) as f32;
+        scale = v(Param::Scale);
+        rotation = v(Param::Rotation).to_radians();
+        dx = v(Param::X);
+        dy = v(Param::Y);
+        opacity = v(Param::Opacity).clamp(0.0, 1.0);
+    }
+    let xf = Transform2D::from_srt(
+        (sw, sh),
+        (w, h),
+        (fit * scale, fit * scale),
+        rotation,
+        (dx, dy),
+    );
+    let mut node = g.add(Node::Transform {
+        input: src,
+        xf,
+        w,
+        h,
+    });
+    for effect in &clip.effects {
+        match effect {
+            Effect::Grade(_) => {
+                let v = |p: Param| effect.value(p, local).unwrap_or(0.0) as f32;
+                let grade = Grade {
+                    exposure: v(Param::Exposure),
+                    contrast: v(Param::Contrast),
+                    saturation: v(Param::Saturation),
+                    temperature: v(Param::Temperature),
+                    tint: v(Param::Tint),
+                    ..Grade::default()
+                };
+                if !grade.is_identity() {
+                    node = g.add(Node::Grade { input: node, grade });
+                }
+            }
+            Effect::Lut { hash, .. } => {
+                if let Some(lut) = info.lut(*hash) {
+                    node = g.add(Node::Lut3d {
+                        input: node,
+                        lut: LutRef(lut),
+                    });
+                }
+            }
+            Effect::Transform(_) => {}
+        }
+    }
+    Some((node, opacity))
 }
 
 #[cfg(test)]
@@ -231,5 +256,53 @@ mod tests {
         });
         // fit = 2 (50 -> 100), user scale 0.5 => net 1: the inverse map has unit scale.
         assert!((xf.unwrap().m[0][0] - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dissolve_renders_both_clips_through_a_dissolve_node() {
+        use debut_project::{Transition, TransitionKind};
+        let mut ids = IdGen::new(9);
+        let mut seq = Sequence::new(ids.fresh(), "s", FrameRate::FPS_25, 100, 100);
+        let mut v1 = Track::new(ids.fresh(), TrackKind::Video);
+        let m: MediaId = ids.fresh();
+        v1.clips.push(Clip::new(
+            ids.fresh(),
+            ClipSource::Media(m),
+            Rational::ZERO,
+            Rational::from_int(10),
+            Rational::ZERO,
+        ));
+        let mut b = Clip::new(
+            ids.fresh(),
+            ClipSource::Media(m),
+            Rational::from_int(10),
+            Rational::from_int(10),
+            Rational::from_int(5),
+        );
+        b.transition_in = Some(Transition {
+            kind: TransitionKind::Dissolve,
+            duration: Rational::from_int(2),
+        });
+        v1.clips.push(b);
+        seq.tracks.push(v1);
+        // 9.5 s: a quarter into the dissolve. A plays source 9.5, B plays its handle at 4.5.
+        let g = compose(&seq, Rational::new(19, 2), &Fixed(100, 100));
+        let nodes: Vec<&Node> = (0..g.len() as u32).map(|i| g.node(NodeId(i))).collect();
+        let times: Vec<Rational> = nodes
+            .iter()
+            .filter_map(|n| match n {
+                Node::Source { source_time, .. } => Some(*source_time),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(times, vec![Rational::new(19, 2), Rational::new(9, 2)]);
+        let progress = nodes.iter().find_map(|n| match n {
+            Node::Dissolve { progress, .. } => Some(*progress),
+            _ => None,
+        });
+        assert_eq!(progress, Some(0.25));
+        // Outside the window there is no dissolve.
+        let g = compose(&seq, Rational::from_int(5), &Fixed(100, 100));
+        assert!((0..g.len() as u32).all(|i| !matches!(g.node(NodeId(i)), Node::Dissolve { .. })));
     }
 }

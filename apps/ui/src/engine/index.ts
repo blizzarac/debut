@@ -42,6 +42,8 @@ export interface ClipInfo {
   timeline_in: number;
   duration: number;
   source_in: number;
+  /** Dissolve duration from the previous clip, if any. */
+  transition_in: number | null;
 }
 
 export interface TrackMix {
@@ -104,6 +106,12 @@ export interface SequenceInfo {
   tracks: TrackInfo[];
 }
 
+export interface ScopesData {
+  waveform: Uint8ClampedArray; // 256 x 128
+  vectorscope: Uint8ClampedArray; // 128 x 128
+  histogram: [Uint32Array, Uint32Array, Uint32Array];
+}
+
 export type EditOp =
   | { kind: "ripple_head"; track: string; clip: string; delta: number }
   | { kind: "ripple_tail"; track: string; clip: string; delta: number }
@@ -113,7 +121,8 @@ export type EditOp =
   | { kind: "move"; track: string; clip: string; delta: number }
   | { kind: "blade"; track: string; at: number }
   | { kind: "extract"; track: string; start: number; end: number }
-  | { kind: "lift"; track: string; start: number; end: number };
+  | { kind: "lift"; track: string; start: number; end: number }
+  | { kind: "transition"; track: string; clip: string; duration: number | null };
 
 export type ParamName =
   | "scale"
@@ -181,6 +190,7 @@ export interface PlayerApi {
   transport(action: TransportAction): Promise<void>;
   tick(): Promise<Tick>;
   framePixels(): Promise<Frame>;
+  scopes?(): Promise<ScopesData>;
 }
 
 export interface Engine extends ProjectApi {

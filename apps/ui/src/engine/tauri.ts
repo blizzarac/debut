@@ -15,6 +15,7 @@ import type {
   MixerApi,
   ParamName,
   PlayerApi,
+  ScopesData,
   SequenceInfo,
   Tick,
   TrackMix,
@@ -52,6 +53,13 @@ class TauriPlayer implements PlayerApi {
     const width = view.getUint32(0, true);
     const height = view.getUint32(4, true);
     return { width, height, rgba: new Uint8ClampedArray(buf, 8, width * height * 4) };
+  }
+  async scopes(): Promise<ScopesData> {
+    const buf = await invoke<ArrayBuffer>("scopes");
+    const wave = 256 * 128;
+    const vec = 128 * 128;
+    const h = (i: number) => new Uint32Array(buf.slice(wave + vec + i * 1024, wave + vec + (i + 1) * 1024));
+    return { waveform: new Uint8ClampedArray(buf, 0, wave), vectorscope: new Uint8ClampedArray(buf, wave, vec), histogram: [h(0), h(1), h(2)] };
   }
 }
 

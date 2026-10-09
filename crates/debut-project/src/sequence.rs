@@ -51,6 +51,17 @@ impl Sequence {
     }
 }
 
+/// What a track shows at one instant.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Layer<'a> {
+    Single(&'a Clip),
+    Transition {
+        from: &'a Clip,
+        to: &'a Clip,
+        progress: f32,
+    },
+}
+
 /// A track holds non-overlapping clips, kept sorted by `timeline_in`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Track {
@@ -120,6 +131,43 @@ impl Track {
             .unwrap_or(Rational::ZERO)
     }
 
+    /// What plays at `t`: a single clip, or two clips mid-transition with the
+    /// dissolve progress in `0..1`.
+    pub fn layer_at(&self, t: Rational) -> Option<Layer<'_>> {
+        let i = self
+            .clips
+            .iter()
+            .position(|c| c.timeline_in <= t && t < c.timeline_out())?;
+        let cur = &self.clips[i];
+        // Transition into `cur` from its predecessor, still in the first half?
+        if let (Some(tr), Some(prev)) =
+            (cur.transition_in, i.checked_sub(1).map(|p| &self.clips[p]))
+        {
+            if prev.timeline_out() == cur.timeline_in && t < cur.timeline_in + tr.half() {
+                let start = cur.timeline_in - tr.half();
+                return Some(Layer::Transition {
+                    from: prev,
+                    to: cur,
+                    progress: ((t - start).as_f64() / tr.duration.as_f64()) as f32,
+                });
+            }
+        }
+        // Transition out of `cur` into its successor, already in the second half?
+        if let Some(next) = self.clips.get(i + 1) {
+            if let Some(tr) = next.transition_in {
+                if next.timeline_in == cur.timeline_out() && t >= next.timeline_in - tr.half() {
+                    let start = next.timeline_in - tr.half();
+                    return Some(Layer::Transition {
+                        from: cur,
+                        to: next,
+                        progress: ((t - start).as_f64() / tr.duration.as_f64()) as f32,
+                    });
+                }
+            }
+        }
+        Some(Layer::Single(cur))
+    }
+
     /// Restore the sort invariant after a bulk edit.
     pub fn sort(&mut self) {
         self.clips.sort_by_key(|c| c.timeline_in);
@@ -153,6 +201,28 @@ pub struct Clip {
     /// Applied in order after the input color transform (FX-01, FX-02).
     #[serde(default)]
     pub effects: Vec<crate::effect::Effect>,
+    /// Transition from the previous adjacent clip into this one, centred on the
+    /// cut (FX-03). Both clips extend by half the duration into their handles.
+    #[serde(default)]
+    pub transition_in: Option<Transition>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Transition {
+    pub kind: TransitionKind,
+    pub duration: Rational,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransitionKind {
+    Dissolve,
+}
+
+impl Transition {
+    pub fn half(&self) -> Rational {
+        self.duration * Rational::new(1, 2)
+    }
 }
 
 impl Clip {
@@ -171,6 +241,7 @@ impl Clip {
             source_in,
             speed: Rational::ONE,
             effects: Vec::new(),
+            transition_in: None,
         }
     }
 
@@ -231,6 +302,7 @@ impl Clip {
     pub fn is_continuous_with(&self, next: &Clip) -> bool {
         self.source == next.source
             && self.effects == next.effects
+            && next.transition_in.is_none()
             && self.speed == next.speed
             && self.timeline_out() == next.timeline_in
             && self.source_out() == next.source_in

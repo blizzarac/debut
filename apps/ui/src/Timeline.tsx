@@ -97,6 +97,13 @@ export function Timeline({
         >
           Lift
         </button>
+        <button
+          disabled={!selectedClip}
+          title="Dissolve from the previous clip into the selected one (needs a head handle)"
+          onClick={() => selectedClip && run({ kind: "transition", track: selected!.track, clip: selectedClip.id, duration: selectedClip.transition_in ? null : 0.5 })}
+        >
+          {selectedClip?.transition_in ? "Remove dissolve" : "Dissolve in"}
+        </button>
         <span style={{ flex: 1 }} />
         <label style={{ fontSize: 12 }}>
           zoom <input type="range" min={20} max={600} value={pxPerSec} onChange={(e) => setPxPerSec(Number(e.target.value))} />
@@ -149,6 +156,13 @@ export function Timeline({
                       <rect x={x} y={y + 4} width={w} height={TRACK_H - 8} rx={3} fill={color} stroke={sel ? "#111" : "none"} onMouseDown={start("body")} style={{ cursor: "grab" }} />
                       <rect x={x} y={y + 4} width={EDGE} height={TRACK_H - 8} fill="rgba(0,0,0,0.15)" onMouseDown={start("head")} style={{ cursor: "ew-resize" }} />
                       <rect x={x + w - EDGE} y={y + 4} width={EDGE} height={TRACK_H - 8} fill="rgba(0,0,0,0.15)" onMouseDown={start("tail")} style={{ cursor: "ew-resize" }} />
+                      {clip.transition_in && (
+                        <polygon
+                          points={`${x - (clip.transition_in / 2) * pxPerSec},${y + TRACK_H - 4} ${x + (clip.transition_in / 2) * pxPerSec},${y + 4} ${x + (clip.transition_in / 2) * pxPerSec},${y + TRACK_H - 4}`}
+                          fill="rgba(255,255,255,0.55)"
+                          pointerEvents="none"
+                        />
+                      )}
                       <text x={x + EDGE + 2} y={y + TRACK_H / 2 + 4} fontSize={11} fill="#fff" pointerEvents="none">
                         {clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s
                       </text>

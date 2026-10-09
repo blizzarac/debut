@@ -20,7 +20,7 @@ pub mod lut;
 
 pub mod nodes; // further node kinds: masks, keys, LUTs, color wheels (pending)
 pub mod ofx; // FX-15 OpenFX bridge over PluginHost (pending)
-pub mod scopes; // PB-08 (pending)
+pub mod scopes; // PB-08 waveform, vectorscope, histogram
 pub mod tracking; // FX-04, FX-06 (pending)
 
 pub use backend::{Backend, BlendMode, FrameProvider, Rgba, Transform2D};
@@ -71,3 +71,4 @@ pub use color::{ColorTransform, Grade, Transfer};
 pub use debut_core::keyframe::{self, Curve, Interp, Keyframe};
 pub use graph::{Graph, LutRef, Node, NodeId};
 pub use lut::Lut3d;
+pub use scopes::Scopes;

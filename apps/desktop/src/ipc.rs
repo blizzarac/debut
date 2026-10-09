@@ -18,7 +18,7 @@ use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
     schema, AudioEffect, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, Param, Project,
-    Sequence, Track, TrackKind, TrackMix, TransformFx,
+    Sequence, Track, TrackKind, TrackMix, TransformFx, Transition, TransitionKind,
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
@@ -345,6 +345,7 @@ pub struct ClipDto {
     pub timeline_in: f64,
     pub duration: f64,
     pub source_in: f64,
+    pub transition_in: Option<f64>,
 }
 
 #[derive(Serialize)]
@@ -395,6 +396,7 @@ fn sequence_dto(seq: &Sequence) -> SequenceDto {
                         timeline_in: secs(c.timeline_in),
                         duration: secs(c.duration),
                         source_in: secs(c.source_in),
+                        transition_in: c.transition_in.map(|t| secs(t.duration)),
                     })
                     .collect(),
             })
@@ -576,6 +578,18 @@ impl Session {
                 frames_of(end, fr),
                 ids,
             )),
+            EditOp::Transition {
+                track,
+                clip: c,
+                duration,
+            } => Ok(Command::SetTransition {
+                target: target(&track)?,
+                clip: clip(&c)?,
+                transition: duration.map(|d| Transition {
+                    kind: TransitionKind::Dissolve,
+                    duration: frames_of(d, fr),
+                }),
+            }),
         }
         .map_err(|e| e.to_string())?;
         self.exec(cmd)
@@ -635,6 +649,12 @@ impl Session {
             .render_pixels(&graph, &mut p.frames)
             .map_err(|e| e.to_string())?;
         Ok((w, h, to_rgba8(&px)))
+    }
+
+    /// Scopes of the current frame (PB-08), packed as `Scopes::to_bytes`.
+    pub fn scopes(&mut self) -> Result<Vec<u8>, String> {
+        let (w, h, px) = self.frame_pixels()?;
+        Ok(debut_render::scopes::compute(&px, w, h).to_bytes())
     }
 }
 
@@ -1247,6 +1267,12 @@ pub enum EditOp {
         start: f64,
         end: f64,
     },
+    /// Set (duration in seconds) or clear (`None`) the dissolve into `clip`.
+    Transition {
+        track: String,
+        clip: String,
+        duration: Option<f64>,
+    },
 }
 
 #[tauri::command]
@@ -1286,6 +1312,11 @@ pub fn transport(state: State<'_, Shared>, action: TransportAction) -> Result<()
 #[tauri::command]
 pub fn tick(state: State<'_, Shared>) -> Result<TickDto, String> {
     lock(&state).tick()
+}
+
+#[tauri::command]
+pub fn scopes(state: State<'_, Shared>) -> Result<tauri::ipc::Response, String> {
+    Ok(tauri::ipc::Response::new(lock(&state).scopes()?))
 }
 
 /// The current frame as `width * height * 4` bytes of RGBA8, preceded by two
@@ -1446,6 +1477,58 @@ mod tests {
             2.0
         );
         assert_eq!(s.player.as_ref().unwrap().sequence.duration().as_f64(), 2.4);
+
+        // Transition: blade V1 at 1.0 s, dissolve 0.4 s into the second piece (its head
+        // handle is 0.6 s of source), then check the DTO and that scopes come back.
+        s.edit(EditOp::Blade {
+            track: v.clone(),
+            at: 1.0,
+        })
+        .unwrap();
+        assert_eq!(
+            sequence_dto(s.first_sequence().unwrap()).tracks[0]
+                .clips
+                .len(),
+            2
+        );
+        let second = sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[1]
+            .id
+            .clone();
+        s.edit(EditOp::Transition {
+            track: v.clone(),
+            clip: second.clone(),
+            duration: Some(0.4),
+        })
+        .unwrap();
+        assert_eq!(
+            sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[1].transition_in,
+            Some(0.4)
+        );
+        assert!(
+            s.edit(EditOp::Transition {
+                track: v.clone(),
+                clip: second.clone(),
+                duration: Some(5.0)
+            })
+            .is_err(),
+            "longer than the clip"
+        );
+        s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+        let bytes = s.scopes().unwrap();
+        assert_eq!(bytes.len(), 256 * 128 + 128 * 128 + 3 * 256 * 4);
+        assert!(
+            bytes[..256 * 128].iter().any(|b| *b > 0),
+            "waveform has content"
+        );
+        s.workspace_mut().unwrap().undo().unwrap(); // the dissolve
+        s.workspace_mut().unwrap().undo().unwrap(); // the blade
+        s.sync_player().unwrap();
+        assert_eq!(
+            sequence_dto(s.first_sequence().unwrap()).tracks[0]
+                .clips
+                .len(),
+            1
+        );
 
         // Mixer: fader and an insert go through the command log.
         s.set_track_mix(

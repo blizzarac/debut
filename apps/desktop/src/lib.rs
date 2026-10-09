@@ -47,6 +47,7 @@ pub fn run() {
             ipc::transport,
             ipc::tick,
             ipc::frame_pixels,
+            ipc::scopes,
         ])
         .run(tauri::generate_context!())
         .expect("error while running debut");

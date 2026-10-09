@@ -14,7 +14,9 @@ pub mod sequence;
 
 pub use audio_fx::{AudioEffect, EqBand, EqKind};
 pub use effect::{Effect, GradeFx, Param, TransformFx};
-pub use sequence::{Clip, ClipSource, Sequence, Track, TrackKind, TrackMix};
+pub use sequence::{
+    Clip, ClipSource, Layer, Sequence, Track, TrackKind, TrackMix, Transition, TransitionKind,
+};
 
 use debut_core::{ProjectId, SequenceId};
 use serde::{Deserialize, Serialize};

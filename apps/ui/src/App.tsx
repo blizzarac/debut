@@ -3,6 +3,7 @@ import { detectTarget, loadEngine, type Engine, type FileStatus, type MediaInfo,
 import { ExportPanel } from "./ExportPanel";
 import { Inspector } from "./Inspector";
 import { Mixer } from "./Mixer";
+import { Scopes } from "./Scopes";
 import { Timeline, type Selection } from "./Timeline";
 import { Transport } from "./Transport";
 import { Viewer } from "./Viewer";
@@ -161,6 +162,7 @@ export default function App() {
           <>
             <Viewer player={engine.player} onTick={onTick} refreshKey={refreshKey} />
             <Transport player={engine.player} tick={tick} fps={fps} />
+            <Scopes player={engine.player} frameKey={(tick?.frame ?? 0) * 1000 + refreshKey} />
           </>
         ) : null}
         {engine?.mixer && seq && seq.tracks.some((t) => t.kind === "audio") && (
