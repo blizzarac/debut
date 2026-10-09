@@ -44,7 +44,6 @@ impl SampleCache {
             Source {
                 decoder,
                 channels,
-                src_rate,
                 buf: Vec::new(),
                 buf_start: 0,
                 decoded_to: 0,
