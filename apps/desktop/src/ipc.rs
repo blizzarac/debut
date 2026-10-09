@@ -11,7 +11,7 @@ use debut_platform_native::audio_out::{CpalAudioOut, SilentAudioOut};
 use debut_platform_native::codec::FfmpegDecoder;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{schema, Clip, ClipSource, Project, Sequence, Track, TrackKind};
-use debut_render::{Backend, CpuBackend};
+use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::State;
@@ -23,7 +23,7 @@ pub struct Session {
     ids: IdGen,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
-    backend: CpuBackend,
+    backend: AnyBackend,
     /// Media probed so far: id -> (width, height, duration, has_audio).
     probed: std::collections::HashMap<MediaId, (u32, u32, Rational, bool)>,
 }
@@ -43,7 +43,7 @@ impl Session {
             ids: IdGen::random(),
             player: None,
             audio_out: None,
-            backend: CpuBackend,
+            backend: AnyBackend::detect(),
             probed: Default::default(),
         }
     }
@@ -529,11 +529,10 @@ impl Session {
         } = self;
         let p = player.as_mut().ok_or("no sequence")?;
         let graph = p.current_graph();
-        let img = graph
-            .render(backend, &mut p.frames)
+        let (w, h, px) = backend
+            .render_pixels(&graph, &mut p.frames)
             .map_err(|e| e.to_string())?;
-        let (w, h) = backend.size(&img);
-        Ok((w, h, to_rgba8(&backend.download(&img))))
+        Ok((w, h, to_rgba8(&px)))
     }
 }
 
@@ -706,6 +705,19 @@ mod tests {
                 .count()
                 > 500
         );
+        // Whatever backend was detected, the CPU reference must agree (PLT-04).
+        if s.backend.is_gpu() {
+            s.backend = AnyBackend::Cpu(debut_render::CpuBackend);
+            let (_, _, cpu) = s.frame_pixels().unwrap();
+            let worst = px
+                .iter()
+                .zip(&cpu)
+                .map(|(a, b)| (*a as i32 - *b as i32).abs())
+                .max()
+                .unwrap();
+            assert!(worst <= 1, "GPU and CPU frames differ by {worst}/255");
+            s.backend = AnyBackend::detect();
+        }
 
         // Play for ~300 ms of wall time against the silent output: the clock advances.
         s.transport(TransportAction::Play).unwrap();

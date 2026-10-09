@@ -27,5 +27,45 @@ pub use backend::{Backend, BlendMode, FrameProvider, Rgba, Transform2D};
 pub use cache::RenderCache;
 pub use cpu::CpuBackend;
 pub use gpu::GpuBackend;
+
+/// Whichever backend the machine has: the GPU one when an adapter exists, else
+/// the CPU reference. Lets callers that only need pixels out stay generic-free.
+pub enum AnyBackend {
+    Cpu(CpuBackend),
+    Gpu(GpuBackend),
+}
+
+impl AnyBackend {
+    pub fn detect() -> Self {
+        match GpuBackend::new() {
+            Some(g) => AnyBackend::Gpu(g),
+            None => AnyBackend::Cpu(CpuBackend),
+        }
+    }
+
+    pub fn is_gpu(&self) -> bool {
+        matches!(self, AnyBackend::Gpu(_))
+    }
+
+    /// Render `graph` and read the pixels back as linear premultiplied RGBA.
+    pub fn render_pixels(
+        &mut self,
+        graph: &Graph,
+        frames: &mut dyn FrameProvider,
+    ) -> debut_core::Result<(u32, u32, Vec<Rgba>)> {
+        match self {
+            AnyBackend::Cpu(b) => {
+                let img = graph.render(b, frames)?;
+                let (w, h) = b.size(&img);
+                Ok((w, h, b.download(&img)))
+            }
+            AnyBackend::Gpu(b) => {
+                let img = graph.render(b, frames)?;
+                let (w, h) = b.size(&img);
+                Ok((w, h, b.download(&img)))
+            }
+        }
+    }
+}
 pub use graph::{Graph, Node, NodeId};
 pub use keyframe::{Curve, Interp, Keyframe};
