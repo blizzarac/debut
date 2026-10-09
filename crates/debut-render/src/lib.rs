@@ -18,7 +18,7 @@ pub mod gpu;
 pub mod graph;
 pub mod lut;
 
-pub mod nodes; // further node kinds: masks, keys, LUTs, color wheels (pending)
+pub mod nodes; // FX-04 masks, FX-05 chroma key
 pub mod ofx; // FX-15 OpenFX bridge over PluginHost (pending)
 pub mod scopes; // PB-08 waveform, vectorscope, histogram
 pub mod tracking; // FX-04, FX-06 (pending)
@@ -94,4 +94,5 @@ pub use compose::{compose, compose_at};
 pub use debut_core::keyframe::{self, Curve, Interp, Keyframe};
 pub use graph::{Graph, Image8, ImageRef, LutRef, Node, NodeId};
 pub use lut::Lut3d;
+pub use nodes::{ChromaKey, Mask, MaskShape};
 pub use scopes::Scopes;

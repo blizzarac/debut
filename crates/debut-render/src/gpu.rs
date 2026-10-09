@@ -7,6 +7,7 @@
 use crate::backend::{Backend, BlendMode, Rgba, Transform2D};
 use crate::color::{ColorTransform, Grade, Transfer};
 use crate::lut::Lut3d;
+use crate::nodes::{ChromaKey, Mask};
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 
@@ -19,6 +20,8 @@ const COLOR: &str = include_str!("../../../shaders/color.wgsl");
 const COLOR_TRANSFORM: &str = include_str!("../../../shaders/color_transform.wgsl");
 const LUT3D: &str = include_str!("../../../shaders/lut3d.wgsl");
 const GRADE: &str = include_str!("../../../shaders/grade.wgsl");
+const MASK: &str = include_str!("../../../shaders/mask.wgsl");
+const KEY: &str = include_str!("../../../shaders/key.wgsl");
 const PREMULTIPLY: &str = include_str!("../../../shaders/premultiply.wgsl");
 const OUTPUT: &str = include_str!("../../../shaders/output.wgsl");
 
@@ -79,6 +82,24 @@ struct GradeParams {
     wb: [f32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct MaskParams {
+    center: [f32; 2],
+    half: [f32; 2],
+    feather: f32,
+    shape: u32,
+    invert: u32,
+    pad: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct KeyParams {
+    key: [f32; 4],
+    knobs: [f32; 4],
+}
+
 struct Pass {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
@@ -94,6 +115,8 @@ pub struct GpuBackend {
     color_transform: Pass,
     lut3d: Pass,
     grade: Pass,
+    mask: Pass,
+    key: Pass,
     premultiply: Pass,
     output: Pass,
 }
@@ -172,6 +195,24 @@ impl GpuBackend {
             false,
             std::mem::size_of::<GradeParams>(),
         );
+        let mask = Self::pass(
+            &device,
+            "mask",
+            "",
+            MASK,
+            1,
+            false,
+            std::mem::size_of::<MaskParams>(),
+        );
+        let key = Self::pass(
+            &device,
+            "key",
+            COLOR,
+            KEY,
+            1,
+            false,
+            std::mem::size_of::<KeyParams>(),
+        );
         let premultiply = Self::pass(&device, "premultiply", "", PREMULTIPLY, 1, false, 16);
         let output = Self::pass_to(
             &device,
@@ -192,6 +233,8 @@ impl GpuBackend {
             color_transform,
             lut3d,
             grade,
+            mask,
+            key,
             premultiply,
             output,
         })
@@ -754,6 +797,42 @@ impl Backend for GpuBackend {
         )
     }
 
+    fn mask(&mut self, src: &GpuImage, m: &Mask) -> GpuImage {
+        let src = &self.premultiplied(src);
+        let p = MaskParams {
+            center: m.center,
+            half: m.half,
+            feather: m.feather,
+            shape: m.shape.index(),
+            invert: m.invert as u32,
+            pad: 0,
+        };
+        self.run(
+            &self.mask,
+            bytemuck::bytes_of(&p),
+            &[src],
+            src.w,
+            src.h,
+            "mask",
+        )
+    }
+
+    fn chroma_key(&mut self, src: &GpuImage, k: &ChromaKey) -> GpuImage {
+        let src = &self.premultiplied(src);
+        let p = KeyParams {
+            key: [k.key[0], k.key[1], k.key[2], 0.0],
+            knobs: [k.tolerance, k.softness, k.spill, 0.0],
+        };
+        self.run(
+            &self.key,
+            bytemuck::bytes_of(&p),
+            &[src],
+            src.w,
+            src.h,
+            "key",
+        )
+    }
+
     fn download_rgba8(&mut self, img: &GpuImage, transfer: Transfer) -> Vec<u8> {
         let img = &self.premultiplied(img);
         let p = [transfer as u32, 0, 0, 0];
@@ -938,6 +1017,32 @@ mod tests {
         let c = cpu.grade(&ca, &grade);
         let d = max_diff(&gpu.download(&g), &cpu.download(&c));
         assert!(d < 1e-4, "grade differs by {d}");
+
+        for shape in [crate::MaskShape::Rectangle, crate::MaskShape::Ellipse] {
+            for (feather, invert) in [(0.0, false), (6.0, false), (3.0, true)] {
+                let m = Mask {
+                    shape,
+                    center: [17.3, 10.2],
+                    half: [9.0, 6.5],
+                    feather,
+                    invert,
+                };
+                let g = gpu.mask(&ga, &m);
+                let c = cpu.mask(&ca, &m);
+                let d = max_diff(&gpu.download(&g), &cpu.download(&c));
+                assert!(d < 1e-5, "mask {shape:?} f={feather} differs by {d}");
+            }
+        }
+        let k = ChromaKey {
+            key: [0.1, 0.8, 0.15],
+            tolerance: 0.15,
+            softness: 0.2,
+            spill: 0.7,
+        };
+        let g = gpu.chroma_key(&ga, &k);
+        let c = cpu.chroma_key(&ca, &k);
+        let d = max_diff(&gpu.download(&g), &cpu.download(&c));
+        assert!(d < 1e-4, "chroma key differs by {d}");
 
         let g8 = gpu.download_rgba8(&ga, Transfer::Srgb);
         let c8 = cpu.download_rgba8(&ca, Transfer::Srgb);

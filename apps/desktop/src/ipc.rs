@@ -17,9 +17,9 @@ use debut_platform_native::codec::{AudioEncodeSettings, EncodeSettings, FfmpegEn
 use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
-    schema, AudioEffect, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, Marker, Param, Project,
-    Sequence, Title, TitleStyle, Track, TrackKind, TrackMix, TransformFx, Transition,
-    TransitionKind,
+    schema, AudioEffect, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, KeyFx, Marker, MaskFx,
+    MaskShape, Param, Project, Sequence, Title, TitleStyle, Track, TrackKind, TrackMix,
+    TransformFx, Transition, TransitionKind,
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
@@ -916,6 +916,35 @@ pub struct EffectDto {
     pub index: usize,
     pub kind: String,
     pub params: Vec<ParamDto>,
+    /// Non-animated options (mask shape/invert, key colour).
+    pub options: EffectOptions,
+}
+
+/// The non-keyframed knobs of an effect; every field optional so one struct
+/// serves both reading and partial updates.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct EffectOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shape: Option<MaskShape>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub invert: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<[u8; 3]>,
+}
+
+fn effect_options(e: &Effect) -> EffectOptions {
+    match e {
+        Effect::Mask(m) => EffectOptions {
+            shape: Some(m.shape),
+            invert: Some(m.invert),
+            color: None,
+        },
+        Effect::ChromaKey(k) => EffectOptions {
+            color: Some(k.color),
+            ..Default::default()
+        },
+        _ => EffectOptions::default(),
+    }
 }
 
 impl Session {
@@ -955,6 +984,7 @@ impl Session {
             .map(|(index, e)| EffectDto {
                 index,
                 kind: e.kind().to_string(),
+                options: effect_options(e),
                 params: e
                     .params()
                     .iter()
@@ -976,6 +1006,8 @@ impl Session {
         let effect = match kind {
             "transform" => Effect::Transform(TransformFx::default()),
             "grade" => Effect::Grade(GradeFx::default()),
+            "mask" => Effect::Mask(MaskFx::default()),
+            "key" => Effect::ChromaKey(KeyFx::default()),
             other => return Err(format!("unknown effect kind {other}")),
         };
         self.exec(Command::AddEffect {
@@ -983,6 +1015,41 @@ impl Session {
             clip: clip_id,
             effect,
             index: None,
+        })
+    }
+
+    /// Change an effect's non-animated options (FX-04 shape/invert, FX-05 key
+    /// colour); fields left `None` keep their value.
+    pub fn set_effect_options(
+        &mut self,
+        track: &str,
+        clip: &str,
+        index: usize,
+        opts: EffectOptions,
+    ) -> Result<(), String> {
+        let (target, clip_id, c) = self.clip_ref(track, clip)?;
+        let mut effect = c.effects.get(index).cloned().ok_or("no such effect")?;
+        match &mut effect {
+            Effect::Mask(m) => {
+                if let Some(shape) = opts.shape {
+                    m.shape = shape;
+                }
+                if let Some(invert) = opts.invert {
+                    m.invert = invert;
+                }
+            }
+            Effect::ChromaKey(k) => {
+                if let Some(color) = opts.color {
+                    k.color = color;
+                }
+            }
+            _ => return Err("this effect has no options".into()),
+        }
+        self.exec(Command::ReplaceEffect {
+            target,
+            clip: clip_id,
+            index,
+            effect,
         })
     }
 
@@ -1040,6 +1107,17 @@ pub fn add_effect(
     kind: String,
 ) -> Result<(), String> {
     lock(&state).add_effect(&track, &clip, &kind)
+}
+
+#[tauri::command]
+pub fn set_effect_options(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    index: usize,
+    options: EffectOptions,
+) -> Result<(), String> {
+    lock(&state).set_effect_options(&track, &clip, index, options)
 }
 
 #[tauri::command]
@@ -1939,6 +2017,63 @@ mod tests {
             "removing the opacity ramp brightens the frame"
         );
         assert!(s.remove_effect(&v, &clip_id, 7).is_err());
+
+        // Mask (FX-04): a 32x18 rectangle in the 64x36 frame blacks out the
+        // corners and keeps the centre; inverting swaps that; options are undoable.
+        s.add_effect(&v, &clip_id, "mask").unwrap();
+        let mask_ix = s.clip_effects(&v, &clip_id).unwrap().len() - 1;
+        s.set_param(&v, &clip_id, mask_ix, Param::MaskWidth, 32.0, false)
+            .unwrap();
+        s.set_param(&v, &clip_id, mask_ix, Param::MaskHeight, 18.0, false)
+            .unwrap();
+        s.set_param(&v, &clip_id, mask_ix, Param::Feather, 0.0, false)
+            .unwrap();
+        let (_, _, masked) = s.frame_pixels().unwrap();
+        let at = |px: &[u8], x: usize, y: usize| {
+            let i = (y * 64 + x) * 4;
+            px[i] as u32 + px[i + 1] as u32 + px[i + 2] as u32
+        };
+        assert_eq!(at(&masked, 1, 1), 0, "corner is masked out");
+        assert!(at(&masked, 32, 18) > 60, "centre is kept");
+        s.set_effect_options(
+            &v,
+            &clip_id,
+            mask_ix,
+            EffectOptions {
+                invert: Some(true),
+                shape: Some(MaskShape::Ellipse),
+                color: None,
+            },
+        )
+        .unwrap();
+        let fx = s.clip_effects(&v, &clip_id).unwrap();
+        assert_eq!(
+            (fx[mask_ix].options.invert, fx[mask_ix].options.shape),
+            (Some(true), Some(MaskShape::Ellipse))
+        );
+        let (_, _, inverted) = s.frame_pixels().unwrap();
+        assert_eq!(at(&inverted, 32, 18), 0, "centre is now cut out");
+        assert!(
+            at(&inverted, 1, 1) > 0 || at(&inverted, 2, 30) > 0,
+            "corners show"
+        );
+        assert!(s
+            .set_effect_options(&v, &clip_id, 0, EffectOptions::default())
+            .is_err());
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.sync_player().unwrap();
+        assert_eq!(
+            s.clip_effects(&v, &clip_id).unwrap()[mask_ix]
+                .options
+                .invert,
+            Some(false)
+        );
+        s.remove_effect(&v, &clip_id, mask_ix).unwrap();
+        // Keyer (FX-05) attaches and reports its colour.
+        s.add_effect(&v, &clip_id, "key").unwrap();
+        let fx = s.clip_effects(&v, &clip_id).unwrap();
+        assert_eq!(fx.last().unwrap().options.color, Some([0, 255, 0]));
+        s.remove_effect(&v, &clip_id, fx.len() - 1).unwrap();
 
         // Edit through the IPC op, then undo it.
         let clip = seq.tracks[0].clips[0].id.clone();

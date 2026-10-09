@@ -6,6 +6,7 @@ use crate::backend::{BlendMode, Transform2D};
 use crate::color::{ColorTransform, Grade};
 use crate::graph::{Graph, Image8, ImageRef, LutRef, Node, NodeId};
 use crate::lut::Lut3d;
+use crate::nodes::{ChromaKey, Mask, MaskShape};
 use debut_core::color::ColorSpace;
 use debut_core::{Rational, SequenceId};
 use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, Title, TrackKind};
@@ -214,6 +215,37 @@ fn clip_layer(
                         lut: LutRef(lut),
                     });
                 }
+            }
+            Effect::Mask(m) => {
+                let v = |p: Param| effect.value(p, local).unwrap_or(0.0) as f32;
+                let mask = Mask {
+                    shape: match m.shape {
+                        debut_project::MaskShape::Rectangle => MaskShape::Rectangle,
+                        debut_project::MaskShape::Ellipse => MaskShape::Ellipse,
+                    },
+                    center: [
+                        w as f32 * 0.5 + v(Param::MaskX) * px_scale,
+                        h as f32 * 0.5 + v(Param::MaskY) * px_scale,
+                    ],
+                    half: [
+                        v(Param::MaskWidth) * 0.5 * px_scale,
+                        v(Param::MaskHeight) * 0.5 * px_scale,
+                    ],
+                    feather: v(Param::Feather) * px_scale,
+                    invert: m.invert,
+                };
+                node = g.add(Node::Mask { input: node, mask });
+            }
+            Effect::ChromaKey(k) => {
+                let v = |p: Param| effect.value(p, local).unwrap_or(0.0) as f32;
+                let lin = |b: u8| crate::color::decode(crate::Transfer::Srgb, b as f32 / 255.0);
+                let key = ChromaKey {
+                    key: [lin(k.color[0]), lin(k.color[1]), lin(k.color[2])],
+                    tolerance: v(Param::Tolerance).max(0.0),
+                    softness: v(Param::Softness).max(0.0),
+                    spill: v(Param::Spill).clamp(0.0, 1.0),
+                };
+                node = g.add(Node::ChromaKey { input: node, key });
             }
             Effect::Transform(_) => {}
         }

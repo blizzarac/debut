@@ -4,6 +4,7 @@
 use crate::backend::{Backend, BlendMode, Rgba, Transform2D};
 use crate::color::{ColorTransform, Grade};
 use crate::lut::Lut3d;
+use crate::nodes::{ChromaKey, Mask};
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -184,6 +185,45 @@ impl Backend for CpuBackend {
 
     fn grade(&mut self, src: &CpuImage, grade: &Grade) -> CpuImage {
         map_rgb(src, |c| grade.apply_rgb(c))
+    }
+
+    fn mask(&mut self, src: &CpuImage, mask: &Mask) -> CpuImage {
+        let w = src.w as usize;
+        let px = src
+            .px
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let m = mask.coverage((i % w) as f32 + 0.5, (i / w) as f32 + 0.5);
+                [p[0] * m, p[1] * m, p[2] * m, p[3] * m]
+            })
+            .collect();
+        CpuImage {
+            w: src.w,
+            h: src.h,
+            px: Arc::new(px),
+        }
+    }
+
+    fn chroma_key(&mut self, src: &CpuImage, key: &ChromaKey) -> CpuImage {
+        let px = src
+            .px
+            .iter()
+            .map(|p| {
+                let a = p[3];
+                if a <= 0.0 {
+                    return [0.0; 4];
+                }
+                let (c, k) = key.apply([p[0] / a, p[1] / a, p[2] / a]);
+                let a = a * k;
+                [c[0] * a, c[1] * a, c[2] * a, a]
+            })
+            .collect();
+        CpuImage {
+            w: src.w,
+            h: src.h,
+            px: Arc::new(px),
+        }
     }
 }
 

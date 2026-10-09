@@ -3,6 +3,7 @@
 
 use crate::color::{encode, ColorTransform, Grade, Transfer};
 use crate::lut::Lut3d;
+use crate::nodes::{ChromaKey, Mask};
 use debut_core::{MediaId, Rational, Result};
 use serde::{Deserialize, Serialize};
 
@@ -117,6 +118,10 @@ pub trait Backend {
     fn lut3d(&mut self, src: &Self::Image, lut: &Lut3d) -> Self::Image;
     /// Primary grade on un-premultiplied scene-linear RGB (FX-09).
     fn grade(&mut self, src: &Self::Image, grade: &Grade) -> Self::Image;
+    /// Multiply by a shape's coverage (FX-04).
+    fn mask(&mut self, src: &Self::Image, mask: &Mask) -> Self::Image;
+    /// Chroma key with despill (FX-05).
+    fn chroma_key(&mut self, src: &Self::Image, key: &ChromaKey) -> Self::Image;
     fn download(&mut self, img: &Self::Image) -> Vec<Rgba>;
     /// Read back as straight-alpha 8-bit, encoded with `transfer` (the viewer's
     /// and the encoder's input). Backends override this to do it on the GPU.

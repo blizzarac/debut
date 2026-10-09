@@ -162,7 +162,24 @@ export type ParamName =
   | "contrast"
   | "saturation"
   | "temperature"
-  | "tint";
+  | "tint"
+  | "mask_x"
+  | "mask_y"
+  | "mask_width"
+  | "mask_height"
+  | "feather"
+  | "tolerance"
+  | "softness"
+  | "spill";
+
+export type EffectKind = "transform" | "grade" | "lut" | "mask" | "key";
+
+/** Non-animated knobs: mask shape/invert, key colour (straight sRGB bytes). */
+export interface EffectOptions {
+  shape?: "rectangle" | "ellipse";
+  invert?: boolean;
+  color?: [number, number, number];
+}
 
 export interface ParamInfo {
   name: ParamName;
@@ -172,14 +189,17 @@ export interface ParamInfo {
 
 export interface EffectInfo {
   index: number;
-  kind: "transform" | "grade" | "lut";
+  kind: EffectKind;
   params: ParamInfo[];
+  options: EffectOptions;
 }
 
 export interface EffectsApi {
   clipEffects(track: string, clip: string): Promise<EffectInfo[]>;
-  addEffect(track: string, clip: string, kind: "transform" | "grade"): Promise<void>;
+  addEffect(track: string, clip: string, kind: EffectKind): Promise<void>;
   removeEffect(track: string, clip: string, index: number): Promise<void>;
+  /** Change non-animated options; omitted fields keep their value. */
+  setOptions(track: string, clip: string, effect: number, options: EffectOptions): Promise<void>;
   /** Set as a constant, or keyframe at the playhead when `keyframe` is true. */
   setParam(track: string, clip: string, effect: number, param: ParamName, value: number, keyframe: boolean): Promise<void>;
 }

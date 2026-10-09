@@ -36,6 +36,7 @@ pub fn run() {
             ipc::clip_effects,
             ipc::add_effect,
             ipc::remove_effect,
+            ipc::set_effect_options,
             ipc::set_param,
             ipc::set_track_mix,
             ipc::add_insert,

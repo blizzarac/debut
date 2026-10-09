@@ -3,6 +3,7 @@
 use crate::backend::{Backend, BlendMode, FrameProvider, Rgba, Transform2D};
 use crate::color::{ColorTransform, Grade};
 use crate::lut::Lut3d;
+use crate::nodes::{ChromaKey, Mask};
 use debut_core::{Error, MediaId, Rational, Result};
 use serde::{Serialize, Serializer};
 use std::hash::{Hash, Hasher};
@@ -105,6 +106,16 @@ pub enum Node {
         input: NodeId,
         grade: Grade,
     },
+    /// Shape mask on the layer's alpha (FX-04).
+    Mask {
+        input: NodeId,
+        mask: Mask,
+    },
+    /// Chroma key (FX-05).
+    ChromaKey {
+        input: NodeId,
+        key: ChromaKey,
+    },
 }
 
 impl Node {
@@ -114,7 +125,9 @@ impl Node {
             Node::Transform { input, .. }
             | Node::ColorTransform { input, .. }
             | Node::Lut3d { input, .. }
-            | Node::Grade { input, .. } => vec![*input],
+            | Node::Grade { input, .. }
+            | Node::Mask { input, .. }
+            | Node::ChromaKey { input, .. } => vec![*input],
             Node::Blend { bottom, top, .. } => vec![*bottom, *top],
             Node::Dissolve { a, b, .. } => vec![*a, *b],
         }
@@ -221,6 +234,8 @@ impl Graph {
                 }
                 Node::Lut3d { input, lut } => backend.lut3d(&get(&images, *input), &lut.0),
                 Node::Grade { input, grade } => backend.grade(&get(&images, *input), grade),
+                Node::Mask { input, mask } => backend.mask(&get(&images, *input), mask),
+                Node::ChromaKey { input, key } => backend.chroma_key(&get(&images, *input), key),
             };
             images[i] = Some(img);
         }

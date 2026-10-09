@@ -13,6 +13,14 @@ const RANGES: Record<ParamName, [number, number, number]> = {
   saturation: [0, 3, 0.01],
   temperature: [-1, 1, 0.01],
   tint: [-1, 1, 0.01],
+  mask_x: [-2000, 2000, 1],
+  mask_y: [-2000, 2000, 1],
+  mask_width: [0, 4000, 1],
+  mask_height: [0, 4000, 1],
+  feather: [0, 400, 1],
+  tolerance: [0, 1, 0.005],
+  softness: [0, 1, 0.005],
+  spill: [0, 1, 0.01],
 };
 
 /** Effect stack of the selected clip. Sliders set constants, or keyframes at
@@ -39,6 +47,8 @@ export function Inspector({ effects, selected, position, onChanged }: { effects:
       <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 8 }}>
         <button onClick={() => act(effects.addEffect(selected.track, selected.clip, "transform"))}>+ Transform</button>
         <button onClick={() => act(effects.addEffect(selected.track, selected.clip, "grade"))}>+ Grade</button>
+        <button onClick={() => act(effects.addEffect(selected.track, selected.clip, "mask"))}>+ Mask</button>
+        <button onClick={() => act(effects.addEffect(selected.track, selected.clip, "key"))} title="Chroma key">+ Key</button>
         <label style={{ marginLeft: "auto" }} title="Changes add a keyframe at the playhead">
           <input type="checkbox" checked={keyframe} onChange={(e) => setKeyframe(e.target.checked)} /> key
         </label>
@@ -51,6 +61,30 @@ export function Inspector({ effects, selected, position, onChanged }: { effects:
               ×
             </button>
           </div>
+          {fx.kind === "mask" && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+              <select value={fx.options.shape ?? "rectangle"} onChange={(e) => act(effects.setOptions(selected.track, selected.clip, fx.index, { shape: e.target.value as "rectangle" | "ellipse" }))}>
+                <option value="rectangle">rectangle</option>
+                <option value="ellipse">ellipse</option>
+              </select>
+              <label>
+                <input type="checkbox" checked={fx.options.invert ?? false} onChange={(e) => act(effects.setOptions(selected.track, selected.clip, fx.index, { invert: e.target.checked }))} /> invert
+              </label>
+            </div>
+          )}
+          {fx.kind === "key" && (
+            <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+              key colour
+              <input
+                type="color"
+                value={hex([...(fx.options.color ?? [0, 255, 0]), 255] as Rgba)}
+                onChange={(e) => {
+                  const c = fromHex(e.target.value, 255);
+                  act(effects.setOptions(selected.track, selected.clip, fx.index, { color: [c[0], c[1], c[2]] }));
+                }}
+              />
+            </label>
+          )}
           {fx.params.map((p) => {
             const [min, max, step] = RANGES[p.name];
             return (

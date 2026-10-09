@@ -96,6 +96,14 @@ pub enum Command {
         effect: Effect,
         index: Option<usize>,
     },
+    /// Swap the effect at `index` wholesale (shape, key colour and other
+    /// non-animated options); keyframed values go through `SetParam`.
+    ReplaceEffect {
+        target: Target,
+        clip: ClipId,
+        index: usize,
+        effect: Effect,
+    },
     RemoveEffect {
         target: Target,
         clip: ClipId,
@@ -346,6 +354,19 @@ impl Command {
             } => edit_clip(project, *target, *clip, |c| {
                 let at = index.unwrap_or(c.effects.len()).min(c.effects.len());
                 c.effects.insert(at, effect.clone());
+                Ok(())
+            }),
+            Command::ReplaceEffect {
+                target,
+                clip,
+                index,
+                effect,
+            } => edit_clip(project, *target, *clip, |c| {
+                let slot = c
+                    .effects
+                    .get_mut(*index)
+                    .ok_or_else(|| Error::InvalidArgument("no such effect".into()))?;
+                *slot = effect.clone();
                 Ok(())
             }),
             Command::RemoveEffect {
@@ -654,6 +675,24 @@ impl Command {
                     target: *target,
                     clip: *clip,
                     index: index.unwrap_or(c.effects.len()).min(c.effects.len()),
+                })
+            }
+            Command::ReplaceEffect {
+                target,
+                clip,
+                index,
+                ..
+            } => {
+                let c = find_clip(project, *target, *clip)?;
+                let e = c
+                    .effects
+                    .get(*index)
+                    .ok_or_else(|| Error::InvalidArgument("no such effect".into()))?;
+                Ok(Command::ReplaceEffect {
+                    target: *target,
+                    clip: *clip,
+                    index: *index,
+                    effect: e.clone(),
                 })
             }
             Command::RemoveEffect {

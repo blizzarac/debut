@@ -14,6 +14,65 @@ pub enum Effect {
         hash: u64,
         name: String,
     },
+    /// Shape mask on the layer (FX-04).
+    Mask(MaskFx),
+    /// Chroma key (FX-05).
+    ChromaKey(KeyFx),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MaskShape {
+    Rectangle,
+    Ellipse,
+}
+
+/// A soft shape in sequence pixels: centre offset from the frame centre,
+/// full width/height, feather width. `invert` keeps the outside instead.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MaskFx {
+    pub shape: MaskShape,
+    pub invert: bool,
+    pub x: Curve,
+    pub y: Curve,
+    pub width: Curve,
+    pub height: Curve,
+    pub feather: Curve,
+}
+
+impl Default for MaskFx {
+    fn default() -> Self {
+        Self {
+            shape: MaskShape::Rectangle,
+            invert: false,
+            x: Curve::constant(0.0),
+            y: Curve::constant(0.0),
+            width: Curve::constant(960.0),
+            height: Curve::constant(540.0),
+            feather: Curve::constant(20.0),
+        }
+    }
+}
+
+/// Chroma key: the colour to remove (straight sRGB bytes), how far in chroma
+/// counts as that colour, the soft band past it, and how much spill to pull.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KeyFx {
+    pub color: [u8; 3],
+    pub tolerance: Curve,
+    pub softness: Curve,
+    pub spill: Curve,
+}
+
+impl Default for KeyFx {
+    fn default() -> Self {
+        Self {
+            color: [0, 255, 0],
+            tolerance: Curve::constant(0.25),
+            softness: Curve::constant(0.1),
+            spill: Curve::constant(0.5),
+        }
+    }
 }
 
 /// Scale (1 = fit), rotation (degrees), position offset (sequence pixels), opacity.
@@ -73,6 +132,14 @@ pub enum Param {
     Saturation,
     Temperature,
     Tint,
+    MaskX,
+    MaskY,
+    MaskWidth,
+    MaskHeight,
+    Feather,
+    Tolerance,
+    Softness,
+    Spill,
 }
 
 impl Effect {
@@ -81,6 +148,8 @@ impl Effect {
             Effect::Transform(_) => "transform",
             Effect::Grade(_) => "grade",
             Effect::Lut { .. } => "lut",
+            Effect::Mask(_) => "mask",
+            Effect::ChromaKey(_) => "key",
         }
     }
 
@@ -96,6 +165,14 @@ impl Effect {
             (Effect::Grade(g), Param::Saturation) => Some(&g.saturation),
             (Effect::Grade(g), Param::Temperature) => Some(&g.temperature),
             (Effect::Grade(g), Param::Tint) => Some(&g.tint),
+            (Effect::Mask(m), Param::MaskX) => Some(&m.x),
+            (Effect::Mask(m), Param::MaskY) => Some(&m.y),
+            (Effect::Mask(m), Param::MaskWidth) => Some(&m.width),
+            (Effect::Mask(m), Param::MaskHeight) => Some(&m.height),
+            (Effect::Mask(m), Param::Feather) => Some(&m.feather),
+            (Effect::ChromaKey(k), Param::Tolerance) => Some(&k.tolerance),
+            (Effect::ChromaKey(k), Param::Softness) => Some(&k.softness),
+            (Effect::ChromaKey(k), Param::Spill) => Some(&k.spill),
             _ => None,
         }
     }
@@ -112,6 +189,14 @@ impl Effect {
             (Effect::Grade(g), Param::Saturation) => Some(&mut g.saturation),
             (Effect::Grade(g), Param::Temperature) => Some(&mut g.temperature),
             (Effect::Grade(g), Param::Tint) => Some(&mut g.tint),
+            (Effect::Mask(m), Param::MaskX) => Some(&mut m.x),
+            (Effect::Mask(m), Param::MaskY) => Some(&mut m.y),
+            (Effect::Mask(m), Param::MaskWidth) => Some(&mut m.width),
+            (Effect::Mask(m), Param::MaskHeight) => Some(&mut m.height),
+            (Effect::Mask(m), Param::Feather) => Some(&mut m.feather),
+            (Effect::ChromaKey(k), Param::Tolerance) => Some(&mut k.tolerance),
+            (Effect::ChromaKey(k), Param::Softness) => Some(&mut k.softness),
+            (Effect::ChromaKey(k), Param::Spill) => Some(&mut k.spill),
             _ => None,
         }
     }
@@ -134,6 +219,14 @@ impl Effect {
                 Param::Tint,
             ],
             Effect::Lut { .. } => &[],
+            Effect::Mask(_) => &[
+                Param::MaskX,
+                Param::MaskY,
+                Param::MaskWidth,
+                Param::MaskHeight,
+                Param::Feather,
+            ],
+            Effect::ChromaKey(_) => &[Param::Tolerance, Param::Softness, Param::Spill],
         }
     }
 

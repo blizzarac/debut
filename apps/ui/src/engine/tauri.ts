@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  EffectKind,
+  EffectOptions,
   EditOp,
   EffectInfo,
   EffectsApi,
@@ -81,8 +83,11 @@ class TauriEffects implements EffectsApi {
   clipEffects(track: string, clip: string) {
     return invoke<EffectInfo[]>("clip_effects", { track, clip });
   }
-  addEffect(track: string, clip: string, kind: "transform" | "grade") {
+  addEffect(track: string, clip: string, kind: EffectKind) {
     return invoke<void>("add_effect", { track, clip, kind });
+  }
+  setOptions(track: string, clip: string, index: number, options: EffectOptions) {
+    return invoke<void>("set_effect_options", { track, clip, index, options });
   }
   removeEffect(track: string, clip: string, index: number) {
     return invoke<void>("remove_effect", { track, clip, index });
