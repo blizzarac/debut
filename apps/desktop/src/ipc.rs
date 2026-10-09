@@ -303,74 +303,248 @@ fn sequence_dto(seq: &Sequence) -> SequenceDto {
     }
 }
 
-#[tauri::command]
-pub fn import_media(state: State<'_, Shared>, path: String) -> Result<MediaDto, String> {
-    let dec = FfmpegDecoder::open(&path).map_err(|e| e.to_string())?;
-    let v = dec.video_info().ok_or("file has no video stream")?.clone();
-    let has_audio = dec.audio_info().is_some();
-    let mut s = lock(&state);
-    s.project_mut()?;
-    let id: MediaId = s.ids.fresh();
-    let media = MediaRef {
-        id,
-        path: path.clone(),
-        online: true,
-        metadata: MediaMetadata {
-            frame_rate: Some(v.frame_rate),
-            audio_channels: dec.audio_info().map(|a| a.channels).unwrap_or(0),
-            ..Default::default()
-        },
-        proxies: vec![],
-    };
-    s.probed
-        .insert(id, (v.width, v.height, v.duration, has_audio));
-    s.exec(Command::AddMedia(media))?;
-    Ok(MediaDto {
-        id: id_str(id.0),
-        path,
-        width: v.width,
-        height: v.height,
-        duration: secs(v.duration),
-        frame_rate: [v.frame_rate.0.num, v.frame_rate.0.den],
-        has_audio,
-    })
+impl Session {
+    pub fn import_media(&mut self, path: String) -> Result<MediaDto, String> {
+        let dec = FfmpegDecoder::open(&path).map_err(|e| e.to_string())?;
+        let v = dec.video_info().ok_or("file has no video stream")?.clone();
+        let has_audio = dec.audio_info().is_some();
+        self.project_mut()?;
+        let id: MediaId = self.ids.fresh();
+        let media = MediaRef {
+            id,
+            path: path.clone(),
+            online: true,
+            metadata: MediaMetadata {
+                frame_rate: Some(v.frame_rate),
+                audio_channels: dec.audio_info().map(|a| a.channels).unwrap_or(0),
+                ..Default::default()
+            },
+            proxies: vec![],
+        };
+        self.probed
+            .insert(id, (v.width, v.height, v.duration, has_audio));
+        self.exec(Command::AddMedia(media))?;
+        Ok(MediaDto {
+            id: id_str(id.0),
+            path,
+            width: v.width,
+            height: v.height,
+            duration: secs(v.duration),
+            frame_rate: [v.frame_rate.0.num, v.frame_rate.0.den],
+            has_audio,
+        })
+    }
+
+    /// Create the first sequence (sized from the first media, else 1080p25) with
+    /// one video and one audio track, if the project has none.
+    pub fn ensure_sequence(&mut self) -> Result<SequenceDto, String> {
+        if self.first_sequence().is_err() {
+            let (w, h, fr) = self
+                .project
+                .as_ref()
+                .and_then(|p| p.media.first())
+                .and_then(|m| {
+                    self.probed.get(&m.id).map(|&(w, h, _, _)| {
+                        (w, h, m.metadata.frame_rate.unwrap_or(FrameRate::FPS_25))
+                    })
+                })
+                .unwrap_or((1920, 1080, FrameRate::FPS_25));
+            let seq = Sequence::new(self.ids.fresh(), "Sequence 1", fr, w, h);
+            let seq_id = seq.id;
+            let v = Track::new(self.ids.fresh(), TrackKind::Video);
+            let a = Track::new(self.ids.fresh(), TrackKind::Audio);
+            self.exec(Command::Group(vec![
+                Command::AddSequence(seq),
+                Command::AddTrack {
+                    sequence: seq_id,
+                    track: v,
+                    index: None,
+                },
+                Command::AddTrack {
+                    sequence: seq_id,
+                    track: a,
+                    index: None,
+                },
+            ]))?;
+        }
+        Ok(sequence_dto(self.first_sequence()?))
+    }
+
+    /// Insert the whole of `media` on `track` at `at` seconds (ripple).
+    pub fn add_clip(&mut self, track: &str, media: &str, at: f64) -> Result<(), String> {
+        let (seq_id, fr) = {
+            let seq = self.first_sequence()?;
+            (seq.id, seq.frame_rate)
+        };
+        let track_id = TrackId(parse_id(track)?);
+        let media_id = MediaId(parse_id(media)?);
+        let duration = self
+            .probed
+            .get(&media_id)
+            .map(|p| p.2)
+            .ok_or("unknown media")?;
+        let clip = Clip::new(
+            self.ids.fresh(),
+            ClipSource::Media(media_id),
+            Rational::ZERO,
+            fr.snap(duration).max(fr.frame_duration()),
+            Rational::ZERO,
+        );
+        let target = Target {
+            sequence: seq_id,
+            track: track_id,
+        };
+        let cmd = Command::insert(target, frames_of(at, fr), vec![clip], &mut self.ids);
+        self.exec(cmd)
+    }
+
+    pub fn edit(&mut self, op: EditOp) -> Result<(), String> {
+        let (seq_id, fr) = {
+            let seq = self.first_sequence()?;
+            (seq.id, seq.frame_rate)
+        };
+        let target = |t: &str| -> Result<Target, String> {
+            Ok(Target {
+                sequence: seq_id,
+                track: TrackId(parse_id(t)?),
+            })
+        };
+        let clip = |c: &str| -> Result<ClipId, String> { Ok(ClipId(parse_id(c)?)) };
+        let Session { project, ids, .. } = self;
+        let project = project.as_ref().ok_or("no project open")?;
+        let cmd = match op {
+            EditOp::RippleHead {
+                track,
+                clip: c,
+                delta,
+            } => debut_timeline::ripple_head(
+                project,
+                target(&track)?,
+                clip(&c)?,
+                frames_of(delta, fr),
+            ),
+            EditOp::RippleTail {
+                track,
+                clip: c,
+                delta,
+            } => debut_timeline::ripple_tail(
+                project,
+                target(&track)?,
+                clip(&c)?,
+                frames_of(delta, fr),
+            ),
+            EditOp::Roll {
+                track,
+                clip: c,
+                delta,
+            } => debut_timeline::roll(project, target(&track)?, clip(&c)?, frames_of(delta, fr)),
+            EditOp::Slip {
+                track,
+                clip: c,
+                delta,
+            } => Ok(debut_timeline::slip(
+                target(&track)?,
+                clip(&c)?,
+                frames_of(delta, fr),
+            )),
+            EditOp::Slide {
+                track,
+                clip: c,
+                delta,
+            } => debut_timeline::slide(project, target(&track)?, clip(&c)?, frames_of(delta, fr)),
+            EditOp::Move {
+                track,
+                clip: c,
+                delta,
+            } => Ok(Command::Move {
+                target: target(&track)?,
+                clip: clip(&c)?,
+                delta: frames_of(delta, fr),
+            }),
+            EditOp::Blade { track, at } => Ok(Command::Blade {
+                target: target(&track)?,
+                at: frames_of(at, fr),
+                tail_id: ids.fresh(),
+            }),
+            EditOp::Extract { track, start, end } => Ok(Command::extract(
+                target(&track)?,
+                frames_of(start, fr),
+                frames_of(end, fr),
+                ids,
+            )),
+            EditOp::Lift { track, start, end } => Ok(Command::lift(
+                target(&track)?,
+                frames_of(start, fr),
+                frames_of(end, fr),
+                ids,
+            )),
+        }
+        .map_err(|e| e.to_string())?;
+        self.exec(cmd)
+    }
+
+    pub fn transport(&mut self, action: TransportAction) -> Result<(), String> {
+        if self.player.is_none() {
+            self.sync_player()?;
+        }
+        let fr = self.first_sequence()?.frame_rate;
+        let p = self.player.as_mut().ok_or("no sequence")?;
+        match action {
+            TransportAction::Play => p.play(),
+            TransportAction::Pause => p.pause(),
+            TransportAction::Toggle => {
+                if p.transport.is_playing() {
+                    p.pause()
+                } else {
+                    p.play()
+                }
+            }
+            TransportAction::Seek { t } => p.seek(frames_of(t, fr)),
+            TransportAction::Step { n } => p.step(n),
+            TransportAction::Shuttle { forward } => p.shuttle(forward),
+        }
+        Ok(())
+    }
+
+    pub fn tick(&mut self) -> Result<TickDto, String> {
+        if self.player.is_none() {
+            self.sync_player()?;
+        }
+        let p = self.player.as_mut().ok_or("no sequence")?;
+        let changed = p.tick().map_err(|e| e.to_string())?.is_some();
+        let Stats { dropped, .. } = p.stats();
+        Ok(TickDto {
+            frame: p.transport.current_frame(),
+            position: secs(p.transport.position()),
+            playing: p.transport.is_playing(),
+            changed,
+            dropped,
+        })
+    }
+
+    /// The current frame as `(width, height, RGBA8 bytes)`.
+    pub fn frame_pixels(&mut self) -> Result<(u32, u32, Vec<u8>), String> {
+        let Session {
+            player, backend, ..
+        } = self;
+        let p = player.as_mut().ok_or("no sequence")?;
+        let graph = p.current_graph();
+        let img = graph
+            .render(backend, &mut p.frames)
+            .map_err(|e| e.to_string())?;
+        let (w, h) = backend.size(&img);
+        Ok((w, h, to_rgba8(&backend.download(&img))))
+    }
 }
 
-/// Create the first sequence (sized from the first media, else 1080p25) with one
-/// video and one audio track, if the project has none.
+#[tauri::command]
+pub fn import_media(state: State<'_, Shared>, path: String) -> Result<MediaDto, String> {
+    lock(&state).import_media(path)
+}
+
 #[tauri::command]
 pub fn ensure_sequence(state: State<'_, Shared>) -> Result<SequenceDto, String> {
-    let mut s = lock(&state);
-    if s.first_sequence().is_err() {
-        let (w, h, fr) = s
-            .project
-            .as_ref()
-            .and_then(|p| p.media.first())
-            .and_then(|m| {
-                s.probed
-                    .get(&m.id)
-                    .map(|&(w, h, _, _)| (w, h, m.metadata.frame_rate.unwrap_or(FrameRate::FPS_25)))
-            })
-            .unwrap_or((1920, 1080, FrameRate::FPS_25));
-        let seq = Sequence::new(s.ids.fresh(), "Sequence 1", fr, w, h);
-        let seq_id = seq.id;
-        let v = Track::new(s.ids.fresh(), TrackKind::Video);
-        let a = Track::new(s.ids.fresh(), TrackKind::Audio);
-        s.exec(Command::Group(vec![
-            Command::AddSequence(seq),
-            Command::AddTrack {
-                sequence: seq_id,
-                track: v,
-                index: None,
-            },
-            Command::AddTrack {
-                sequence: seq_id,
-                track: a,
-                index: None,
-            },
-        ]))?;
-    }
-    Ok(sequence_dto(s.first_sequence()?))
+    lock(&state).ensure_sequence()
 }
 
 #[tauri::command]
@@ -379,7 +553,6 @@ pub fn sequence(state: State<'_, Shared>) -> Result<SequenceDto, String> {
     Ok(sequence_dto(s.first_sequence()?))
 }
 
-/// Insert the whole of `media` on `track` at `at` seconds (ripple).
 #[tauri::command]
 pub fn add_clip(
     state: State<'_, Shared>,
@@ -387,29 +560,7 @@ pub fn add_clip(
     media: String,
     at: f64,
 ) -> Result<(), String> {
-    let mut s = lock(&state);
-    let seq = s.first_sequence()?;
-    let (seq_id, fr) = (seq.id, seq.frame_rate);
-    let track_id = TrackId(parse_id(&track)?);
-    let media_id = MediaId(parse_id(&media)?);
-    let duration = s
-        .probed
-        .get(&media_id)
-        .map(|p| p.2)
-        .ok_or("unknown media")?;
-    let clip = Clip::new(
-        s.ids.fresh(),
-        ClipSource::Media(media_id),
-        Rational::ZERO,
-        fr.snap(duration).max(fr.frame_duration()),
-        Rational::ZERO,
-    );
-    let target = Target {
-        sequence: seq_id,
-        track: track_id,
-    };
-    let cmd = Command::insert(target, frames_of(at, fr), vec![clip], &mut s.ids);
-    s.exec(cmd)
+    lock(&state).add_clip(&track, &media, at)
 }
 
 #[derive(Deserialize)]
@@ -463,79 +614,7 @@ pub enum EditOp {
 
 #[tauri::command]
 pub fn edit(state: State<'_, Shared>, op: EditOp) -> Result<(), String> {
-    let mut s = lock(&state);
-    let (seq_id, fr) = {
-        let seq = s.first_sequence()?;
-        (seq.id, seq.frame_rate)
-    };
-    let target = |t: &str| -> Result<Target, String> {
-        Ok(Target {
-            sequence: seq_id,
-            track: TrackId(parse_id(t)?),
-        })
-    };
-    let clip = |c: &str| -> Result<ClipId, String> { Ok(ClipId(parse_id(c)?)) };
-    let Session { project, ids, .. } = &mut *s;
-    let project = project.as_ref().ok_or("no project open")?;
-    let cmd = match op {
-        EditOp::RippleHead {
-            track,
-            clip: c,
-            delta,
-        } => debut_timeline::ripple_head(project, target(&track)?, clip(&c)?, frames_of(delta, fr)),
-        EditOp::RippleTail {
-            track,
-            clip: c,
-            delta,
-        } => debut_timeline::ripple_tail(project, target(&track)?, clip(&c)?, frames_of(delta, fr)),
-        EditOp::Roll {
-            track,
-            clip: c,
-            delta,
-        } => debut_timeline::roll(project, target(&track)?, clip(&c)?, frames_of(delta, fr)),
-        EditOp::Slip {
-            track,
-            clip: c,
-            delta,
-        } => Ok(debut_timeline::slip(
-            target(&track)?,
-            clip(&c)?,
-            frames_of(delta, fr),
-        )),
-        EditOp::Slide {
-            track,
-            clip: c,
-            delta,
-        } => debut_timeline::slide(project, target(&track)?, clip(&c)?, frames_of(delta, fr)),
-        EditOp::Move {
-            track,
-            clip: c,
-            delta,
-        } => Ok(Command::Move {
-            target: target(&track)?,
-            clip: clip(&c)?,
-            delta: frames_of(delta, fr),
-        }),
-        EditOp::Blade { track, at } => Ok(Command::Blade {
-            target: target(&track)?,
-            at: frames_of(at, fr),
-            tail_id: ids.fresh(),
-        }),
-        EditOp::Extract { track, start, end } => Ok(Command::extract(
-            target(&track)?,
-            frames_of(start, fr),
-            frames_of(end, fr),
-            ids,
-        )),
-        EditOp::Lift { track, start, end } => Ok(Command::lift(
-            target(&track)?,
-            frames_of(start, fr),
-            frames_of(end, fr),
-            ids,
-        )),
-    }
-    .map_err(|e| e.to_string())?;
-    s.exec(cmd)
+    lock(&state).edit(op)
 }
 
 // ---- playback -------------------------------------------------------------------
@@ -562,67 +641,113 @@ pub struct TickDto {
 
 #[tauri::command]
 pub fn transport(state: State<'_, Shared>, action: TransportAction) -> Result<(), String> {
-    let mut s = lock(&state);
-    if s.player.is_none() {
-        s.sync_player()?;
-    }
-    let fr = s.first_sequence()?.frame_rate;
-    let p = s.player.as_mut().ok_or("no sequence")?;
-    match action {
-        TransportAction::Play => p.play(),
-        TransportAction::Pause => p.pause(),
-        TransportAction::Toggle => {
-            if p.transport.is_playing() {
-                p.pause()
-            } else {
-                p.play()
-            }
-        }
-        TransportAction::Seek { t } => p.seek(frames_of(t, fr)),
-        TransportAction::Step { n } => p.step(n),
-        TransportAction::Shuttle { forward } => p.shuttle(forward),
-    }
-    Ok(())
+    lock(&state).transport(action)
 }
 
 /// Advance the player; the UI calls this once per animation frame and fetches
 /// pixels when `changed`.
 #[tauri::command]
 pub fn tick(state: State<'_, Shared>) -> Result<TickDto, String> {
-    let mut s = lock(&state);
-    if s.player.is_none() {
-        s.sync_player()?;
-    }
-    let p = s.player.as_mut().ok_or("no sequence")?;
-    let changed = p.tick().map_err(|e| e.to_string())?.is_some();
-    let Stats { dropped, .. } = p.stats();
-    Ok(TickDto {
-        frame: p.transport.current_frame(),
-        position: secs(p.transport.position()),
-        playing: p.transport.is_playing(),
-        changed,
-        dropped,
-    })
+    lock(&state).tick()
 }
 
 /// The current frame as `width * height * 4` bytes of RGBA8, preceded by two
 /// little-endian u32 (width, height).
 #[tauri::command]
 pub fn frame_pixels(state: State<'_, Shared>) -> Result<tauri::ipc::Response, String> {
-    let mut s = lock(&state);
-    let Session {
-        player, backend, ..
-    } = &mut *s;
-    let p = player.as_mut().ok_or("no sequence")?;
-    let graph = p.current_graph();
-    let img = graph
-        .render(backend, &mut p.frames)
-        .map_err(|e| e.to_string())?;
-    let (w, h) = backend.size(&img);
-    let rgba = to_rgba8(&backend.download(&img));
+    let (w, h, rgba) = lock(&state).frame_pixels()?;
     let mut bytes = Vec::with_capacity(8 + rgba.len());
     bytes.extend_from_slice(&w.to_le_bytes());
     bytes.extend_from_slice(&h.to_le_bytes());
     bytes.extend_from_slice(&rgba);
     Ok(tauri::ipc::Response::new(bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const FIXTURE: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../crates/debut-platform-native/tests/fixtures/test_25fps_2s.mp4"
+    );
+
+    /// The whole desktop flow the UI drives, headless: import, sequence, insert,
+    /// play against the silent audio output, pull frames, edit, undo.
+    #[test]
+    fn desktop_session_flow() {
+        let mut s = Session::new();
+        let id = s.ids.fresh();
+        s.project = Some(Project::new(id, "t"));
+
+        let m = s.import_media(FIXTURE.to_string()).unwrap();
+        assert_eq!((m.width, m.height, m.has_audio), (64, 36, true));
+        let seq = s.ensure_sequence().unwrap();
+        assert_eq!((seq.width, seq.height, seq.frame_rate), (64, 36, [25, 1]));
+        assert_eq!(seq.tracks.len(), 2);
+        let (v, a) = (seq.tracks[0].id.clone(), seq.tracks[1].id.clone());
+
+        s.add_clip(&v, &m.id, 0.4).unwrap();
+        s.add_clip(&a, &m.id, 0.4).unwrap();
+        let seq = sequence_dto(s.first_sequence().unwrap());
+        assert_eq!(seq.tracks[0].clips[0].timeline_in, 0.4);
+        assert_eq!(seq.duration, 2.4);
+
+        // Before the clip: black. Inside: picture.
+        s.transport(TransportAction::Seek { t: 0.0 }).unwrap();
+        let (w, h, px) = s.frame_pixels().unwrap();
+        assert_eq!((w, h), (64, 36));
+        assert!(px.chunks(4).all(|p| p[0] == 0 && p[1] == 0 && p[2] == 0));
+        s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+        let (_, _, px) = s.frame_pixels().unwrap();
+        assert!(
+            px.chunks(4)
+                .filter(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 60)
+                .count()
+                > 500
+        );
+
+        // Play for ~300 ms of wall time against the silent output: the clock advances.
+        s.transport(TransportAction::Play).unwrap();
+        let t0 = s.tick().unwrap();
+        assert!(t0.playing);
+        std::thread::sleep(std::time::Duration::from_millis(300));
+        let t1 = s.tick().unwrap();
+        assert!(
+            t1.position > t0.position + 0.2,
+            "{} -> {}",
+            t0.position,
+            t1.position
+        );
+        s.transport(TransportAction::Pause).unwrap();
+        assert!(!s.tick().unwrap().playing);
+
+        // Edit through the IPC op, then undo it.
+        let clip = seq.tracks[0].clips[0].id.clone();
+        s.edit(EditOp::RippleTail {
+            track: v.clone(),
+            clip,
+            delta: -1.0,
+        })
+        .unwrap();
+        assert_eq!(
+            sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[0].duration,
+            1.0
+        );
+        let Session {
+            project,
+            history,
+            journal,
+            ..
+        } = &mut s;
+        history
+            .undo(project.as_mut().unwrap(), journal as &mut dyn Journal)
+            .unwrap();
+        s.sync_player().unwrap();
+        assert_eq!(
+            sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[0].duration,
+            2.0
+        );
+        assert_eq!(s.player.as_ref().unwrap().sequence.duration().as_f64(), 2.4);
+    }
 }
