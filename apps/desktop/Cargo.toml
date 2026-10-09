@@ -18,6 +18,7 @@ debut-core.workspace = true
 debut-project.workspace = true
 debut-command.workspace = true
 debut-engine.workspace = true
+debut-graphics.workspace = true
 debut-platform-native.workspace = true
 tauri.workspace = true
 serde.workspace = true

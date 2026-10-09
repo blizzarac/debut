@@ -3,7 +3,7 @@
 
 use debut_audio::normalize_gain;
 use debut_command::{Command, MarkerTarget, Target};
-use debut_core::id::MarkerId;
+use debut_core::id::{CaptionId, MarkerId};
 use debut_core::{ClipId, FrameRate, IdGen, MediaId, Rational, TrackId};
 use debut_engine::{Player, Stats, Workspace};
 use debut_export::{export, measure_loudness, ExportJob, ExportQueue, JobId, JobState, Preset};
@@ -17,8 +17,8 @@ use debut_platform_native::codec::{AudioEncodeSettings, EncodeSettings, FfmpegEn
 use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
-    schema, AudioEffect, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, KeyFx, Marker, MaskFx,
-    MaskShape, Param, Project, Sequence, Title, TitleStyle, Track, TrackKind, TrackMix,
+    schema, AudioEffect, Caption, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, KeyFx, Marker,
+    MaskFx, MaskShape, Param, Project, Sequence, Title, TitleStyle, Track, TrackKind, TrackMix,
     TransformFx, Transition, TransitionKind,
 };
 use debut_render::AnyBackend;
@@ -1796,6 +1796,167 @@ impl Session {
     }
 }
 
+// ---- captions (GFX-05, GFX-06) -------------------------------------------------
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct CaptionDto {
+    pub id: String,
+    pub start: f64,
+    pub end: f64,
+    pub text: String,
+}
+
+#[derive(Deserialize)]
+pub struct CaptionEdit {
+    pub start: Option<f64>,
+    pub end: Option<f64>,
+    pub text: Option<String>,
+}
+
+fn caption_dto(c: &Caption) -> CaptionDto {
+    CaptionDto {
+        id: id_str(c.id.0),
+        start: secs(c.start),
+        end: secs(c.end),
+        text: c.text.clone(),
+    }
+}
+
+impl Session {
+    pub fn captions(&self) -> Result<Vec<CaptionDto>, String> {
+        Ok(self
+            .first_sequence()?
+            .captions
+            .iter()
+            .map(caption_dto)
+            .collect())
+    }
+
+    /// Add a caption over `[start, end)` seconds; returns its id.
+    pub fn add_caption(&mut self, start: f64, end: f64, text: String) -> Result<String, String> {
+        let seq = self.first_sequence()?;
+        let (seq_id, fr) = (seq.id, seq.frame_rate);
+        let caption = Caption::new(
+            self.ids.fresh(),
+            frames_of(start, fr),
+            frames_of(end, fr),
+            text,
+        );
+        let id = id_str(caption.id.0);
+        self.exec(Command::AddCaption {
+            sequence: seq_id,
+            caption,
+        })?;
+        Ok(id)
+    }
+
+    pub fn update_caption(&mut self, id: &str, edit: CaptionEdit) -> Result<(), String> {
+        let seq = self.first_sequence()?;
+        let (seq_id, fr) = (seq.id, seq.frame_rate);
+        let cid = CaptionId(parse_id(id)?);
+        let mut c = seq
+            .captions
+            .iter()
+            .find(|c| c.id == cid)
+            .cloned()
+            .ok_or("caption not found")?;
+        if let Some(s) = edit.start {
+            c.start = frames_of(s, fr);
+        }
+        if let Some(e) = edit.end {
+            c.end = frames_of(e, fr);
+        }
+        if let Some(t) = edit.text {
+            c.text = t;
+        }
+        self.exec(Command::UpdateCaption {
+            sequence: seq_id,
+            caption: c,
+        })
+    }
+
+    pub fn remove_caption(&mut self, id: &str) -> Result<(), String> {
+        let seq_id = self.first_sequence()?.id;
+        self.exec(Command::RemoveCaption {
+            sequence: seq_id,
+            id: CaptionId(parse_id(id)?),
+        })
+    }
+
+    /// Read an .srt file and add every cue (one undoable step); returns the count.
+    pub fn import_srt(&mut self, path: &str) -> Result<usize, String> {
+        let bytes = self.store.read(path).map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&bytes);
+        let cues = debut_graphics::parse_srt(&text).map_err(|e| e.to_string())?;
+        let seq_id = self.first_sequence()?.id;
+        let cmds: Vec<Command> = cues
+            .into_iter()
+            .map(|(start, end, text)| Command::AddCaption {
+                sequence: seq_id,
+                caption: Caption::new(self.ids.fresh(), start, end, text),
+            })
+            .collect();
+        let n = cmds.len();
+        if n > 0 {
+            self.exec(Command::Group(cmds))?;
+        }
+        Ok(n)
+    }
+
+    /// Write the sequence's captions as .srt; returns the count.
+    pub fn export_srt(&self, path: &str) -> Result<usize, String> {
+        let seq = self.first_sequence()?;
+        let text = debut_graphics::format_srt(
+            seq.captions
+                .iter()
+                .map(|c| (c.start, c.end, c.text.as_str())),
+        );
+        self.store
+            .write(path, text.as_bytes())
+            .map_err(|e| e.to_string())?;
+        Ok(seq.captions.len())
+    }
+}
+
+#[tauri::command]
+pub fn captions(state: State<'_, Shared>) -> Result<Vec<CaptionDto>, String> {
+    lock(&state).captions()
+}
+
+#[tauri::command]
+pub fn add_caption(
+    state: State<'_, Shared>,
+    start: f64,
+    end: f64,
+    text: String,
+) -> Result<String, String> {
+    lock(&state).add_caption(start, end, text)
+}
+
+#[tauri::command]
+pub fn update_caption(
+    state: State<'_, Shared>,
+    id: String,
+    edit: CaptionEdit,
+) -> Result<(), String> {
+    lock(&state).update_caption(&id, edit)
+}
+
+#[tauri::command]
+pub fn remove_caption(state: State<'_, Shared>, id: String) -> Result<(), String> {
+    lock(&state).remove_caption(&id)
+}
+
+#[tauri::command]
+pub fn import_srt(state: State<'_, Shared>, path: String) -> Result<usize, String> {
+    lock(&state).import_srt(&path)
+}
+
+#[tauri::command]
+pub fn export_srt(state: State<'_, Shared>, path: String) -> Result<usize, String> {
+    lock(&state).export_srt(&path)
+}
+
 #[tauri::command]
 pub fn markers(state: State<'_, Shared>) -> Result<Vec<MarkerDto>, String> {
     lock(&state).markers()
@@ -2144,6 +2305,9 @@ mod tests {
         );
         assert!(s.remove_effect(&v, &clip_id, 7).is_err());
 
+        // Pixel checks below index a 64x36 frame, so pin the preview (Auto may
+        // step down on a loaded machine).
+        s.set_preview_quality(PreviewQuality::Full);
         // Mask (FX-04): a 32x18 rectangle in the 64x36 frame blacks out the
         // corners and keeps the centre; inverting swaps that; options are undoable.
         s.add_effect(&v, &clip_id, "mask").unwrap();
@@ -2274,6 +2438,62 @@ mod tests {
             s.set_title(&v, &clip_id, edited).is_err(),
             "media clips have no title"
         );
+        // Captions (GFX-05/06): burned in near the bottom while active, SRT round trip.
+        s.transport(TransportAction::Seek { t: 1.4 }).unwrap();
+        let (_, _, bare) = s.frame_pixels().unwrap();
+        let cap = s.add_caption(1.0, 2.0, "Hello".into()).unwrap();
+        let (_, h, captioned) = s.frame_pixels().unwrap();
+        // On a 36-line frame the scaled caption box spans roughly rows 13..34.
+        let split = (h as usize / 3) * 64 * 4;
+        let changed = |a: &[u8], b: &[u8]| a.iter().zip(b).filter(|(x, y)| x != y).count();
+        assert!(
+            changed(&bare[split..], &captioned[split..]) > 20,
+            "the lower part carries the caption"
+        );
+        assert_eq!(
+            changed(&bare[..split], &captioned[..split]),
+            0,
+            "the top third is untouched"
+        );
+        s.transport(TransportAction::Seek { t: 0.5 }).unwrap();
+        let (_, _, before) = s.frame_pixels().unwrap();
+        s.remove_caption(&cap).unwrap();
+        let (_, _, before_none) = s.frame_pixels().unwrap();
+        assert_eq!(changed(&before, &before_none), 0, "nothing before the cue");
+        let cap = s.add_caption(1.0, 2.0, "Hello".into()).unwrap();
+        s.update_caption(
+            &cap,
+            CaptionEdit {
+                start: Some(0.2),
+                end: None,
+                text: Some("Hi there".into()),
+            },
+        )
+        .unwrap();
+        assert_eq!(s.captions().unwrap()[0].text, "Hi there");
+        assert!(s
+            .update_caption(
+                &cap,
+                CaptionEdit {
+                    start: Some(3.0),
+                    end: None,
+                    text: None
+                }
+            )
+            .is_err());
+        let srt = dir.join("c.srt").to_string_lossy().into_owned();
+        assert_eq!(s.export_srt(&srt).unwrap(), 1);
+        assert_eq!(s.import_srt(&srt).unwrap(), 1);
+        let caps = s.captions().unwrap();
+        assert_eq!(caps.len(), 2);
+        assert_eq!(
+            (caps[1].start, caps[1].end, caps[1].text.as_str()),
+            (0.2, 2.0, "Hi there")
+        );
+        s.remove_caption(&caps[1].id).unwrap();
+        s.remove_caption(&cap).unwrap();
+        assert!(s.captions().unwrap().is_empty());
+
         // Multicam (MED-11, TL-08): two angles of the same file on a fresh track
         // layout; a live switch at 1.0 s blades and switches only the tail.
         let m2 = s.import_media(FIXTURE.to_string()).unwrap();

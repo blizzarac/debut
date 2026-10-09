@@ -216,6 +216,29 @@ export interface MarkerInfo {
   clip: string | null;
 }
 
+export interface CaptionInfo {
+  id: string;
+  start: number;
+  end: number;
+  text: string;
+}
+
+export interface CaptionEdit {
+  start?: number;
+  end?: number;
+  text?: string;
+}
+
+export interface CaptionsApi {
+  list(): Promise<CaptionInfo[]>;
+  add(start: number, end: number, text: string): Promise<string>;
+  update(id: string, edit: CaptionEdit): Promise<void>;
+  remove(id: string): Promise<void>;
+  /** Read an .srt file into the sequence; returns the cue count. */
+  importSrt(path: string): Promise<number>;
+  exportSrt(path: string): Promise<number>;
+}
+
 export interface MarkerEdit {
   note?: string;
   color?: [number, number, number];
@@ -288,6 +311,7 @@ export interface Engine extends ProjectApi {
   mixer?: MixerApi;
   exporter?: ExportApi;
   markers?: MarkersApi;
+  captions?: CaptionsApi;
 }
 
 export type Target = "desktop" | "browser";

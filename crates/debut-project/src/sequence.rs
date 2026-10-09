@@ -17,6 +17,9 @@ pub struct Sequence {
     /// Timeline markers in sequence time (TL-10).
     #[serde(default)]
     pub markers: Vec<crate::marker::Marker>,
+    /// Captions, kept sorted by start (GFX-05).
+    #[serde(default)]
+    pub captions: Vec<crate::caption::Caption>,
 }
 
 impl Sequence {
@@ -35,7 +38,13 @@ impl Sequence {
             height,
             tracks: Vec::new(),
             markers: Vec::new(),
+            captions: Vec::new(),
         }
+    }
+
+    /// The caption showing at `t`, if any.
+    pub fn caption_at(&self, t: Rational) -> Option<&crate::caption::Caption> {
+        self.captions.iter().find(|c| c.contains(t))
     }
 
     pub fn track(&self, id: TrackId) -> Option<&Track> {

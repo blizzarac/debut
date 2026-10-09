@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   TitleInfo,
+  CaptionInfo,
+  CaptionEdit,
+  CaptionsApi,
   EffectKind,
   EffectOptions,
   EditOp,
@@ -154,7 +157,29 @@ class TauriMarkers implements MarkersApi {
   }
 }
 
+class TauriCaptions implements CaptionsApi {
+  list() {
+    return invoke<CaptionInfo[]>("captions");
+  }
+  add(start: number, end: number, text: string) {
+    return invoke<string>("add_caption", { start, end, text });
+  }
+  update(id: string, edit: CaptionEdit) {
+    return invoke<void>("update_caption", { id, edit });
+  }
+  remove(id: string) {
+    return invoke<void>("remove_caption", { id });
+  }
+  importSrt(path: string) {
+    return invoke<number>("import_srt", { path });
+  }
+  exportSrt(path: string) {
+    return invoke<number>("export_srt", { path });
+  }
+}
+
 export class TauriEngine implements Engine {
+  captions = new TauriCaptions();
   markers = new TauriMarkers();
   media = new TauriMedia();
   player = new TauriPlayer();

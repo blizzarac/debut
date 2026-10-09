@@ -9,10 +9,11 @@
 //!
 //! Insert and extract are groups built by the constructors at the bottom.
 
-use debut_core::id::MarkerId;
+use debut_core::id::{CaptionId, MarkerId};
 use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
+use debut_project::Caption;
 use debut_project::{
     AudioEffect, Clip, ClipSource, Effect, Marker, Param, Project, Sequence, Track, TrackMix,
     Transition,
@@ -156,6 +157,20 @@ pub enum Command {
         target: MarkerTarget,
         marker: Marker,
     },
+    // ---- captions (GFX-05) ----
+    AddCaption {
+        sequence: SequenceId,
+        caption: Caption,
+    },
+    RemoveCaption {
+        sequence: SequenceId,
+        id: CaptionId,
+    },
+    /// Replace a caption's fields (matched by id).
+    UpdateCaption {
+        sequence: SequenceId,
+        caption: Caption,
+    },
     /// Set or clear the transition into `clip` from its predecessor (FX-03).
     SetTransition {
         target: Target,
@@ -180,6 +195,13 @@ pub enum Command {
     Group(Vec<Command>),
     /// Inverse of a primitive that did nothing.
     Noop,
+}
+
+fn captions_mut(project: &mut Project, s: SequenceId) -> Result<&mut Vec<Caption>> {
+    Ok(&mut project
+        .sequence_mut(s)
+        .ok_or_else(|| Error::NotFound(format!("sequence {s:?}")))?
+        .captions)
 }
 
 fn track_mut(project: &mut Project, t: Target) -> Result<&mut Track> {
@@ -450,6 +472,44 @@ impl Command {
                     .position(|m| m.id == *id)
                     .ok_or_else(|| Error::NotFound(format!("marker {id:?}")))?;
                 list.remove(i);
+                Ok(())
+            }
+            Command::AddCaption { sequence, caption } => {
+                if caption.end <= caption.start {
+                    return Err(Error::InvalidArgument(
+                        "caption ends before it starts".into(),
+                    ));
+                }
+                let list = captions_mut(project, *sequence)?;
+                if list.iter().any(|c| c.id == caption.id) {
+                    return Err(Error::InvalidArgument("caption id already exists".into()));
+                }
+                list.push(caption.clone());
+                list.sort_by_key(|c| c.start);
+                Ok(())
+            }
+            Command::RemoveCaption { sequence, id } => {
+                let list = captions_mut(project, *sequence)?;
+                let i = list
+                    .iter()
+                    .position(|c| c.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("caption {id:?}")))?;
+                list.remove(i);
+                Ok(())
+            }
+            Command::UpdateCaption { sequence, caption } => {
+                if caption.end <= caption.start {
+                    return Err(Error::InvalidArgument(
+                        "caption ends before it starts".into(),
+                    ));
+                }
+                let list = captions_mut(project, *sequence)?;
+                let slot = list
+                    .iter_mut()
+                    .find(|c| c.id == caption.id)
+                    .ok_or_else(|| Error::NotFound(format!("caption {:?}", caption.id)))?;
+                *slot = caption.clone();
+                list.sort_by_key(|c| c.start);
                 Ok(())
             }
             Command::UpdateMarker { target, marker } => {
@@ -776,6 +836,33 @@ impl Command {
                     _ => Command::UpdateMarker {
                         target: *target,
                         marker: m.clone(),
+                    },
+                })
+            }
+            Command::AddCaption { sequence, caption } => Ok(Command::RemoveCaption {
+                sequence: *sequence,
+                id: caption.id,
+            }),
+            Command::RemoveCaption { sequence, id }
+            | Command::UpdateCaption {
+                sequence,
+                caption: Caption { id, .. },
+            } => {
+                let c = project
+                    .sequence(*sequence)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {sequence:?}")))?
+                    .captions
+                    .iter()
+                    .find(|c| c.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("caption {id:?}")))?;
+                Ok(match self {
+                    Command::RemoveCaption { .. } => Command::AddCaption {
+                        sequence: *sequence,
+                        caption: c.clone(),
+                    },
+                    _ => Command::UpdateCaption {
+                        sequence: *sequence,
+                        caption: c.clone(),
                     },
                 })
             }

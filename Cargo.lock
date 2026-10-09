@@ -732,6 +732,7 @@ dependencies = [
  "debut-core",
  "debut-engine",
  "debut-export",
+ "debut-graphics",
  "debut-platform",
  "debut-platform-native",
  "debut-project",

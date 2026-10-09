@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { detectTarget, loadEngine, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
+import { detectTarget, loadEngine, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
+import { Captions } from "./Captions";
 import { ExportPanel } from "./ExportPanel";
 import { Inspector, TitleEditor } from "./Inspector";
 import { Markers } from "./Markers";
@@ -22,12 +23,14 @@ export default function App() {
   const [selected, setSelected] = useState<Selection>(null);
   const [file, setFile] = useState<FileStatus | null>(null);
   const [markerList, setMarkerList] = useState<MarkerInfo[]>([]);
+  const [captionList, setCaptionList] = useState<CaptionInfo[]>([]);
   const [filePath, setFilePath] = useState("");
 
   const refresh = useCallback(async (e: Engine) => {
     if (e.media) setSeq(await e.media.sequence().catch(() => null));
     if (e.fileStatus) setFile(await e.fileStatus().catch(() => null));
     if (e.markers) setMarkerList(await e.markers.list().catch(() => []));
+    if (e.captions) setCaptionList(await e.captions.list().catch(() => []));
     setCanUndo(await e.canUndo());
     setRefreshKey((k) => k + 1);
   }, []);
@@ -204,6 +207,12 @@ export default function App() {
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Markers</h2>
             <Markers markers={engine.markers} list={markerList} fps={fps} onSeek={(t) => engine.player!.transport({ kind: "seek", t })} onChanged={() => refresh(engine)} />
+          </>
+        )}
+        {engine?.captions && engine.player && (
+          <>
+            <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Captions</h2>
+            <Captions captions={engine.captions} list={captionList} fps={fps} position={tick?.position ?? 0} onSeek={(t) => engine.player!.transport({ kind: "seek", t })} onChanged={() => refresh(engine)} />
           </>
         )}
         {engine?.mixer && seq && seq.tracks.some((t) => t.kind === "audio") && (

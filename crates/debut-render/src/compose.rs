@@ -9,7 +9,9 @@ use crate::lut::Lut3d;
 use crate::nodes::{ChromaKey, Mask, MaskShape};
 use debut_core::color::ColorSpace;
 use debut_core::{Rational, SequenceId};
-use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, Title, TrackKind};
+use debut_project::{
+    Clip, ClipSource, Effect, Layer, Param, Sequence, Title, TitleStyle, TrackKind,
+};
 use std::sync::Arc;
 
 /// Source frame dimensions are needed to fit a clip onto the canvas; the caller
@@ -106,7 +108,48 @@ fn compose_into(
             opacity,
         });
     }
+    // Burn-in captions (GFX-05): centred near the bottom, authored in sequence pixels.
+    if let Some(cap) = seq.caption_at(t) {
+        let title = Title {
+            text: cap.text.clone(),
+            style: TitleStyle::captions_for_height(seq.height),
+        };
+        if let Some(image) = info.title(&title) {
+            let (iw, ih) = (image.width, image.height);
+            let mut src = g.add(Node::Image {
+                image: ImageRef(image),
+            });
+            if let Ok(xf) = ColorTransform::between(&ColorSpace::Srgb, &WORKING) {
+                if !xf.is_identity() {
+                    src = g.add(Node::ColorTransform { input: src, xf });
+                }
+            }
+            let margin = caption_margin(seq.height) * px_scale;
+            let dy = h as f32 * 0.5 - ih as f32 * px_scale * 0.5 - margin;
+            let xf = Transform2D::from_srt((iw, ih), (w, h), (px_scale, px_scale), 0.0, (0.0, dy));
+            let layer = g.add(Node::Transform {
+                input: src,
+                xf,
+                w,
+                h,
+            });
+            acc = g.add(Node::Blend {
+                bottom: acc,
+                top: layer,
+                mode: BlendMode::Normal,
+                opacity: 1.0,
+            });
+        }
+    }
     acc
+}
+
+/// Gap between the bottom of a burned-in caption and the frame edge on a
+/// 1080-line frame, in sequence pixels; scaled with the sequence height.
+pub const CAPTION_MARGIN_PX: f32 = 72.0;
+
+pub fn caption_margin(height: u32) -> f32 {
+    (CAPTION_MARGIN_PX * height as f32 / 1080.0).max(2.0)
 }
 
 /// One clip's node chain at sequence time `t` (which may lie in its transition
@@ -335,6 +378,67 @@ mod tests {
         // Unknown nested sequence: the clip is left out, not an error.
         let g = compose(&outer, Rational::from_int(4), &Fixed(1280, 720));
         assert_eq!(g.len(), 1);
+    }
+
+    /// Media size plus a stand-in rasterizer: every title is a 10x4 white image.
+    struct Titled(u32, u32);
+    impl SourceInfo for Titled {
+        fn dimensions(&self, _: MediaId) -> (u32, u32) {
+            (self.0, self.1)
+        }
+        fn title(&self, _: &Title) -> Option<Arc<Image8>> {
+            Some(Arc::new(Image8 {
+                hash: 1,
+                width: 10,
+                height: 4,
+                rgba8: vec![255; 10 * 4 * 4],
+            }))
+        }
+    }
+
+    #[test]
+    fn captions_burn_in_only_while_active_and_sit_near_the_bottom() {
+        let mut ids = IdGen::new(13);
+        let mut seq = Sequence::new(ids.fresh(), "s", FrameRate::FPS_25, 200, 100);
+        seq.captions.push(debut_project::Caption::new(
+            ids.fresh(),
+            Rational::from_int(1),
+            Rational::from_int(2),
+            "hi",
+        ));
+        let info = Titled(200, 100);
+        assert_eq!(
+            compose(&seq, Rational::new(1, 2), &info).len(),
+            1,
+            "no caption yet"
+        );
+        let g = compose(&seq, Rational::new(3, 2), &info);
+        // base + image, sRGB->linear, transform, blend
+        assert_eq!(g.len(), 5);
+        let Node::Transform { xf, .. } = g.node(NodeId(3)) else {
+            panic!("transform expected");
+        };
+        // The image centre maps to the frame's horizontal centre, one scaled
+        // margin (+ half the image) above the bottom edge.
+        let margin = caption_margin(100);
+        assert!((margin - 72.0 * 100.0 / 1080.0).abs() < 1e-6);
+        let (sx, sy) = xf.apply(100.0, 100.0 - margin - 2.0);
+        assert!(
+            (sx - 5.0).abs() < 1e-3 && (sy - 2.0).abs() < 1e-3,
+            "{sx} {sy}"
+        );
+        // Without a rasterizer the caption is simply skipped.
+        assert_eq!(
+            compose(&seq, Rational::new(3, 2), &Fixed(200, 100)).len(),
+            1
+        );
+        // At half resolution the margin scales too.
+        let g = compose_at(&seq, Rational::new(3, 2), &info, (100, 50));
+        let Node::Transform { xf, .. } = g.node(NodeId(3)) else {
+            panic!()
+        };
+        let (_, sy) = xf.apply(50.0, 50.0 - margin * 0.5 - 1.0);
+        assert!((sy - 2.0).abs() < 1e-3, "{sy}");
     }
 
     #[test]
