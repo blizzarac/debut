@@ -1,25 +1,38 @@
 //! Desktop implementations of the `debut-platform` traits (NFR-08, NFR-09).
 
 pub mod audio_out; // cpal: CoreAudio / WASAPI / ALSA real-time callback
-pub mod codec; // FFmpeg; VideoToolbox / NVDEC / QSV / AMF
+pub mod codec; // FFmpeg; NVENC / VideoToolbox / Quick Sync / AMF encoders
 pub mod display; // native window, SDI/HDMI output (PB-09) — pending
 pub mod file_store; // native FS
 pub mod plugin_host; // OpenFX, VST3, AU, out-of-process (NFR-07) — pending
 pub mod threads; // native pool
 
-use debut_platform::{Capabilities, Platform};
+use debut_platform::{
+    AudioOut, Capabilities, Decoder, EncodeSettings, Encoder, FileStore, HwEncoder, Platform,
+};
+use std::sync::Arc;
 
-pub struct NativePlatform;
+/// The desktop platform: FFmpeg codecs, cpal audio, the native file system.
+pub struct NativePlatform {
+    store: Arc<file_store::NativeFileStore>,
+}
+
+impl NativePlatform {
+    /// Paths are absolute (the store is rooted at `/`).
+    pub fn new() -> Self {
+        Self {
+            store: Arc::new(file_store::NativeFileStore::new("/")),
+        }
+    }
+}
+
+impl Default for NativePlatform {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl Platform for NativePlatform {
-    type Decoder = codec::FfmpegDecoder;
-    type Encoder = codec::FfmpegEncoder;
-    type FileStore = file_store::NativeFileStore;
-    type AudioOut = audio_out::CpalAudioOut;
-    type Threads = threads::NativeThreads;
-    type PluginHost = plugin_host::NativePluginHost;
-    type Display = display::NativeDisplay;
-
     fn capabilities(&self) -> Capabilities {
         Capabilities {
             hardware_decode: false,
@@ -31,7 +44,34 @@ impl Platform for NativePlatform {
         }
     }
 
-    fn open_decoder(&self, path: &str) -> debut_core::Result<Self::Decoder> {
-        codec::FfmpegDecoder::open(path)
+    fn file_store(&self) -> Arc<dyn FileStore> {
+        self.store.clone()
+    }
+
+    fn open_decoder(&self, path: &str) -> debut_core::Result<Box<dyn Decoder>> {
+        Ok(Box::new(codec::FfmpegDecoder::open(path)?))
+    }
+
+    fn create_encoder(
+        &self,
+        path: &str,
+        settings: EncodeSettings,
+    ) -> debut_core::Result<Box<dyn Encoder>> {
+        Ok(Box::new(codec::FfmpegEncoder::create(path, settings)?))
+    }
+
+    fn open_audio_out(&self) -> Box<dyn AudioOut> {
+        match audio_out::CpalAudioOut::default_device() {
+            Ok(dev) => Box::new(dev),
+            Err(_) => Box::new(audio_out::SilentAudioOut::new()),
+        }
+    }
+
+    fn hardware_encoders(&self) -> Vec<HwEncoder> {
+        codec::hardware_encoders()
+    }
+
+    fn hardware_decoders(&self) -> Vec<String> {
+        codec::hardware_decoders()
     }
 }

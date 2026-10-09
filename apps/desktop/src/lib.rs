@@ -6,14 +6,15 @@
 
 mod ipc;
 
-pub use ipc::Session;
+pub use debut_engine::Session;
 
-use std::sync::Mutex;
+use debut_platform_native::NativePlatform;
+use std::sync::{Arc, Mutex};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(Mutex::new(Session::new()))
+        .manage(Mutex::new(Session::new(Arc::new(NativePlatform::new()))))
         .invoke_handler(tauri::generate_handler![
             ipc::version,
             ipc::new_project,

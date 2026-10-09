@@ -1,0 +1,312 @@
+//! The export queue, its worker thread and codec capabilities (EXP-01 .. EXP-03, NFR-09).
+
+use super::*;
+
+pub(crate) type ExportSpec = (
+    Preset,
+    Option<f32>,
+    Vec<(MediaId, String)>,
+    Vec<Sequence>,
+    Option<String>,
+);
+
+#[derive(Serialize)]
+pub struct PresetDto {
+    pub name: String,
+    pub loudness_lufs: f32,
+}
+
+#[derive(Serialize)]
+pub struct ExportStatusDto {
+    pub id: u64,
+    pub name: String,
+    pub output: String,
+    pub state: String,
+    pub frames_done: u64,
+    pub frames_total: u64,
+    pub loudness_lufs: Option<f32>,
+    pub true_peak_db: f32,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct HwEncoderDto {
+    pub name: String,
+    pub codec: String,
+    pub api: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct CodecCapabilitiesDto {
+    pub hardware_encoders: Vec<HwEncoderDto>,
+    pub hardware_decoders: Vec<String>,
+}
+
+impl Session {
+    pub fn export_presets(&self) -> Vec<PresetDto> {
+        Preset::all()
+            .into_iter()
+            .map(|p| PresetDto {
+                name: p.name,
+                loudness_lufs: p.loudness_lufs,
+            })
+            .collect()
+    }
+
+    /// Queue an export of the whole sequence and make sure a worker is running.
+    /// What this machine can accelerate (NFR-09): hardware encoders that
+    /// really open, and hardware decoders compiled into FFmpeg.
+    pub fn codec_capabilities(&self) -> CodecCapabilitiesDto {
+        CodecCapabilitiesDto {
+            hardware_encoders: self
+                .platform
+                .hardware_encoders()
+                .into_iter()
+                .map(|e| HwEncoderDto {
+                    name: e.name,
+                    codec: e.codec.to_string(),
+                    api: e.api.to_string(),
+                })
+                .collect(),
+            hardware_decoders: self.platform.hardware_decoders(),
+        }
+    }
+
+    pub fn export_start(
+        &mut self,
+        output: String,
+        preset: &str,
+        normalize: Option<f32>,
+        caption_sidecar: bool,
+        hardware: bool,
+    ) -> Result<u64, String> {
+        let preset = Preset::all()
+            .into_iter()
+            .find(|p| p.name == preset)
+            .ok_or_else(|| format!("unknown preset {preset}"))?;
+        // Pick a hardware encoder for the preset's codec family when asked and
+        // one is available; the encoder falls back to software if it cannot open.
+        let encoder: Option<String> = if hardware {
+            let family = match preset.codec {
+                debut_export::VideoCodec::Hevc => "hevc",
+                _ => "h264",
+            };
+            self.platform
+                .hardware_encoders()
+                .into_iter()
+                .find(|e| e.codec == family)
+                .map(|e| e.name)
+        } else {
+            None
+        };
+        let seq = self.first_sequence()?.clone();
+        if seq.duration() <= Rational::ZERO {
+            return Err("the sequence is empty".into());
+        }
+        // Captions as a sidecar next to the movie (GFX-06), written up front:
+        // they do not depend on the render.
+        if caption_sidecar && !seq.captions.is_empty() {
+            let stem = match output.rfind('.') {
+                Some(i) if !output[i..].contains('/') => &output[..i],
+                _ => output.as_str(),
+            };
+            self.export_srt(&format!("{stem}.srt"))?;
+        }
+        let job = ExportJob {
+            sequence: seq,
+            range: (Rational::ZERO, self.first_sequence()?.duration()),
+            sample_rate: 48_000,
+            gain_db: 0.0,
+        };
+        let media: Vec<(MediaId, String)> = self
+            .project()
+            .map(|p| p.media.iter().map(|m| (m.id, m.path.clone())).collect())
+            .unwrap_or_default();
+        let id = self
+            .exports
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .submit(
+                match &encoder {
+                    Some(e) => format!("{} · {e}", preset.name),
+                    None => preset.name.clone(),
+                },
+                job,
+                output,
+                0,
+            );
+        let sequences = self
+            .project()
+            .map(|p| p.sequences.clone())
+            .unwrap_or_default();
+        let spec = (preset, normalize, media, sequences, encoder);
+        if self
+            .export_worker
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            if let Some(shared) = &self.export_specs_shared {
+                shared
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .insert(id, spec);
+            }
+        } else {
+            self.export_specs.insert(id, spec);
+            self.spawn_export_worker();
+        }
+        Ok(id.0)
+    }
+
+    pub(crate) fn spawn_export_worker(&mut self) {
+        if self
+            .export_worker
+            .swap(true, std::sync::atomic::Ordering::AcqRel)
+        {
+            return;
+        }
+        let queue = Arc::clone(&self.exports);
+        let running = Arc::clone(&self.export_worker);
+        let platform = Arc::clone(&self.platform);
+        let specs = std::mem::take(&mut self.export_specs);
+        let specs = Arc::new(Mutex::new(specs));
+        self.export_specs_shared = Some(Arc::clone(&specs));
+        std::thread::Builder::new()
+            .name("debut-export".into())
+            .spawn(move || {
+                loop {
+                    let next = queue.lock().unwrap_or_else(|e| e.into_inner()).take_next();
+                    let Some((id, mut job, output, control)) = next else {
+                        break;
+                    };
+                    let spec = specs.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+                    let result = (|| -> Result<debut_export::Progress, String> {
+                        let (preset, normalize, media, sequences, encoder) =
+                            spec.ok_or("missing export spec")?;
+                        let mut frames = crate::FrameSource::new(4);
+                        let mut samples = crate::SampleCache::new(48_000);
+                        frames.set_sequences(&sequences);
+                        samples.set_sequences(&sequences);
+                        for (mid, path) in &media {
+                            // Offline media export as the slate, like in the viewer.
+                            let Ok(dec) = platform.open_decoder(path) else {
+                                continue;
+                            };
+                            let has_audio = dec.audio_info().is_some();
+                            frames.add(*mid, dec).map_err(|e| e.to_string())?;
+                            if has_audio {
+                                let audio =
+                                    platform.open_decoder(path).map_err(|e| e.to_string())?;
+                                samples.add(*mid, audio).map_err(|e| e.to_string())?;
+                            }
+                        }
+                        if let Some(target) = normalize {
+                            let (lufs, tp) =
+                                measure_loudness(&job, &mut samples).map_err(|e| e.to_string())?;
+                            if let Some(lufs) = lufs {
+                                job.gain_db = 20.0 * normalize_gain(lufs, target, tp, -1.0).log10();
+                            }
+                        }
+                        let (w, h) = (job.sequence.width, job.sequence.height);
+                        let mut encoder = platform
+                            .create_encoder(
+                                &output,
+                                EncodeSettings {
+                                    width: w,
+                                    height: h,
+                                    frame_rate: job.sequence.frame_rate,
+                                    crf: preset.quality.max(1),
+                                    audio: Some(AudioEncodeSettings {
+                                        channels: 2,
+                                        sample_rate: 48_000,
+                                        bitrate: preset.audio_bitrate.max(96_000),
+                                    }),
+                                    encoder,
+                                },
+                            )
+                            .map_err(|e| e.to_string())?;
+                        if encoder.used_fallback() {
+                            queue
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .rename(id, |n| {
+                                    format!("{n} · fell back to {}", encoder.encoder_name())
+                                });
+                        }
+                        let mut backend = AnyBackend::detect();
+                        let q = Arc::clone(&queue);
+                        let progress = match &mut backend {
+                            AnyBackend::Cpu(b) => export(
+                                &job,
+                                b,
+                                &mut frames,
+                                &mut samples,
+                                encoder.as_mut(),
+                                &control,
+                                |p| {
+                                    q.lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .report_progress(id, p)
+                                },
+                            ),
+                            AnyBackend::Gpu(b) => export(
+                                &job,
+                                b.as_mut(),
+                                &mut frames,
+                                &mut samples,
+                                encoder.as_mut(),
+                                &control,
+                                |p| {
+                                    q.lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .report_progress(id, p)
+                                },
+                            ),
+                        }
+                        .map_err(|e| e.to_string())?;
+                        encoder.finish().map_err(|e| e.to_string())?;
+                        Ok(progress)
+                    })();
+                    queue
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .finish(id, result);
+                }
+                running.store(false, std::sync::atomic::Ordering::Release);
+            })
+            .expect("spawn export worker");
+    }
+
+    pub fn export_status(&self) -> Vec<ExportStatusDto> {
+        let q = self.exports.lock().unwrap_or_else(|e| e.into_inner());
+        q.entries()
+            .map(|e| ExportStatusDto {
+                id: e.id.0,
+                name: e.name.clone(),
+                output: e.output.clone(),
+                state: match e.state {
+                    JobState::Queued => "queued",
+                    JobState::Running => "running",
+                    JobState::Paused => "paused",
+                    JobState::Done => "done",
+                    JobState::Failed => "failed",
+                    JobState::Cancelled => "cancelled",
+                }
+                .into(),
+                frames_done: e.progress.frames_done,
+                frames_total: e.progress.frames_total,
+                loudness_lufs: e.progress.loudness_lufs,
+                true_peak_db: e.progress.true_peak_db,
+                error: e.error.clone(),
+            })
+            .collect()
+    }
+
+    pub fn export_control(&self, id: u64, action: &str) {
+        let mut q = self.exports.lock().unwrap_or_else(|e| e.into_inner());
+        match action {
+            "pause" => q.pause(JobId(id)),
+            "resume" => q.resume(JobId(id)),
+            _ => q.cancel(JobId(id)),
+        }
+    }
+}

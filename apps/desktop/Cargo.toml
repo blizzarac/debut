@@ -14,17 +14,7 @@ crate-type = ["lib", "cdylib", "staticlib"]
 tauri-build.workspace = true
 
 [dependencies]
-debut-core.workspace = true
-debut-project.workspace = true
-debut-command.workspace = true
 debut-engine.workspace = true
-debut-graphics.workspace = true
+debut-project.workspace = true
 debut-platform-native.workspace = true
 tauri.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-debut-timeline.workspace = true
-debut-export.workspace = true
-debut-render.workspace = true
-debut-platform.workspace = true
-debut-audio.workspace = true

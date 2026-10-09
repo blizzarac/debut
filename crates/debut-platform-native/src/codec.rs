@@ -304,32 +304,7 @@ impl Decoder for FfmpegDecoder {
     }
 }
 
-/// Encode settings for one output file (EXP-01). Video is H.264 via libx264 and
-/// audio AAC for now; HEVC/AV1/ProRes/DNxHR and hardware encoders are a matter of
-/// codec selection on the same path.
-#[derive(Clone, Debug)]
-pub struct EncodeSettings {
-    pub width: u32,
-    pub height: u32,
-    pub frame_rate: FrameRate,
-    /// Constant rate factor for x264 (lower = better, 18–28 is typical).
-    pub crf: u8,
-    pub audio: Option<AudioEncodeSettings>,
-    /// A named encoder to prefer (e.g. `h264_nvenc`); `None` or an encoder
-    /// that cannot open falls back to software H.264 (NFR-09).
-    pub encoder: Option<String>,
-}
-
-/// A hardware encoder this machine can actually open.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct HwEncoder {
-    /// FFmpeg encoder name, e.g. `hevc_videotoolbox`.
-    pub name: String,
-    /// "h264" or "hevc".
-    pub codec: &'static str,
-    /// The acceleration API behind it.
-    pub api: &'static str,
-}
+pub use debut_platform::codec::{AudioEncodeSettings, EncodeSettings, HwEncoder};
 
 /// Candidates by (name, codec, api). VAAPI needs hardware frame contexts and is
 /// left out until the encoder can upload them.
@@ -379,8 +354,8 @@ pub fn hardware_encoders() -> Vec<HwEncoder> {
         .filter(|(name, _, _)| probe_encoder(name))
         .map(|(name, codec, api)| HwEncoder {
             name: name.to_string(),
-            codec,
-            api,
+            codec: codec.to_string(),
+            api: api.to_string(),
         })
         .collect()
 }
@@ -428,13 +403,6 @@ fn rate_options(
         opts.set("b", &bitrate.to_string());
     }
     opts
-}
-
-#[derive(Clone, Debug)]
-pub struct AudioEncodeSettings {
-    pub channels: u16,
-    pub sample_rate: u32,
-    pub bitrate: usize,
 }
 
 struct VideoEnc {
@@ -728,6 +696,14 @@ impl debut_platform::Encoder for FfmpegEncoder {
         Ok(())
     }
 
+    fn encoder_name(&self) -> &str {
+        FfmpegEncoder::encoder_name(self)
+    }
+
+    fn used_fallback(&self) -> bool {
+        FfmpegEncoder::used_fallback(self)
+    }
+
     fn finish(mut self: Box<Self>) -> Result<()> {
         self.encode_audio_frame(true)?;
         self.video.encoder.send_eof().map_err(err)?;
@@ -910,7 +886,7 @@ mod tests {
         // must name a known codec family.
         for hw in hardware_encoders() {
             assert!(hw.codec == "h264" || hw.codec == "hevc", "{hw:?}");
-            assert!(hw.name.contains(hw.codec));
+            assert!(hw.name.contains(&hw.codec));
         }
         let _ = hardware_decoders();
         // Asking for an encoder that is not usable here lands on software H.264.

@@ -55,4 +55,44 @@ pub trait Encoder: Send {
     fn push_video(&mut self, frame: &VideoFrame) -> Result<()>;
     fn push_audio(&mut self, block: &AudioBlock) -> Result<()>;
     fn finish(self: Box<Self>) -> Result<()>;
+    /// The codec implementation actually in use (e.g. `libx264`, `h264_nvenc`).
+    fn encoder_name(&self) -> &str {
+        ""
+    }
+    /// True when the requested encoder could not open and a fallback is used.
+    fn used_fallback(&self) -> bool {
+        false
+    }
+}
+
+/// Encode settings for one output file (EXP-01): H.264 video plus optional AAC
+/// audio. `encoder` names a preferred implementation; one that cannot open
+/// falls back to software (NFR-09).
+#[derive(Clone, Debug)]
+pub struct EncodeSettings {
+    pub width: u32,
+    pub height: u32,
+    pub frame_rate: FrameRate,
+    /// Constant-rate-factor-like quality (lower = better, 18–28 is typical).
+    pub crf: u8,
+    pub audio: Option<AudioEncodeSettings>,
+    pub encoder: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct AudioEncodeSettings {
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub bitrate: usize,
+}
+
+/// A hardware encoder this machine can actually open.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HwEncoder {
+    /// Implementation name, e.g. `hevc_videotoolbox`.
+    pub name: String,
+    /// Codec family: "h264" or "hevc".
+    pub codec: String,
+    /// The acceleration API behind it, e.g. "NVENC".
+    pub api: String,
 }

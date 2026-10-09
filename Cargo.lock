@@ -727,19 +727,9 @@ dependencies = [
 name = "debut-desktop"
 version = "0.1.0"
 dependencies = [
- "debut-audio",
- "debut-command",
- "debut-core",
  "debut-engine",
- "debut-export",
- "debut-graphics",
- "debut-platform",
  "debut-platform-native",
  "debut-project",
- "debut-render",
- "debut-timeline",
- "serde",
- "serde_json",
  "tauri",
  "tauri-build",
 ]
@@ -760,6 +750,8 @@ dependencies = [
  "debut-project",
  "debut-render",
  "debut-timeline",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

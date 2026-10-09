@@ -19,6 +19,8 @@ debut-graphics.workspace = true
 debut-export.workspace = true
 debut-collab.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
 
 [dev-dependencies]
 debut-platform-native.workspace = true
