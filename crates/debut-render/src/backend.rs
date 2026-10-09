@@ -3,7 +3,7 @@
 
 use crate::color::{encode, ColorTransform, Grade, Transfer};
 use crate::lut::Lut3d;
-use crate::nodes::{ChromaKey, Mask};
+use crate::nodes::{ChromaKey, Mask, PolyMask};
 use debut_core::{MediaId, Rational, Result};
 use serde::{Deserialize, Serialize};
 
@@ -120,6 +120,8 @@ pub trait Backend {
     fn grade(&mut self, src: &Self::Image, grade: &Grade) -> Self::Image;
     /// Multiply by a shape's coverage (FX-04).
     fn mask(&mut self, src: &Self::Image, mask: &Mask) -> Self::Image;
+    /// Multiply by a polygon's coverage (FX-04).
+    fn poly_mask(&mut self, src: &Self::Image, mask: &PolyMask) -> Self::Image;
     /// Chroma key with despill (FX-05).
     fn chroma_key(&mut self, src: &Self::Image, key: &ChromaKey) -> Self::Image;
     fn download(&mut self, img: &Self::Image) -> Vec<Rgba>;

@@ -6,7 +6,7 @@ use crate::backend::{BlendMode, Transform2D};
 use crate::color::{ColorTransform, Grade};
 use crate::graph::{Graph, Image8, ImageRef, LutRef, Node, NodeId};
 use crate::lut::Lut3d;
-use crate::nodes::{ChromaKey, Mask, MaskShape};
+use crate::nodes::{ChromaKey, Mask, MaskShape, PolyMask};
 use debut_core::color::ColorSpace;
 use debut_core::{Rational, SequenceId};
 use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, Title, TrackKind};
@@ -258,23 +258,41 @@ fn clip_layer(
             }
             Effect::Mask(m) => {
                 let v = |p: Param| effect.value(p, local).unwrap_or(0.0) as f32;
-                let mask = Mask {
-                    shape: match m.shape {
-                        debut_project::MaskShape::Rectangle => MaskShape::Rectangle,
-                        debut_project::MaskShape::Ellipse => MaskShape::Ellipse,
-                    },
-                    center: [
-                        w as f32 * 0.5 + v(Param::MaskX) * px_scale,
-                        h as f32 * 0.5 + v(Param::MaskY) * px_scale,
-                    ],
-                    half: [
-                        v(Param::MaskWidth) * 0.5 * px_scale,
-                        v(Param::MaskHeight) * 0.5 * px_scale,
-                    ],
-                    feather: v(Param::Feather) * px_scale,
-                    invert: m.invert,
-                };
-                node = g.add(Node::Mask { input: node, mask });
+                let center = [
+                    w as f32 * 0.5 + v(Param::MaskX) * px_scale,
+                    h as f32 * 0.5 + v(Param::MaskY) * px_scale,
+                ];
+                let feather = v(Param::Feather) * px_scale;
+                match m.shape {
+                    debut_project::MaskShape::Polygon => {
+                        let mask = PolyMask {
+                            points: m
+                                .points
+                                .iter()
+                                .map(|p| [center[0] + p[0] * px_scale, center[1] + p[1] * px_scale])
+                                .collect(),
+                            feather,
+                            invert: m.invert,
+                        };
+                        node = g.add(Node::PolyMask { input: node, mask });
+                    }
+                    shape => {
+                        let mask = Mask {
+                            shape: match shape {
+                                debut_project::MaskShape::Ellipse => MaskShape::Ellipse,
+                                _ => MaskShape::Rectangle,
+                            },
+                            center,
+                            half: [
+                                v(Param::MaskWidth) * 0.5 * px_scale,
+                                v(Param::MaskHeight) * 0.5 * px_scale,
+                            ],
+                            feather,
+                            invert: m.invert,
+                        };
+                        node = g.add(Node::Mask { input: node, mask });
+                    }
+                }
             }
             Effect::ChromaKey(k) => {
                 let v = |p: Param| effect.value(p, local).unwrap_or(0.0) as f32;

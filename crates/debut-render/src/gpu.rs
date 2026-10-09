@@ -7,7 +7,7 @@
 use crate::backend::{Backend, BlendMode, Rgba, Transform2D};
 use crate::color::{ColorTransform, Grade, Transfer};
 use crate::lut::Lut3d;
-use crate::nodes::{ChromaKey, Mask};
+use crate::nodes::{ChromaKey, Mask, PolyMask, POLY_MAX_POINTS};
 use bytemuck::{Pod, Zeroable};
 use std::sync::Arc;
 
@@ -21,6 +21,7 @@ const COLOR_TRANSFORM: &str = include_str!("../../../shaders/color_transform.wgs
 const LUT3D: &str = include_str!("../../../shaders/lut3d.wgsl");
 const GRADE: &str = include_str!("../../../shaders/grade.wgsl");
 const MASK: &str = include_str!("../../../shaders/mask.wgsl");
+const POLYMASK: &str = include_str!("../../../shaders/polymask.wgsl");
 const KEY: &str = include_str!("../../../shaders/key.wgsl");
 const PREMULTIPLY: &str = include_str!("../../../shaders/premultiply.wgsl");
 const OUTPUT: &str = include_str!("../../../shaders/output.wgsl");
@@ -95,6 +96,16 @@ struct MaskParams {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct PolyMaskParams {
+    points: [[f32; 4]; POLY_MAX_POINTS / 2],
+    count: u32,
+    feather: f32,
+    invert: u32,
+    pad: u32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct KeyParams {
     key: [f32; 4],
     knobs: [f32; 4],
@@ -116,6 +127,7 @@ pub struct GpuBackend {
     lut3d: Pass,
     grade: Pass,
     mask: Pass,
+    poly_mask: Pass,
     key: Pass,
     premultiply: Pass,
     output: Pass,
@@ -204,6 +216,15 @@ impl GpuBackend {
             false,
             std::mem::size_of::<MaskParams>(),
         );
+        let poly_mask = Self::pass(
+            &device,
+            "polymask",
+            "",
+            POLYMASK,
+            1,
+            false,
+            std::mem::size_of::<PolyMaskParams>(),
+        );
         let key = Self::pass(
             &device,
             "key",
@@ -234,6 +255,7 @@ impl GpuBackend {
             lut3d,
             grade,
             mask,
+            poly_mask,
             key,
             premultiply,
             output,
@@ -817,6 +839,35 @@ impl Backend for GpuBackend {
         )
     }
 
+    fn poly_mask(&mut self, src: &GpuImage, m: &PolyMask) -> GpuImage {
+        let src = &self.premultiplied(src);
+        let mut p = PolyMaskParams {
+            points: [[0.0; 4]; POLY_MAX_POINTS / 2],
+            count: m.points.len().min(POLY_MAX_POINTS) as u32,
+            feather: m.feather,
+            invert: m.invert as u32,
+            pad: 0,
+        };
+        for (i, pt) in m.points.iter().take(POLY_MAX_POINTS).enumerate() {
+            let slot = &mut p.points[i / 2];
+            if i % 2 == 0 {
+                slot[0] = pt[0];
+                slot[1] = pt[1];
+            } else {
+                slot[2] = pt[0];
+                slot[3] = pt[1];
+            }
+        }
+        self.run(
+            &self.poly_mask,
+            bytemuck::bytes_of(&p),
+            &[src],
+            src.w,
+            src.h,
+            "polymask",
+        )
+    }
+
     fn chroma_key(&mut self, src: &GpuImage, k: &ChromaKey) -> GpuImage {
         let src = &self.premultiplied(src);
         let p = KeyParams {
@@ -1032,6 +1083,23 @@ mod tests {
                 let d = max_diff(&gpu.download(&g), &cpu.download(&c));
                 assert!(d < 1e-5, "mask {shape:?} f={feather} differs by {d}");
             }
+        }
+        for (feather, invert) in [(0.0, false), (5.0, false), (3.0, true)] {
+            let pm = PolyMask {
+                points: vec![
+                    [3.0, 2.0],
+                    [30.0, 4.0],
+                    [34.0, 18.0],
+                    [18.0, 21.0],
+                    [6.0, 12.0],
+                ],
+                feather,
+                invert,
+            };
+            let g = gpu.poly_mask(&ga, &pm);
+            let c = cpu.poly_mask(&ca, &pm);
+            let d = max_diff(&gpu.download(&g), &cpu.download(&c));
+            assert!(d < 1e-4, "poly mask f={feather} differs by {d}");
         }
         let k = ChromaKey {
             key: [0.1, 0.8, 0.15],

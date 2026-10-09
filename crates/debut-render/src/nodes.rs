@@ -71,6 +71,71 @@ impl Mask {
     }
 }
 
+/// Most points a polygon mask may have (the GPU uniform holds this many).
+pub const POLY_MAX_POINTS: usize = 32;
+
+/// A closed polygon mask in output pixel space with a feathered edge (FX-04).
+/// Coverage multiplies the layer's alpha like [`Mask`].
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PolyMask {
+    /// At least three vertices, in order; the last joins back to the first.
+    pub points: Vec<[f32; 2]>,
+    pub feather: f32,
+    pub invert: bool,
+}
+
+impl PolyMask {
+    /// Signed distance to the outline: negative inside (even-odd rule).
+    pub fn signed_distance(&self, x: f32, y: f32) -> f32 {
+        let n = self.points.len();
+        if n < 3 {
+            return f32::MAX;
+        }
+        let mut inside = false;
+        let mut best = f32::MAX;
+        for i in 0..n {
+            let a = self.points[i];
+            let b = self.points[(i + 1) % n];
+            // Even-odd crossing test.
+            if (a[1] > y) != (b[1] > y) {
+                let t = (y - a[1]) / (b[1] - a[1]);
+                if x < a[0] + t * (b[0] - a[0]) {
+                    inside = !inside;
+                }
+            }
+            // Distance to the segment.
+            let (ex, ey) = (b[0] - a[0], b[1] - a[1]);
+            let len2 = (ex * ex + ey * ey).max(1e-12);
+            let t = (((x - a[0]) * ex + (y - a[1]) * ey) / len2).clamp(0.0, 1.0);
+            let (px, py) = (a[0] + t * ex - x, a[1] + t * ey - y);
+            best = best.min((px * px + py * py).sqrt());
+        }
+        if inside {
+            -best
+        } else {
+            best
+        }
+    }
+
+    pub fn coverage(&self, x: f32, y: f32) -> f32 {
+        let d = self.signed_distance(x, y);
+        let m = if self.feather <= 0.0 {
+            if d <= 0.0 {
+                1.0
+            } else {
+                0.0
+            }
+        } else {
+            1.0 - smoothstep(-0.5 * self.feather, 0.5 * self.feather, d)
+        };
+        if self.invert {
+            1.0 - m
+        } else {
+            m
+        }
+    }
+}
+
 /// Chroma key on straight linear RGB: pixels near `key` in chroma become
 /// transparent, with a soft band, and the key colour's spill is pulled out of
 /// what remains.
@@ -143,6 +208,51 @@ mod tests {
         assert_eq!(soft.coverage(63.0, 50.0), 0.0);
         let inv = Mask { invert: true, ..m };
         assert_eq!(inv.coverage(50.5, 50.5), 0.0);
+    }
+
+    #[test]
+    fn polygon_mask_uses_even_odd_inside_and_edge_distance() {
+        // A square 10..30 with a square hole 15..25 (second loop reversed).
+        let m = PolyMask {
+            points: vec![
+                [10.0, 10.0],
+                [30.0, 10.0],
+                [30.0, 30.0],
+                [10.0, 30.0],
+                [10.0, 10.0],
+                [15.0, 15.0],
+                [15.0, 25.0],
+                [25.0, 25.0],
+                [25.0, 15.0],
+                [15.0, 15.0],
+            ],
+            feather: 0.0,
+            invert: false,
+        };
+        assert_eq!(m.coverage(12.0, 20.0), 1.0, "in the ring");
+        assert_eq!(m.coverage(20.0, 20.0), 0.0, "in the hole");
+        assert_eq!(m.coverage(5.0, 20.0), 0.0, "outside");
+        assert!((m.signed_distance(12.0, 20.0) + 2.0).abs() < 1e-5);
+        assert!((m.signed_distance(5.0, 20.0) - 5.0).abs() < 1e-5);
+        let tri = PolyMask {
+            points: vec![[0.0, 0.0], [40.0, 0.0], [0.0, 40.0]],
+            feather: 4.0,
+            invert: true,
+        };
+        assert_eq!(tri.coverage(5.0, 5.0), 0.0, "inverted: inside is cut");
+        assert!(
+            (tri.coverage(20.0, 20.0) - 0.5).abs() < 1e-6,
+            "on the hypotenuse"
+        );
+        assert_eq!(
+            PolyMask {
+                points: vec![[0.0, 0.0]],
+                feather: 0.0,
+                invert: false
+            }
+            .coverage(0.0, 0.0),
+            0.0
+        );
     }
 
     #[test]

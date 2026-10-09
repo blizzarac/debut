@@ -94,5 +94,5 @@ pub use compose::{compose, compose_at};
 pub use debut_core::keyframe::{self, Curve, Interp, Keyframe};
 pub use graph::{Graph, Image8, ImageRef, LutRef, Node, NodeId};
 pub use lut::Lut3d;
-pub use nodes::{ChromaKey, Mask, MaskShape};
+pub use nodes::{ChromaKey, Mask, MaskShape, PolyMask, POLY_MAX_POINTS};
 pub use scopes::Scopes;

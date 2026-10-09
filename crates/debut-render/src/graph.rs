@@ -3,7 +3,7 @@
 use crate::backend::{Backend, BlendMode, FrameProvider, Rgba, Transform2D};
 use crate::color::{ColorTransform, Grade};
 use crate::lut::Lut3d;
-use crate::nodes::{ChromaKey, Mask};
+use crate::nodes::{ChromaKey, Mask, PolyMask};
 use debut_core::{Error, MediaId, Rational, Result};
 use serde::{Serialize, Serializer};
 use std::hash::{Hash, Hasher};
@@ -116,6 +116,11 @@ pub enum Node {
         input: NodeId,
         key: ChromaKey,
     },
+    /// Polygon mask on the layer's alpha (FX-04).
+    PolyMask {
+        input: NodeId,
+        mask: PolyMask,
+    },
 }
 
 impl Node {
@@ -127,6 +132,7 @@ impl Node {
             | Node::Lut3d { input, .. }
             | Node::Grade { input, .. }
             | Node::Mask { input, .. }
+            | Node::PolyMask { input, .. }
             | Node::ChromaKey { input, .. } => vec![*input],
             Node::Blend { bottom, top, .. } => vec![*bottom, *top],
             Node::Dissolve { a, b, .. } => vec![*a, *b],
@@ -236,6 +242,7 @@ impl Graph {
                 Node::Grade { input, grade } => backend.grade(&get(&images, *input), grade),
                 Node::Mask { input, mask } => backend.mask(&get(&images, *input), mask),
                 Node::ChromaKey { input, key } => backend.chroma_key(&get(&images, *input), key),
+                Node::PolyMask { input, mask } => backend.poly_mask(&get(&images, *input), mask),
             };
             images[i] = Some(img);
         }

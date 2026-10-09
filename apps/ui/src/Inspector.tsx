@@ -63,14 +63,33 @@ export function Inspector({ effects, selected, position, onChanged }: { effects:
           </div>
           {fx.kind === "mask" && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
-              <select value={fx.options.shape ?? "rectangle"} onChange={(e) => act(effects.setOptions(selected.track, selected.clip, fx.index, { shape: e.target.value as "rectangle" | "ellipse" }))}>
+              <select value={fx.options.shape ?? "rectangle"} onChange={(e) => act(effects.setOptions(selected.track, selected.clip, fx.index, { shape: e.target.value as "rectangle" | "ellipse" | "polygon" }))}>
                 <option value="rectangle">rectangle</option>
                 <option value="ellipse">ellipse</option>
+                <option value="polygon">polygon</option>
               </select>
               <label>
                 <input type="checkbox" checked={fx.options.invert ?? false} onChange={(e) => act(effects.setOptions(selected.track, selected.clip, fx.index, { invert: e.target.checked }))} /> invert
               </label>
             </div>
+          )}
+          {fx.kind === "mask" && fx.options.shape === "polygon" && (
+            <label style={{ display: "block", marginBottom: 4 }} title="Vertices as x,y pairs in sequence pixels from the frame centre, one per line or separated by semicolons; mask_x / mask_y move the whole shape">
+              points
+              <textarea
+                key={(fx.options.points ?? []).map((p) => p.join(",")).join(";")}
+                defaultValue={(fx.options.points ?? []).map((p) => `${p[0]}, ${p[1]}`).join("\n")}
+                rows={4}
+                style={{ width: "100%", boxSizing: "border-box", fontFamily: "monospace", fontSize: 11 }}
+                onBlur={(e) => {
+                  const pts = e.target.value
+                    .split(/[\n;]/)
+                    .map((l) => l.split(",").map((v) => Number(v.trim())))
+                    .filter((p) => p.length === 2 && p.every((v) => Number.isFinite(v))) as [number, number][];
+                  if (pts.length >= 3) act(effects.setOptions(selected.track, selected.clip, fx.index, { points: pts }));
+                }}
+              />
+            </label>
           )}
           {fx.kind === "key" && (
             <label style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>

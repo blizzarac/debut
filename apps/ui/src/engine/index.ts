@@ -226,9 +226,11 @@ export type EffectKind = "transform" | "grade" | "lut" | "mask" | "key";
 
 /** Non-animated knobs: mask shape/invert, key colour (straight sRGB bytes). */
 export interface EffectOptions {
-  shape?: "rectangle" | "ellipse";
+  shape?: "rectangle" | "ellipse" | "polygon";
   invert?: boolean;
   color?: [number, number, number];
+  /** Polygon mask vertices in sequence pixels from the frame centre. */
+  points?: [number, number][];
 }
 
 export interface ParamInfo {

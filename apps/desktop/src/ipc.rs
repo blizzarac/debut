@@ -1509,6 +1509,9 @@ pub struct EffectOptions {
     pub invert: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<[u8; 3]>,
+    /// Polygon mask vertices in sequence pixels from the frame centre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub points: Option<Vec<[f32; 2]>>,
 }
 
 fn effect_options(e: &Effect) -> EffectOptions {
@@ -1517,6 +1520,7 @@ fn effect_options(e: &Effect) -> EffectOptions {
             shape: Some(m.shape),
             invert: Some(m.invert),
             color: None,
+            points: Some(m.points.clone()),
         },
         Effect::ChromaKey(k) => EffectOptions {
             color: Some(k.color),
@@ -1615,6 +1619,24 @@ impl Session {
                 }
                 if let Some(invert) = opts.invert {
                     m.invert = invert;
+                }
+                if let Some(points) = opts.points {
+                    if points.len() > debut_render::POLY_MAX_POINTS {
+                        return Err(format!(
+                            "a polygon mask takes at most {} points",
+                            debut_render::POLY_MAX_POINTS
+                        ));
+                    }
+                    m.points = points;
+                }
+                // Switching to a polygon with no vertices yet: start from a
+                // diamond the size of the rectangle, so something is visible.
+                if m.shape == MaskShape::Polygon && m.points.len() < 3 {
+                    let (hw, hh) = (
+                        m.width.eval(Rational::ZERO) as f32 * 0.5,
+                        m.height.eval(Rational::ZERO) as f32 * 0.5,
+                    );
+                    m.points = vec![[0.0, -hh], [hw, 0.0], [0.0, hh], [-hw, 0.0]];
                 }
             }
             Effect::ChromaKey(k) => {
@@ -2961,7 +2983,7 @@ mod tests {
             EffectOptions {
                 invert: Some(true),
                 shape: Some(MaskShape::Ellipse),
-                color: None,
+                ..Default::default()
             },
         )
         .unwrap();
@@ -2976,6 +2998,48 @@ mod tests {
             at(&inverted, 1, 1) > 0 || at(&inverted, 2, 30) > 0,
             "corners show"
         );
+        // Polygon: switching with no points seeds a diamond; a thin triangle at the
+        // left edge leaves the right side black.
+        s.set_effect_options(
+            &v,
+            &clip_id,
+            mask_ix,
+            EffectOptions {
+                shape: Some(MaskShape::Polygon),
+                invert: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let fx = s.clip_effects(&v, &clip_id).unwrap();
+        assert_eq!(
+            fx[mask_ix].options.points.as_ref().map(|p| p.len()),
+            Some(4)
+        );
+        s.set_effect_options(
+            &v,
+            &clip_id,
+            mask_ix,
+            EffectOptions {
+                points: Some(vec![[-32.0, -18.0], [-8.0, 0.0], [-32.0, 18.0]]),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let (_, _, tri) = s.frame_pixels().unwrap();
+        assert!(at(&tri, 4, 18) > 0, "inside the triangle");
+        assert_eq!(at(&tri, 60, 18), 0, "right side is cut");
+        assert!(s
+            .set_effect_options(
+                &v,
+                &clip_id,
+                mask_ix,
+                EffectOptions {
+                    points: Some(vec![[0.0, 0.0]; 40]),
+                    ..Default::default()
+                }
+            )
+            .is_err());
         assert!(s
             .set_effect_options(&v, &clip_id, 0, EffectOptions::default())
             .is_err());

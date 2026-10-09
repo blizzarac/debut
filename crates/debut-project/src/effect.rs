@@ -25,6 +25,8 @@ pub enum Effect {
 pub enum MaskShape {
     Rectangle,
     Ellipse,
+    /// A closed polygon given by `MaskFx::points`.
+    Polygon,
 }
 
 /// A soft shape in sequence pixels: centre offset from the frame centre,
@@ -38,6 +40,10 @@ pub struct MaskFx {
     pub width: Curve,
     pub height: Curve,
     pub feather: Curve,
+    /// Polygon vertices in sequence pixels from the frame centre, moved by
+    /// `x` / `y` like the other shapes (FX-04).
+    #[serde(default)]
+    pub points: Vec<[f32; 2]>,
 }
 
 impl Default for MaskFx {
@@ -50,6 +56,7 @@ impl Default for MaskFx {
             width: Curve::constant(960.0),
             height: Curve::constant(540.0),
             feather: Curve::constant(20.0),
+            points: Vec::new(),
         }
     }
 }

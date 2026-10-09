@@ -4,7 +4,7 @@
 use crate::backend::{Backend, BlendMode, Rgba, Transform2D};
 use crate::color::{ColorTransform, Grade};
 use crate::lut::Lut3d;
-use crate::nodes::{ChromaKey, Mask};
+use crate::nodes::{ChromaKey, Mask, PolyMask};
 use std::sync::Arc;
 
 #[derive(Clone, Debug)]
@@ -188,6 +188,24 @@ impl Backend for CpuBackend {
     }
 
     fn mask(&mut self, src: &CpuImage, mask: &Mask) -> CpuImage {
+        let w = src.w as usize;
+        let px = src
+            .px
+            .iter()
+            .enumerate()
+            .map(|(i, p)| {
+                let m = mask.coverage((i % w) as f32 + 0.5, (i / w) as f32 + 0.5);
+                [p[0] * m, p[1] * m, p[2] * m, p[3] * m]
+            })
+            .collect();
+        CpuImage {
+            w: src.w,
+            h: src.h,
+            px: Arc::new(px),
+        }
+    }
+
+    fn poly_mask(&mut self, src: &CpuImage, mask: &PolyMask) -> CpuImage {
         let w = src.w as usize;
         let px = src
             .px
