@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { EffectInfo, EffectsApi, ParamName } from "./engine";
+import type { EffectInfo, EffectsApi, MediaApi, ParamName, TextAlign, TitleInfo } from "./engine";
 import type { Selection } from "./Timeline";
 
 const RANGES: Record<ParamName, [number, number, number]> = {
@@ -78,6 +78,77 @@ export function Inspector({ effects, selected, position, onChanged }: { effects:
           })}
         </div>
       ))}
+    </div>
+  );
+}
+
+type Rgba = [number, number, number, number];
+
+function hex(c: Rgba): string {
+  return "#" + c.slice(0, 3).map((v) => v.toString(16).padStart(2, "0")).join("");
+}
+
+function fromHex(h: string, alpha: number): Rgba {
+  return [parseInt(h.slice(1, 3), 16), parseInt(h.slice(3, 5), 16), parseInt(h.slice(5, 7), 16), alpha];
+}
+
+/** Text and style of the selected title clip (GFX-01, GFX-02). Edits apply on
+ * blur / Apply so each change is one undoable command. */
+export function TitleEditor({ media, selected, title, onChanged }: { media: MediaApi; selected: Selection; title: TitleInfo; onChanged: () => void }) {
+  const [draft, setDraft] = useState<TitleInfo>(title);
+  useEffect(() => setDraft(title), [title]);
+  if (!selected) return null;
+  const style = draft.style;
+  const setStyle = (patch: Partial<TitleInfo["style"]>) => setDraft({ ...draft, style: { ...style, ...patch } });
+  const dirty = JSON.stringify(draft) !== JSON.stringify(title);
+  const apply = () => media.setTitle(selected.track, selected.clip, draft).then(onChanged);
+  const row = { display: "flex", gap: 6, alignItems: "center", fontSize: 12, marginTop: 4 } as const;
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <h3 style={{ fontSize: 12, margin: "8px 0 4px" }}>Title</h3>
+      <textarea
+        value={draft.text}
+        rows={3}
+        style={{ width: "100%", boxSizing: "border-box", fontSize: 12 }}
+        onChange={(e) => setDraft({ ...draft, text: e.target.value })}
+      />
+      <div style={row}>
+        <label>
+          size <input type="number" min={4} max={600} step={1} value={style.size_px} style={{ width: 56 }} onChange={(e) => setStyle({ size_px: Number(e.target.value) })} />
+        </label>
+        <label>
+          color <input type="color" value={hex(style.color)} onChange={(e) => setStyle({ color: fromHex(e.target.value, style.color[3]) })} />
+        </label>
+        <select value={style.align} onChange={(e) => setStyle({ align: e.target.value as TextAlign })}>
+          <option value="left">left</option>
+          <option value="center">centre</option>
+          <option value="right">right</option>
+        </select>
+      </div>
+      <div style={row}>
+        <label>
+          stroke <input type="number" min={0} max={40} step={0.5} value={style.stroke_px} style={{ width: 48 }} onChange={(e) => setStyle({ stroke_px: Number(e.target.value) })} />
+        </label>
+        <input type="color" value={hex(style.stroke_color)} onChange={(e) => setStyle({ stroke_color: fromHex(e.target.value, 255) })} />
+        <label>
+          shadow <input type="number" min={0} max={40} step={0.5} value={style.shadow_px} style={{ width: 48 }} onChange={(e) => setStyle({ shadow_px: Number(e.target.value) })} />
+        </label>
+      </div>
+      <div style={row}>
+        <label>
+          box <input type="color" value={hex(style.background)} onChange={(e) => setStyle({ background: fromHex(e.target.value, Math.max(style.background[3], 160)) })} />
+        </label>
+        <label>
+          <input type="checkbox" checked={style.background[3] > 0} onChange={(e) => setStyle({ background: [style.background[0], style.background[1], style.background[2], e.target.checked ? 160 : 0] })} /> on
+        </label>
+        <label>
+          font <input value={style.font} style={{ width: 90 }} onChange={(e) => setStyle({ font: e.target.value })} />
+        </label>
+      </div>
+      <div style={row}>
+        <button disabled={!dirty} onClick={apply}>Apply</button>
+        <button disabled={!dirty} onClick={() => setDraft(title)}>Revert</button>
+      </div>
     </div>
   );
 }

@@ -106,6 +106,15 @@ export function Timeline({
         >
           {selectedClip?.transition_in ? "Remove dissolve" : "Dissolve in"}
         </button>
+        <button
+          title="Add a 5 s title at the playhead on a free video track"
+          onClick={async () => {
+            const id = await media.addTitle(snap(position), "Title").catch(() => null);
+            if (id) onEdited();
+          }}
+        >
+          + Title
+        </button>
         <span style={{ flex: 1 }} />
         <label style={{ fontSize: 12 }}>
           zoom <input type="range" min={20} max={600} value={pxPerSec} onChange={(e) => setPxPerSec(Number(e.target.value))} />
@@ -160,7 +169,7 @@ export function Timeline({
                   const x = HEADER_W + tin * pxPerSec;
                   const w = Math.max(2, dur * pxPerSec);
                   const sel = selected?.clip === clip.id;
-                  const color = track.kind === "video" ? (sel ? "#3b82f6" : "#60a5fa") : sel ? "#16a34a" : "#4ade80";
+                  const color = clip.title ? (sel ? "#9333ea" : "#a855f7") : track.kind === "video" ? (sel ? "#3b82f6" : "#60a5fa") : sel ? "#16a34a" : "#4ade80";
                   const start = (mode: Drag["mode"]) => (e: React.MouseEvent) => {
                     e.stopPropagation();
                     setSelected({ track: track.id, clip: clip.id });
@@ -179,7 +188,7 @@ export function Timeline({
                         />
                       )}
                       <text x={x + EDGE + 2} y={y + TRACK_H / 2 + 4} fontSize={11} fill="#fff" pointerEvents="none">
-                        {clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s
+                        {clip.title ? `T “${clip.title.text.slice(0, 18)}”` : clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s
                       </text>
                     </g>
                   );

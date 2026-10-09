@@ -46,6 +46,7 @@ debut-platform-web = { path = "crates/debut-platform-web" }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 serde_json = "1"
+fontdue = "0.9"
 
 # Planned, enabled per crate as work starts:
 wgpu = "27"

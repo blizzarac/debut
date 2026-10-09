@@ -264,6 +264,7 @@ pub fn render_span(
                     None => continue,
                 },
                 ClipSource::Sequence(_) => continue,
+                ClipSource::Title(_) => continue,
             };
             let n = (b - a) as usize;
             let t = Rational::new(a, sr);

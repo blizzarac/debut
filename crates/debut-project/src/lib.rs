@@ -11,6 +11,7 @@ pub mod marker;
 pub mod media_ref;
 pub mod schema;
 pub mod sequence;
+pub mod title;
 
 pub use audio_fx::{AudioEffect, EqBand, EqKind};
 pub use effect::{Effect, GradeFx, Param, TransformFx};
@@ -18,6 +19,7 @@ pub use marker::{marker_list, Marker};
 pub use sequence::{
     Clip, ClipSource, Layer, Sequence, Track, TrackKind, TrackMix, Transition, TransitionKind,
 };
+pub use title::{TextAlign, Title, TitleStyle};
 
 use debut_core::{ProjectId, SequenceId};
 use serde::{Deserialize, Serialize};

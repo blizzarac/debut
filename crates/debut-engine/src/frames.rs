@@ -10,6 +10,7 @@ use debut_core::{Error, MediaId, Rational, Result};
 use debut_platform::Decoder;
 use debut_render::FrameProvider;
 use std::collections::{HashMap, VecDeque};
+use std::sync::{Arc, Mutex};
 
 struct Cached {
     pts: Rational,
@@ -29,6 +30,9 @@ struct Source {
 pub struct FrameSource {
     sources: HashMap<MediaId, Source>,
     cache_depth: usize,
+    /// Rasterized titles by content hash (GFX-01); a title re-renders only when
+    /// its text or style changes.
+    titles: Mutex<HashMap<u64, Arc<debut_render::Image8>>>,
 }
 
 impl FrameSource {
@@ -36,7 +40,30 @@ impl FrameSource {
         Self {
             sources: HashMap::new(),
             cache_depth: cache_depth.max(1),
+            titles: Mutex::new(HashMap::new()),
         }
+    }
+
+    /// The raster for `title`, rendering it on first use. `None` when the text
+    /// cannot be rasterized (no usable font).
+    pub fn title(&self, title: &debut_project::Title) -> Option<Arc<debut_render::Image8>> {
+        let hash = title.hash();
+        let mut cache = self.titles.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(img) = cache.get(&hash) {
+            return Some(Arc::clone(img));
+        }
+        let raster = debut_graphics::render_title(&title.text, &title.style).ok()?;
+        let img = Arc::new(debut_render::Image8 {
+            hash,
+            width: raster.width,
+            height: raster.height,
+            rgba8: raster.rgba8,
+        });
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(hash, Arc::clone(&img));
+        Some(img)
     }
 
     pub fn add(&mut self, media: MediaId, decoder: Box<dyn Decoder>) -> Result<()> {

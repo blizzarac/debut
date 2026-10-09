@@ -36,9 +36,34 @@ export interface MediaInfo {
   has_audio: boolean;
 }
 
+export type TextAlign = "left" | "center" | "right";
+
+/** Mirrors the project's `TitleStyle` (GFX-01, GFX-02); colours are straight sRGB RGBA bytes. */
+export interface TitleStyle {
+  font: string;
+  size_px: number;
+  color: [number, number, number, number];
+  align: TextAlign;
+  line_height: number;
+  letter_spacing: number;
+  stroke_px: number;
+  stroke_color: [number, number, number, number];
+  shadow_px: number;
+  shadow_color: [number, number, number, number];
+  background: [number, number, number, number];
+  padding_px: number;
+}
+
+export interface TitleInfo {
+  text: string;
+  style: TitleStyle;
+}
+
 export interface ClipInfo {
   id: string;
   media: string | null;
+  /** Set when this is a title clip. */
+  title: TitleInfo | null;
   timeline_in: number;
   duration: number;
   source_in: number;
@@ -186,6 +211,9 @@ export interface MediaApi {
   ensureSequence(): Promise<SequenceInfo>;
   sequence(): Promise<SequenceInfo>;
   addClip(track: string, media: string, at: number): Promise<void>;
+  /** Adds a 5 s title at `at` on a free video track (adds a track if needed); returns the clip id. */
+  addTitle(at: number, text: string): Promise<string>;
+  setTitle(track: string, clip: string, title: TitleInfo): Promise<void>;
   edit(op: EditOp): Promise<void>;
 }
 

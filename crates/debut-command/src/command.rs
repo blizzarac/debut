@@ -14,7 +14,8 @@ use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
 use debut_project::{
-    AudioEffect, Clip, Effect, Marker, Param, Project, Sequence, Track, TrackMix, Transition,
+    AudioEffect, Clip, ClipSource, Effect, Marker, Param, Project, Sequence, Track, TrackMix,
+    Transition,
 };
 use serde::{Deserialize, Serialize};
 
@@ -126,6 +127,12 @@ pub enum Command {
     SetTrackMix {
         target: Target,
         mix: TrackMix,
+    },
+    /// Replace what a clip plays (title text/style edits, relinks) in place.
+    SetClipSource {
+        target: Target,
+        clip: ClipId,
+        source: ClipSource,
     },
     // ---- markers (TL-10) ----------------------------------------------------------
     AddMarker {
@@ -398,6 +405,14 @@ impl Command {
                 track_mut(project, *target)?.mix = *mix;
                 Ok(())
             }
+            Command::SetClipSource {
+                target,
+                clip,
+                source,
+            } => edit_clip(project, *target, *clip, |c| {
+                c.source = source.clone();
+                Ok(())
+            }),
             Command::AddMarker { target, marker } => {
                 let list = markers_mut(project, *target)?;
                 if list.iter().any(|m| m.id == marker.id) {
@@ -695,6 +710,11 @@ impl Command {
             Command::SetTrackMix { target, .. } => Ok(Command::SetTrackMix {
                 target: *target,
                 mix: track(project, *target)?.mix,
+            }),
+            Command::SetClipSource { target, clip, .. } => Ok(Command::SetClipSource {
+                target: *target,
+                clip: *clip,
+                source: find_clip(project, *target, *clip)?.source.clone(),
             }),
             Command::AddMarker { target, marker } => Ok(Command::RemoveMarker {
                 target: *target,

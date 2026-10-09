@@ -18,7 +18,8 @@ use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
     schema, AudioEffect, Clip, ClipSource, Effect, EqBand, EqKind, GradeFx, Marker, Param, Project,
-    Sequence, Track, TrackKind, TrackMix, TransformFx, Transition, TransitionKind,
+    Sequence, Title, TitleStyle, Track, TrackKind, TrackMix, TransformFx, Transition,
+    TransitionKind,
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
@@ -250,6 +251,13 @@ fn frames_of(t: f64, fr: FrameRate) -> Rational {
     fr.frame_to_time((t * fr.0.as_f64()).round() as i64)
 }
 
+fn fr_of(seq: &Sequence) -> FrameRate {
+    seq.frame_rate
+}
+
+/// Default length of a freshly added title.
+const TITLE_SECONDS: i64 = 5;
+
 // ---- project ------------------------------------------------------------------
 
 #[tauri::command]
@@ -349,6 +357,8 @@ pub struct MediaDto {
 pub struct ClipDto {
     pub id: String,
     pub media: Option<String>,
+    /// Text and style when this is a title clip (GFX-01).
+    pub title: Option<Title>,
     pub timeline_in: f64,
     pub duration: f64,
     pub source_in: f64,
@@ -398,6 +408,10 @@ fn sequence_dto(seq: &Sequence) -> SequenceDto {
                         id: id_str(c.id.0),
                         media: match &c.source {
                             ClipSource::Media(m) => Some(id_str(m.0)),
+                            _ => None,
+                        },
+                        title: match &c.source {
+                            ClipSource::Title(t) => Some(t.clone()),
                             _ => None,
                         },
                         timeline_in: secs(c.timeline_in),
@@ -503,6 +517,93 @@ impl Session {
         };
         let cmd = Command::insert(target, frames_of(at, fr), vec![clip], &mut self.ids);
         self.exec(cmd)
+    }
+
+    /// Add a 5 s title clip at `at` seconds on the topmost video track with room
+    /// for it, adding a video track above the others when none has (GFX-01).
+    pub fn add_title(&mut self, at: f64, text: String) -> Result<String, String> {
+        let (seq_id, fr, free_track, above_video) = {
+            let seq = self.first_sequence()?;
+            let start = frames_of(at, fr_of(seq));
+            let end = start + Rational::from_int(TITLE_SECONDS);
+            let free = seq
+                .tracks
+                .iter()
+                .rev()
+                .find(|t| {
+                    t.kind == TrackKind::Video
+                        && t.clips
+                            .iter()
+                            .all(|c| c.timeline_out() <= start || c.timeline_in >= end)
+                })
+                .map(|t| t.id);
+            // A new title track goes right above the top video track: later tracks
+            // composite on top, and it stays grouped with the video tracks.
+            let above_video = seq
+                .tracks
+                .iter()
+                .rposition(|t| t.kind == TrackKind::Video)
+                .map_or(seq.tracks.len(), |i| i + 1);
+            (seq.id, seq.frame_rate, free, above_video)
+        };
+        let start = frames_of(at, fr);
+        let clip = Clip::new(
+            self.ids.fresh(),
+            ClipSource::Title(Title {
+                text,
+                style: TitleStyle::default(),
+            }),
+            start,
+            Rational::from_int(TITLE_SECONDS),
+            Rational::ZERO,
+        );
+        let clip_id = clip.id;
+        let mut cmds = Vec::new();
+        let track_id = match free_track {
+            Some(id) => id,
+            None => {
+                let track = Track::new(self.ids.fresh(), TrackKind::Video);
+                let id = track.id;
+                cmds.push(Command::AddTrack {
+                    sequence: seq_id,
+                    track,
+                    index: Some(above_video),
+                });
+                id
+            }
+        };
+        let target = Target {
+            sequence: seq_id,
+            track: track_id,
+        };
+        cmds.push(Command::overwrite(target, clip, &mut self.ids));
+        self.exec(Command::Group(cmds))?;
+        Ok(id_str(clip_id.0))
+    }
+
+    /// Replace a title clip's text and style (GFX-01, GFX-02).
+    pub fn set_title(&mut self, track: &str, clip: &str, title: Title) -> Result<(), String> {
+        let seq_id = self.first_sequence()?.id;
+        let target = Target {
+            sequence: seq_id,
+            track: TrackId(parse_id(track)?),
+        };
+        let clip = ClipId(parse_id(clip)?);
+        let is_title = self
+            .project()
+            .and_then(|p| p.sequence(seq_id))
+            .and_then(|s| s.track(target.track))
+            .and_then(|t| t.clip(clip))
+            .map(|c| matches!(c.source, ClipSource::Title(_)))
+            .ok_or("no such clip")?;
+        if !is_title {
+            return Err("not a title clip".into());
+        }
+        self.exec(Command::SetClipSource {
+            target,
+            clip,
+            source: ClipSource::Title(title),
+        })
     }
 
     pub fn edit(&mut self, op: EditOp) -> Result<(), String> {
@@ -1524,6 +1625,21 @@ pub enum EditOp {
 }
 
 #[tauri::command]
+pub fn add_title(state: State<'_, Shared>, at: f64, text: String) -> Result<String, String> {
+    lock(&state).add_title(at, text)
+}
+
+#[tauri::command]
+pub fn set_title(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    title: Title,
+) -> Result<(), String> {
+    lock(&state).set_title(&track, &clip, title)
+}
+
+#[tauri::command]
 pub fn edit(state: State<'_, Shared>, op: EditOp) -> Result<(), String> {
     lock(&state).edit(op)
 }
@@ -1759,6 +1875,52 @@ mod tests {
         let (fw, _, _) = s.frame_pixels().unwrap();
         assert_eq!(fw, 64);
 
+        // Titles (GFX-01): the video track is busy at 1 s, so the title lands on a new
+        // track above it; its text brightens the picture, and an edit re-renders it.
+        let before = sequence_dto(s.first_sequence().unwrap());
+        s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+        let (_, _, plain) = s.frame_pixels().unwrap();
+        let title_clip = s.add_title(1.0, "Hi".into()).unwrap();
+        let after = sequence_dto(s.first_sequence().unwrap());
+        assert_eq!(after.tracks.len(), before.tracks.len() + 1);
+        let title_track = &after.tracks[1];
+        assert_eq!(
+            (title_track.kind.as_str(), after.tracks[2].kind.as_str()),
+            ("video", "audio")
+        );
+        let t = title_track.clips[0].title.as_ref().unwrap();
+        assert_eq!(
+            (t.text.as_str(), title_track.clips[0].id.as_str()),
+            ("Hi", title_clip.as_str())
+        );
+        s.transport(TransportAction::Seek { t: 2.0 }).unwrap();
+        let (_, _, titled) = s.frame_pixels().unwrap();
+        assert!(sum(&titled) > sum(&plain), "white text brightens the frame");
+        assert!(titled
+            .chunks(4)
+            .any(|p| p[0] > 200 && p[1] > 200 && p[2] > 200));
+        let mut edited = t.clone();
+        edited.text = "A much longer line of text".into();
+        edited.style.size_px = 8.0;
+        s.set_title(&title_track.id, &title_clip, edited.clone())
+            .unwrap();
+        let now = sequence_dto(s.first_sequence().unwrap());
+        assert_eq!(now.tracks[1].clips[0].title.as_ref(), Some(&edited));
+        let (_, _, retitled) = s.frame_pixels().unwrap();
+        assert_ne!(retitled, titled, "the new text renders differently");
+        assert!(
+            s.set_title(&v, &clip_id, edited).is_err(),
+            "media clips have no title"
+        );
+        // Lift the title again so the export below covers the original 2.4 s.
+        s.edit(EditOp::Lift {
+            track: title_track.id.clone(),
+            start: 1.0,
+            end: 6.0,
+        })
+        .unwrap();
+        assert_eq!(sequence_dto(s.first_sequence().unwrap()).duration, 2.4);
+
         // Transition: blade V1 at 1.0 s, dissolve 0.4 s into the second piece (its head
         // handle is 0.6 s of source), then check the DTO and that scopes come back.
         s.edit(EditOp::Blade {
@@ -1874,8 +2036,8 @@ mod tests {
         .unwrap();
         s.add_insert(&a, "limiter").unwrap();
         let dto = sequence_dto(s.first_sequence().unwrap());
-        assert_eq!(dto.tracks[1].mix.gain_db, -6.0);
-        assert_eq!(dto.tracks[1].inserts, vec!["Limiter".to_string()]);
+        assert_eq!(dto.tracks[2].mix.gain_db, -6.0);
+        assert_eq!(dto.tracks[2].inserts, vec!["Limiter".to_string()]);
         assert!(s.add_insert(&a, "nope").is_err());
 
         // Export through the queue worker, normalized to -14 LUFS.

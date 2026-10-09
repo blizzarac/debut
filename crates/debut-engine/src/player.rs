@@ -32,6 +32,9 @@ impl SourceInfo for FrameSource {
     fn dimensions(&self, media: MediaId) -> (u32, u32) {
         FrameSource::dimensions(self, media).unwrap_or((1, 1))
     }
+    fn title(&self, title: &debut_project::Title) -> Option<Arc<debut_render::Image8>> {
+        FrameSource::title(self, title)
+    }
 }
 
 impl Player {

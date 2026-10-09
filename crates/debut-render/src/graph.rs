@@ -27,6 +27,32 @@ impl Serialize for LutRef {
     }
 }
 
+/// A pre-rendered straight-alpha, display-encoded RGBA8 image (a title raster,
+/// a still) identified by a content hash.
+#[derive(Clone, Debug)]
+pub struct Image8 {
+    pub hash: u64,
+    pub width: u32,
+    pub height: u32,
+    pub rgba8: Vec<u8>,
+}
+
+/// An image shared between graphs; serializes (and so hashes) as its content hash.
+#[derive(Clone, Debug)]
+pub struct ImageRef(pub Arc<Image8>);
+
+impl PartialEq for ImageRef {
+    fn eq(&self, other: &Self) -> bool {
+        self.0.hash == other.0.hash
+    }
+}
+
+impl Serialize for ImageRef {
+    fn serialize<S: Serializer>(&self, s: S) -> std::result::Result<S::Ok, S::Error> {
+        s.serialize_u64(self.0.hash)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub enum Node {
     Solid {
@@ -38,6 +64,10 @@ pub enum Node {
     Source {
         media: MediaId,
         source_time: Rational,
+    },
+    /// A ready-made raster (titles, GFX-01), uploaded like a decoded frame.
+    Image {
+        image: ImageRef,
     },
     /// Resample `input` onto a `w x h` canvas through `xf` (FX-02).
     Transform {
@@ -80,7 +110,7 @@ pub enum Node {
 impl Node {
     fn inputs(&self) -> Vec<NodeId> {
         match self {
-            Node::Solid { .. } | Node::Source { .. } => vec![],
+            Node::Solid { .. } | Node::Source { .. } | Node::Image { .. } => vec![],
             Node::Transform { input, .. }
             | Node::ColorTransform { input, .. }
             | Node::Lut3d { input, .. }
@@ -170,6 +200,9 @@ impl Graph {
                 Node::Source { media, source_time } => {
                     let (w, h, px) = frames.frame(*media, *source_time)?;
                     backend.upload_rgba8(w, h, &px)
+                }
+                Node::Image { image } => {
+                    backend.upload_rgba8(image.0.width, image.0.height, &image.0.rgba8)
                 }
                 Node::Transform { input, xf, w, h } => {
                     backend.transform(&get(&images, *input), xf, *w, *h)

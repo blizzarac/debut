@@ -4,11 +4,11 @@
 
 use crate::backend::{BlendMode, Transform2D};
 use crate::color::{ColorTransform, Grade};
-use crate::graph::{Graph, LutRef, Node, NodeId};
+use crate::graph::{Graph, Image8, ImageRef, LutRef, Node, NodeId};
 use crate::lut::Lut3d;
 use debut_core::color::ColorSpace;
 use debut_core::Rational;
-use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, TrackKind};
+use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, Title, TrackKind};
 use std::sync::Arc;
 
 /// Source frame dimensions are needed to fit a clip onto the canvas; the caller
@@ -21,6 +21,11 @@ pub trait SourceInfo {
     }
     /// Resolve a LUT referenced from a clip's effect stack by content hash.
     fn lut(&self, _hash: u64) -> Option<Arc<Lut3d>> {
+        None
+    }
+    /// Rasterize (or fetch from a cache) a title clip's text (GFX-01) as straight
+    /// sRGB RGBA8. `None` leaves the title out of the picture.
+    fn title(&self, _title: &Title) -> Option<Arc<Image8>> {
         None
     }
 }
@@ -93,23 +98,39 @@ fn clip_layer(
     info: &dyn SourceInfo,
 ) -> Option<(NodeId, f32)> {
     let (w, h) = canvas;
-    let media = match &clip.source {
-        ClipSource::Media(m) => *m,
-        ClipSource::Multicam { angles, active } => *angles.get(*active)?,
+    // Source node, its colour space, its size and how it fits the canvas: media
+    // is scaled to fill the frame, a title is authored in sequence pixels.
+    let (mut src, space, (sw, sh), fit) = match &clip.source {
+        ClipSource::Media(_) | ClipSource::Multicam { .. } => {
+            let media = match &clip.source {
+                ClipSource::Media(m) => *m,
+                ClipSource::Multicam { angles, active } => *angles.get(*active)?,
+                _ => unreachable!(),
+            };
+            let src = g.add(Node::Source {
+                media,
+                source_time: clip.source_at(t),
+            });
+            let (sw, sh) = info.dimensions(media);
+            let fit = (w as f32 / sw as f32).min(h as f32 / sh as f32);
+            (src, info.color_space(media), (sw, sh), fit)
+        }
+        ClipSource::Title(title) => {
+            let image = info.title(title)?;
+            let size = (image.width, image.height);
+            let src = g.add(Node::Image {
+                image: ImageRef(image),
+            });
+            (src, ColorSpace::Srgb, size, px_scale)
+        }
         // Nested sequences render recursively once Source can hold a sub-graph.
         ClipSource::Sequence(_) => return None,
     };
-    let mut src = g.add(Node::Source {
-        media,
-        source_time: clip.source_at(t),
-    });
-    if let Ok(xf) = ColorTransform::between(&info.color_space(media), &WORKING) {
+    if let Ok(xf) = ColorTransform::between(&space, &WORKING) {
         if !xf.is_identity() {
             src = g.add(Node::ColorTransform { input: src, xf });
         }
     }
-    let (sw, sh) = info.dimensions(media);
-    let fit = (w as f32 / sw as f32).min(h as f32 / sh as f32);
     let local = t - clip.timeline_in;
     let (mut scale, mut rotation, mut dx, mut dy, mut opacity) =
         (1.0f32, 0.0f32, 0.0f32, 0.0f32, 1.0f32);

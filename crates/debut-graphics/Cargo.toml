@@ -9,4 +9,5 @@ repository.workspace = true
 [dependencies]
 debut-core.workspace = true
 debut-project.workspace = true
+fontdue.workspace = true
 thiserror.workspace = true

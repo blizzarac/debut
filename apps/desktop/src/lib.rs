@@ -30,6 +30,8 @@ pub fn run() {
             ipc::ensure_sequence,
             ipc::sequence,
             ipc::add_clip,
+            ipc::add_title,
+            ipc::set_title,
             ipc::edit,
             ipc::clip_effects,
             ipc::add_effect,

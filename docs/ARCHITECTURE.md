@@ -75,5 +75,6 @@ wasm-pack build apps/web --target web        # browser (once wasm-bindgen is ena
 10. ~~Project files~~ Done: `Workspace` with JSON-lines journal, autosave, rotating backups, crash recovery; Save/Open in the app.
 11. ~~Export + mixer UI~~ Done: queue worker thread, presets, loudness normalization, per-job progress; mixer strips with inserts.
 12. ~~Dissolves and scopes~~ Done: `Clip.transition_in` centred on the cut with handle checks, `Track::layer_at`, Dissolve node in `compose`; CPU waveform/vectorscope/histogram.
-13. Browser: `debut-platform-web` (WebCodecs, OPFS, AudioWorklet) so the wasm engine can decode and play.
-14. Still open from the requirements: masks/keys/tracking, titles and captions, transcription, multicam switching UI, markers, bins, nested sequences in the renderer, hardware decode/encode, OpenFX/VST hosts, collaboration, GPU-surface viewer.
+13. ~~Preview quality, markers, titles~~ Done: Full/Half/Quarter/Auto preview with frame-cost control; timeline and clip markers with TSV export; `ClipSource::Title` rasterized by `debut-graphics` (fontdue) into an `Image` node, cached by content hash, edited in the Inspector.
+14. Browser: `debut-platform-web` (WebCodecs, OPFS, AudioWorklet) so the wasm engine can decode and play.
+15. Still open from the requirements: masks/keys/tracking, title templates and animation, captions, transcription, multicam switching UI, bins, nested sequences in the renderer, hardware decode/encode, OpenFX/VST hosts, collaboration, GPU-surface viewer.

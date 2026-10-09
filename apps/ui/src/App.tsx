@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { detectTarget, loadEngine, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
 import { ExportPanel } from "./ExportPanel";
-import { Inspector } from "./Inspector";
+import { Inspector, TitleEditor } from "./Inspector";
 import { Markers } from "./Markers";
 import { Mixer } from "./Mixer";
 import { Scopes } from "./Scopes";
@@ -77,6 +77,7 @@ export default function App() {
   }
 
   const fps = seq ? seq.frame_rate[0] / seq.frame_rate[1] : 25;
+  const selectedTitle = (selected && seq?.tracks.find((t) => t.id === selected.track)?.clips.find((c) => c.id === selected.clip)?.title) ?? null;
 
   async function save() {
     if (!engine?.saveProject) return;
@@ -162,6 +163,9 @@ export default function App() {
         {engine?.effects && (
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Inspector</h2>
+            {engine.media && selectedTitle && (
+              <TitleEditor media={engine.media} selected={selected} title={selectedTitle} onChanged={() => refresh(engine)} />
+            )}
             <Inspector effects={engine.effects} selected={selected} position={Math.round((tick?.position ?? 0) * 25) / 25} onChanged={() => refresh(engine)} />
           </>
         )}
