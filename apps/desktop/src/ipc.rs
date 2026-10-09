@@ -36,6 +36,8 @@ pub struct Session {
     /// The sequence shown in the timeline (TL-07): a nested one while it is
     /// opened for editing, else the project's first.
     active: Option<SequenceId>,
+    /// Media whose file could not be opened this session (MED-05).
+    offline: std::collections::HashSet<MediaId>,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -68,6 +70,7 @@ impl Session {
             recovered: 0,
             ids: IdGen::random(),
             active: None,
+            offline: Default::default(),
             player: None,
             audio_out: None,
             backend: AnyBackend::detect(),
@@ -250,7 +253,16 @@ impl Session {
             if player.frames.dimensions(id).is_some() {
                 continue;
             }
-            let video = FfmpegDecoder::open(&path).map_err(|e| e.to_string())?;
+            // A missing or unreadable file must not take the whole project down:
+            // its clips show the offline slate until it is relinked (MED-05).
+            let video = match FfmpegDecoder::open(&path) {
+                Ok(d) => d,
+                Err(_) => {
+                    self.offline.insert(id);
+                    continue;
+                }
+            };
+            self.offline.remove(&id);
             let has_audio = video.audio_info().is_some();
             let audio = if has_audio {
                 Some(
@@ -478,6 +490,8 @@ pub struct MediaDto {
     pub keywords: Vec<String>,
     #[serde(default)]
     pub rating: u8,
+    /// False when the file is missing or unreadable (MED-05); clips show a slate.
+    pub online: bool,
 }
 
 #[derive(Serialize)]
@@ -629,7 +643,24 @@ impl Session {
             bins: Vec::new(),
             keywords: Vec::new(),
             rating: 0,
+            online: true,
         })
+    }
+
+    /// Point `media` at `path` (relink, MED-05): the player reloads it.
+    pub fn relink_media(&mut self, media: &str, path: String) -> Result<(), String> {
+        let id = MediaId(parse_id(media)?);
+        let dec = FfmpegDecoder::open(&path).map_err(|e| format!("cannot open {path}: {e}"))?;
+        let v = dec.video_info().ok_or("file has no video stream")?.clone();
+        self.probed.insert(
+            id,
+            (v.width, v.height, v.duration, dec.audio_info().is_some()),
+        );
+        self.offline.remove(&id);
+        if let Some(p) = &mut self.player {
+            p.forget_media(id);
+        }
+        self.exec(Command::SetMediaPath { media: id, path })
     }
 
     /// Every media in the project with its bins; probes files not seen yet in
@@ -640,12 +671,18 @@ impl Session {
             if self.probed.contains_key(&m.id) {
                 continue;
             }
-            if let Ok(dec) = FfmpegDecoder::open(&m.path) {
-                if let Some(v) = dec.video_info() {
-                    self.probed.insert(
-                        m.id,
-                        (v.width, v.height, v.duration, dec.audio_info().is_some()),
-                    );
+            match FfmpegDecoder::open(&m.path) {
+                Ok(dec) => {
+                    if let Some(v) = dec.video_info() {
+                        self.probed.insert(
+                            m.id,
+                            (v.width, v.height, v.duration, dec.audio_info().is_some()),
+                        );
+                    }
+                    self.offline.remove(&m.id);
+                }
+                Err(_) => {
+                    self.offline.insert(m.id);
                 }
             }
         }
@@ -674,6 +711,7 @@ impl Session {
                         .collect(),
                     keywords: m.keywords.clone(),
                     rating: m.rating,
+                    online: !self.offline.contains(&m.id) && self.store.exists(&m.path),
                 }
             })
             .collect())
@@ -1751,7 +1789,10 @@ impl Session {
                         frames.set_sequences(&sequences);
                         samples.set_sequences(&sequences);
                         for (mid, path) in &media {
-                            let dec = FfmpegDecoder::open(path).map_err(|e| e.to_string())?;
+                            // Offline media export as the slate, like in the viewer.
+                            let Ok(dec) = FfmpegDecoder::open(path) else {
+                                continue;
+                            };
                             let has_audio = dec.audio_info().is_some();
                             frames.add(*mid, Box::new(dec)).map_err(|e| e.to_string())?;
                             if has_audio {
@@ -2302,6 +2343,11 @@ pub fn export_markers(state: State<'_, Shared>, path: String) -> Result<usize, S
 #[tauri::command]
 pub fn import_media(state: State<'_, Shared>, path: String) -> Result<MediaDto, String> {
     lock(&state).import_media(path)
+}
+
+#[tauri::command]
+pub fn relink_media(state: State<'_, Shared>, media: String, path: String) -> Result<(), String> {
+    lock(&state).relink_media(&media, path)
 }
 
 #[tauri::command]
@@ -3106,6 +3152,65 @@ mod tests {
         );
         s.remove_bin(&selects).unwrap();
         s.remove_bin(&tests).unwrap();
+
+        // Offline media (MED-05): a file that vanishes shows a slate instead of
+        // breaking playback; relinking brings the picture back.
+        let moved = dir.join("moved.mp4");
+        std::fs::copy(FIXTURE, &moved).unwrap();
+        let m3 = s
+            .import_media(moved.to_string_lossy().into_owned())
+            .unwrap();
+        let off_track = Track::new(s.ids.fresh(), TrackKind::Video);
+        let off_track_id = id_str(off_track.id.0);
+        let seq_id = s.first_sequence().unwrap().id;
+        s.exec(Command::AddTrack {
+            sequence: seq_id,
+            track: off_track,
+            index: None,
+        })
+        .unwrap();
+        s.add_clip(&off_track_id, &m3.id, 0.0).unwrap();
+        s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+        let (_, _, linked) = s.frame_pixels().unwrap();
+        std::fs::remove_file(&moved).unwrap();
+        s.player = None;
+        s.sync_player().unwrap();
+        let m3_now = s
+            .media_list()
+            .unwrap()
+            .into_iter()
+            .find(|x| x.id == m3.id)
+            .unwrap();
+        assert!(!m3_now.online, "missing file is reported offline");
+        let (_, _, slate) = s.frame_pixels().unwrap();
+        assert_ne!(slate, linked);
+        assert!(
+            slate.chunks(4).all(|p| p[0] == p[1] && p[1] == p[2]),
+            "grey slate on top"
+        );
+        assert!(s.relink_media(&m3.id, "/nowhere.mp4".into()).is_err());
+        s.relink_media(&m3.id, FIXTURE.to_string()).unwrap();
+        assert!(
+            s.media_list()
+                .unwrap()
+                .into_iter()
+                .find(|x| x.id == m3.id)
+                .unwrap()
+                .online
+        );
+        let (_, _, relinked) = s.frame_pixels().unwrap();
+        // Colour is back: the slate was grey everywhere, the pattern is not.
+        assert_ne!(relinked, slate);
+        assert!(
+            relinked
+                .chunks(4)
+                .any(|p| (p[0] as i32 - p[2] as i32).abs() > 50),
+            "relinked footage is in colour again"
+        );
+        s.workspace_mut().unwrap().undo().unwrap(); // relink
+        s.workspace_mut().unwrap().undo().unwrap(); // insert
+        s.workspace_mut().unwrap().undo().unwrap(); // track
+        s.sync_player().unwrap();
 
         // Lift the title again so the export below covers the original 2.4 s.
         s.edit(EditOp::Lift {

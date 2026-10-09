@@ -39,6 +39,8 @@ export interface MediaInfo {
   keywords: string[];
   /** 0 = unrated, else 1..5. */
   rating: number;
+  /** False when the file is missing; clips show a slate until relinked. */
+  online: boolean;
 }
 
 export type RuleField = "name" | "path" | "keyword" | "rating" | "reel" | "camera" | "audio";
@@ -317,6 +319,8 @@ export interface MediaApi {
   renameBin(id: string, name: string): Promise<void>;
   removeBin(id: string): Promise<void>;
   assignMedia(media: string, bin: string | null): Promise<void>;
+  /** Point a media at another file; the player reloads it. */
+  relinkMedia(media: string, path: string): Promise<void>;
   ensureSequence(): Promise<SequenceInfo>;
   sequence(): Promise<SequenceInfo>;
   /** Every sequence in the project; one is active (shown in the timeline). */

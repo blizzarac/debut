@@ -61,6 +61,11 @@ impl SampleCache {
         Ok(())
     }
 
+    /// Drop a media's decoder and buffer (before relinking it).
+    pub fn remove(&mut self, media: MediaId) {
+        self.sources.remove(&media);
+    }
+
     pub fn channels(&self, media: MediaId) -> Option<u16> {
         self.sources.get(&media).map(|s| s.channels)
     }
@@ -103,10 +108,12 @@ impl SampleSource for SampleCache {
     ) -> Result<u16> {
         let rate = self.rate;
         let keep_back = self.keep_back;
-        let src = self
-            .sources
-            .get_mut(&media)
-            .ok_or_else(|| Error::NotFound(format!("media {media:?}")))?;
+        let Some(src) = self.sources.get_mut(&media) else {
+            // Offline or video-only media: silence, not an error (MED-05).
+            out.clear();
+            out.resize(frames, 0.0);
+            return Ok(1);
+        };
         let ch = src.channels as usize;
         let s0 = (start * Rational::from_int(rate as i64)).round();
         let s1 = s0 + frames as i64;

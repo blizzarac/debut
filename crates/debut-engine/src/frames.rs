@@ -103,12 +103,41 @@ impl FrameSource {
     }
 }
 
+/// Size of the slate shown for media that has no decoder (offline or not yet
+/// linked, MED-05): 16:9 so it fits a frame like footage would.
+pub const OFFLINE_SIZE: (u32, u32) = (320, 180);
+
+/// The offline slate: dark grey with a lighter diagonal band, so a missing
+/// file is obvious in the viewer and the export without failing them.
+pub fn offline_frame() -> Vec<u8> {
+    let (w, h) = OFFLINE_SIZE;
+    let mut px = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let band = ((x + y) / 24) % 2 == 0;
+            let v = if band { 96 } else { 48 };
+            px.extend_from_slice(&[v, v, v, 255]);
+        }
+    }
+    px
+}
+
+impl FrameSource {
+    /// Drop a media's decoder and cache (before relinking it).
+    pub fn remove(&mut self, media: MediaId) {
+        self.sources.remove(&media);
+    }
+
+    pub fn has(&self, media: MediaId) -> bool {
+        self.sources.contains_key(&media)
+    }
+}
+
 impl FrameProvider for FrameSource {
     fn frame(&mut self, media: MediaId, t: Rational) -> Result<(u32, u32, Vec<u8>)> {
-        let src = self
-            .sources
-            .get_mut(&media)
-            .ok_or_else(|| Error::NotFound(format!("media {media:?}")))?;
+        let Some(src) = self.sources.get_mut(&media) else {
+            return Ok((OFFLINE_SIZE.0, OFFLINE_SIZE.1, offline_frame()));
+        };
         let covers = |c: &Cached| c.pts <= t && t < c.pts + src.frame_duration;
 
         if let Some(c) = src.recent.iter().find(|c| covers(c)) {

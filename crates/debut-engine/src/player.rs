@@ -30,7 +30,7 @@ pub struct Player {
 
 impl SourceInfo for FrameSource {
     fn dimensions(&self, media: MediaId) -> (u32, u32) {
-        FrameSource::dimensions(self, media).unwrap_or((1, 1))
+        FrameSource::dimensions(self, media).unwrap_or(crate::frames::OFFLINE_SIZE)
     }
     fn title(&self, title: &debut_project::Title) -> Option<Arc<debut_render::Image8>> {
         FrameSource::title(self, title)
@@ -62,6 +62,12 @@ impl Player {
     pub fn set_sequences(&mut self, all: &[Sequence]) {
         self.frames.set_sequences(all);
         self.samples.set_sequences(all);
+    }
+
+    /// Forget a media's decoders so the next `add_media` reloads it (relink).
+    pub fn forget_media(&mut self, media: MediaId) {
+        self.frames.remove(media);
+        self.samples.remove(media);
     }
 
     /// Register media. Video-only or audio-only files are fine.

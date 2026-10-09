@@ -27,6 +27,7 @@ export function MediaPanel({
   const [ruleField, setRuleField] = useState<RuleField>("name");
   const [ruleValue, setRuleValue] = useState("");
   const [tagging, setTagging] = useState<string | null>(null);
+  const [relink, setRelink] = useState<{ id: string; path: string } | null>(null);
   const act = (p: Promise<unknown>) => p.then(onChanged).catch((e) => onStatus(String(e)));
   const name = (m: MediaInfo) => m.path.split("/").pop() ?? m.path;
   const q = search.toLowerCase();
@@ -99,7 +100,12 @@ export function MediaPanel({
       <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
         {shown.map((m) => (
           <li key={m.id} style={{ padding: "4px 2px", borderBottom: "1px solid #eee", display: "grid", gridTemplateColumns: "1fr auto auto", gap: 4, alignItems: "center" }}>
-            <span title={m.path} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <span title={m.path} style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", color: m.online ? undefined : "#c33" }}>
+              {!m.online && (
+                <button onClick={() => setRelink({ id: m.id, path: m.path })} title="File missing: click to relink" style={{ marginRight: 4, color: "#c33", borderColor: "#c33" }}>
+                  offline
+                </button>
+              )}
               {name(m)} · {m.width}×{m.height} · {m.duration.toFixed(2)}s
             </span>
             {manual.length > 0 ? (
@@ -117,6 +123,13 @@ export function MediaPanel({
             <button onClick={() => onInsert(m)} title="Insert at playhead">
               +
             </button>
+            {relink?.id === m.id && (
+              <div style={{ gridColumn: "1 / -1", display: "flex", gap: 4 }}>
+                <input value={relink.path} onChange={(e) => setRelink({ id: m.id, path: e.target.value })} placeholder="/new/path/to/file.mp4" style={{ flex: 1, minWidth: 0 }} />
+                <button onClick={() => { act(media.relinkMedia(m.id, relink.path)); setRelink(null); }}>Relink</button>
+                <button onClick={() => setRelink(null)}>×</button>
+              </div>
+            )}
             <div style={{ gridColumn: "1 / -1", display: "flex", gap: 4, alignItems: "center", color: "#666" }}>
               <span title="rating" style={{ letterSpacing: 1, cursor: "pointer" }}>
                 {[1, 2, 3, 4, 5].map((n) => (

@@ -194,6 +194,11 @@ pub enum Command {
         media: MediaId,
         bin: Option<BinId>,
     },
+    /// Point a media at another file (relink, MED-05).
+    SetMediaPath {
+        media: MediaId,
+        path: String,
+    },
     /// Keywords and star rating of a media (MED-08).
     SetMediaTags {
         media: MediaId,
@@ -639,6 +644,16 @@ impl Command {
                 }
                 Ok(())
             }
+            Command::SetMediaPath { media, path } => {
+                let m = project
+                    .media
+                    .iter_mut()
+                    .find(|m| m.id == *media)
+                    .ok_or_else(|| Error::NotFound(format!("media {media:?}")))?;
+                m.path = path.clone();
+                m.online = true;
+                Ok(())
+            }
             Command::SetMediaTags {
                 media,
                 keywords,
@@ -1002,6 +1017,15 @@ impl Command {
                     .find(|b| !b.is_smart() && b.items.contains(media))
                     .map(|b| b.id),
             }),
+            Command::SetMediaPath { media, .. } => project
+                .media
+                .iter()
+                .find(|m| m.id == *media)
+                .map(|m| Command::SetMediaPath {
+                    media: *media,
+                    path: m.path.clone(),
+                })
+                .ok_or_else(|| Error::NotFound(format!("media {media:?}"))),
             Command::SetMediaTags { media, .. } => project
                 .media
                 .iter()

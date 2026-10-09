@@ -65,6 +65,9 @@ class TauriMedia implements MediaApi {
   assignMedia(media: string, bin: string | null) {
     return invoke<void>("assign_media", { media, bin });
   }
+  relinkMedia(media: string, path: string) {
+    return invoke<void>("relink_media", { media, path });
+  }
   ensureSequence() {
     return invoke<SequenceInfo>("ensure_sequence");
   }

@@ -28,6 +28,7 @@ pub fn run() {
             ipc::can_undo,
             ipc::import_media,
             ipc::media_list,
+            ipc::relink_media,
             ipc::bins,
             ipc::add_bin,
             ipc::add_smart_bin,
