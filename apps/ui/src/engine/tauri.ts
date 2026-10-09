@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EditOp, EffectInfo, EffectsApi, Engine, Frame, MediaApi, MediaInfo, ParamName, PlayerApi, SequenceInfo, Tick, TransportAction } from "./index";
+import type { EditOp, EffectInfo, EffectsApi, Engine, FileStatus, Frame, MediaApi, MediaInfo, ParamName, PlayerApi, SequenceInfo, Tick, TransportAction } from "./index";
 
 class TauriMedia implements MediaApi {
   importMedia(path: string) {
@@ -66,6 +66,15 @@ export class TauriEngine implements Engine {
   }
   projectJson() {
     return invoke<string>("project_json");
+  }
+  saveProject(path: string | null) {
+    return invoke<FileStatus>("save_project", { path });
+  }
+  openProjectFile(path: string) {
+    return invoke<FileStatus>("open_project_file", { path });
+  }
+  fileStatus() {
+    return invoke<FileStatus>("file_status");
   }
   execute(commandJson: string) {
     return invoke<void>("execute", { commandJson });

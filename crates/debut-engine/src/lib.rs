@@ -16,6 +16,7 @@ pub use frames::FrameSource;
 pub use playback::{Stats, Transport};
 pub use player::Player;
 pub use samples::SampleCache;
+pub use session::{FileJournal, Opened, Workspace};
 
 pub struct Engine<P: Platform> {
     pub platform: P,

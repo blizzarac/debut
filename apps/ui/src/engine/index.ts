@@ -3,11 +3,22 @@
 // Rust compiled to WebAssembly. Optional parts (`media`, `player`) are capability
 // flags: a target that lacks them shows the difference instead of failing (PLT-05).
 
+export interface FileStatus {
+  path: string | null;
+  dirty: boolean;
+  /** Commands recovered from the journal when the file was last opened. */
+  recovered: number;
+}
+
 export interface ProjectApi {
   version(): Promise<string>;
   newProject(name: string): Promise<void>;
   openProject(json: string): Promise<void>;
   projectJson(): Promise<string>;
+  /** Desktop only: project files on disk with autosave and crash recovery. */
+  saveProject?(path: string | null): Promise<FileStatus>;
+  openProjectFile?(path: string): Promise<FileStatus>;
+  fileStatus?(): Promise<FileStatus>;
   /** Apply a `Command` (serde JSON form) through the undo history. */
   execute(commandJson: string): Promise<void>;
   undo(): Promise<boolean>;

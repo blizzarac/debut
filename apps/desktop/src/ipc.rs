@@ -1,14 +1,15 @@
 //! IPC commands. All project mutation goes through the command history; the
 //! player is rebuilt from the project's sequence after every edit.
 
-use debut_command::{Command, History, Journal, MemoryJournal, Target};
+use debut_command::{Command, Target};
 use debut_core::{ClipId, FrameRate, IdGen, MediaId, Rational, TrackId};
-use debut_engine::{Player, Stats};
+use debut_engine::{Player, Stats, Workspace};
 use debut_export::job::to_rgba8;
 use debut_platform::audio_out::AudioOut;
-use debut_platform::Decoder;
+use debut_platform::{Decoder, FileStore};
 use debut_platform_native::audio_out::{CpalAudioOut, SilentAudioOut};
 use debut_platform_native::codec::FfmpegDecoder;
+use debut_platform_native::file_store::NativeFileStore;
 use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
     schema, Clip, ClipSource, Effect, GradeFx, Param, Project, Sequence, Track, TrackKind,
@@ -16,13 +17,15 @@ use debut_project::{
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
+use std::time::Instant;
 use tauri::State;
 
 pub struct Session {
-    project: Option<Project>,
-    history: History,
-    journal: MemoryJournal,
+    workspace: Option<Workspace>,
+    store: Arc<dyn FileStore>,
+    /// Commands replayed from the journal when the current file was opened.
+    recovered: usize,
     ids: IdGen,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
@@ -40,9 +43,9 @@ impl Default for Session {
 impl Session {
     pub fn new() -> Self {
         Self {
-            project: None,
-            history: History::default(),
-            journal: MemoryJournal::default(),
+            workspace: None,
+            store: Arc::new(NativeFileStore::new("/")),
+            recovered: 0,
             ids: IdGen::random(),
             player: None,
             audio_out: None,
@@ -51,29 +54,106 @@ impl Session {
         }
     }
 
+    fn project(&self) -> Option<&Project> {
+        self.workspace.as_ref().map(|w| &w.project)
+    }
+
     fn project_mut(&mut self) -> Result<&mut Project, String> {
-        self.project
+        self.workspace
+            .as_mut()
+            .map(|w| &mut w.project)
+            .ok_or_else(|| "no project open".to_string())
+    }
+
+    fn workspace_mut(&mut self) -> Result<&mut Workspace, String> {
+        self.workspace
             .as_mut()
             .ok_or_else(|| "no project open".to_string())
     }
 
+    /// Where a new project lives until Save As: `~/debut-projects/<name>.debut`.
+    fn default_path(name: &str) -> String {
+        let base = std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir)
+            .join("debut-projects");
+        let safe: String = name
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        base.join(format!("{safe}.debut"))
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    /// Start a fresh workspace around `project` at `path`.
+    pub fn start(&mut self, project: Project, path: String) -> Result<(), String> {
+        self.workspace = Some(
+            Workspace::create(Arc::clone(&self.store), path, project).map_err(|e| e.to_string())?,
+        );
+        self.recovered = 0;
+        self.player = None;
+        self.sync_player()
+    }
+
+    pub fn save_project(&mut self, path: Option<String>) -> Result<FileStatus, String> {
+        let ws = self.workspace_mut()?;
+        match path {
+            Some(p) if p != ws.path => ws.save_as(p).map_err(|e| e.to_string())?,
+            _ => ws.save().map_err(|e| e.to_string())?,
+        }
+        Ok(self.file_status())
+    }
+
+    pub fn open_project_file(&mut self, path: String) -> Result<FileStatus, String> {
+        let (ws, opened) =
+            Workspace::open(Arc::clone(&self.store), path).map_err(|e| e.to_string())?;
+        self.workspace = Some(ws);
+        self.recovered = opened.recovered;
+        self.player = None;
+        self.probed.clear();
+        // Re-probe media so sequences and clip insertion keep working.
+        let media: Vec<(MediaId, String)> = self
+            .project()
+            .map(|p| p.media.iter().map(|m| (m.id, m.path.clone())).collect())
+            .unwrap_or_default();
+        for (id, path) in media {
+            if let Ok(dec) = FfmpegDecoder::open(&path) {
+                if let Some(v) = dec.video_info() {
+                    self.probed.insert(
+                        id,
+                        (v.width, v.height, v.duration, dec.audio_info().is_some()),
+                    );
+                }
+            }
+        }
+        self.sync_player()?;
+        Ok(self.file_status())
+    }
+
+    pub fn file_status(&self) -> FileStatus {
+        FileStatus {
+            path: self.workspace.as_ref().map(|w| w.path.clone()),
+            dirty: self.workspace.as_ref().is_some_and(|w| w.is_dirty()),
+            recovered: self.recovered,
+        }
+    }
+
     fn exec(&mut self, cmd: Command) -> Result<(), String> {
-        let Session {
-            project,
-            history,
-            journal,
-            ..
-        } = self;
-        let p = project.as_mut().ok_or("no project open")?;
-        history
-            .execute(p, cmd, journal as &mut dyn Journal)
+        self.workspace_mut()?
+            .execute(cmd)
             .map_err(|e| e.to_string())?;
         self.sync_player()
     }
 
     fn first_sequence(&self) -> Result<&Sequence, String> {
-        self.project
-            .as_ref()
+        self.project()
             .and_then(|p| p.sequences.first())
             .ok_or_else(|| "no sequence".to_string())
     }
@@ -81,18 +161,12 @@ impl Session {
     /// Rebuild the player's view of the sequence after an edit, keeping transport
     /// state; create it on first use.
     fn sync_player(&mut self) -> Result<(), String> {
-        let Some(seq) = self
-            .project
-            .as_ref()
-            .and_then(|p| p.sequences.first())
-            .cloned()
-        else {
+        let Some(seq) = self.project().and_then(|p| p.sequences.first()).cloned() else {
             self.player = None;
             return Ok(());
         };
         let media: Vec<(MediaId, String)> = self
-            .project
-            .as_ref()
+            .project()
             .map(|p| p.media.iter().map(|m| (m.id, m.path.clone())).collect())
             .unwrap_or_default();
         if self.player.is_none() {
@@ -160,32 +234,49 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+#[derive(Serialize)]
+pub struct FileStatus {
+    pub path: Option<String>,
+    pub dirty: bool,
+    pub recovered: usize,
+}
+
 #[tauri::command]
-pub fn new_project(state: State<'_, Shared>, name: String) {
+pub fn new_project(state: State<'_, Shared>, name: String) -> Result<(), String> {
     let mut s = lock(&state);
     let id = s.ids.fresh();
-    s.project = Some(Project::new(id, name));
-    s.history = History::default();
-    s.journal = MemoryJournal::default();
-    s.player = None;
+    let path = Session::default_path(&name);
+    s.start(Project::new(id, name), path)
 }
 
 #[tauri::command]
 pub fn open_project(state: State<'_, Shared>, json: String) -> Result<(), String> {
     let project = schema::from_json(&json).map_err(|e| e.to_string())?;
     let mut s = lock(&state);
-    s.project = Some(project);
-    s.history = History::default();
-    s.journal = MemoryJournal::default();
-    s.player = None;
-    s.sync_player()
+    let path = Session::default_path(&project.name);
+    s.start(project, path)
 }
 
 #[tauri::command]
 pub fn project_json(state: State<'_, Shared>) -> Result<String, String> {
     let s = lock(&state);
-    let p = s.project.as_ref().ok_or("no project open")?;
+    let p = s.project().ok_or("no project open")?;
     schema::to_json(p).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_project(state: State<'_, Shared>, path: Option<String>) -> Result<FileStatus, String> {
+    lock(&state).save_project(path)
+}
+
+#[tauri::command]
+pub fn open_project_file(state: State<'_, Shared>, path: String) -> Result<FileStatus, String> {
+    lock(&state).open_project_file(path)
+}
+
+#[tauri::command]
+pub fn file_status(state: State<'_, Shared>) -> FileStatus {
+    lock(&state).file_status()
 }
 
 #[tauri::command]
@@ -197,16 +288,7 @@ pub fn execute(state: State<'_, Shared>, command_json: String) -> Result<(), Str
 #[tauri::command]
 pub fn undo(state: State<'_, Shared>) -> Result<bool, String> {
     let mut s = lock(&state);
-    let Session {
-        project,
-        history,
-        journal,
-        ..
-    } = &mut *s;
-    let p = project.as_mut().ok_or("no project open")?;
-    let r = history
-        .undo(p, journal as &mut dyn Journal)
-        .map_err(|e| e.to_string())?;
+    let r = s.workspace_mut()?.undo().map_err(|e| e.to_string())?;
     s.sync_player()?;
     Ok(r)
 }
@@ -214,23 +296,17 @@ pub fn undo(state: State<'_, Shared>) -> Result<bool, String> {
 #[tauri::command]
 pub fn redo(state: State<'_, Shared>) -> Result<bool, String> {
     let mut s = lock(&state);
-    let Session {
-        project,
-        history,
-        journal,
-        ..
-    } = &mut *s;
-    let p = project.as_mut().ok_or("no project open")?;
-    let r = history
-        .redo(p, journal as &mut dyn Journal)
-        .map_err(|e| e.to_string())?;
+    let r = s.workspace_mut()?.redo().map_err(|e| e.to_string())?;
     s.sync_player()?;
     Ok(r)
 }
 
 #[tauri::command]
 pub fn can_undo(state: State<'_, Shared>) -> bool {
-    lock(&state).history.can_undo()
+    lock(&state)
+        .workspace
+        .as_ref()
+        .is_some_and(|w| w.history.can_undo())
 }
 
 // ---- media and sequence -------------------------------------------------------
@@ -343,8 +419,7 @@ impl Session {
     pub fn ensure_sequence(&mut self) -> Result<SequenceDto, String> {
         if self.first_sequence().is_err() {
             let (w, h, fr) = self
-                .project
-                .as_ref()
+                .project()
                 .and_then(|p| p.media.first())
                 .and_then(|m| {
                     self.probed.get(&m.id).map(|&(w, h, _, _)| {
@@ -413,8 +488,8 @@ impl Session {
             })
         };
         let clip = |c: &str| -> Result<ClipId, String> { Ok(ClipId(parse_id(c)?)) };
-        let Session { project, ids, .. } = self;
-        let project = project.as_ref().ok_or("no project open")?;
+        let Session { workspace, ids, .. } = self;
+        let project = &workspace.as_ref().ok_or("no project open")?.project;
         let cmd = match op {
             EditOp::RippleHead {
                 track,
@@ -510,6 +585,10 @@ impl Session {
     }
 
     pub fn tick(&mut self) -> Result<TickDto, String> {
+        if let Some(ws) = self.workspace.as_mut() {
+            ws.maybe_autosave(Instant::now())
+                .map_err(|e| e.to_string())?;
+        }
         if self.player.is_none() {
             self.sync_player()?;
         }
@@ -841,9 +920,13 @@ mod tests {
     /// play against the silent audio output, pull frames, edit, undo.
     #[test]
     fn desktop_session_flow() {
+        let dir = std::env::temp_dir().join(format!("debut-session-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("t.debut").to_string_lossy().into_owned();
         let mut s = Session::new();
         let id = s.ids.fresh();
-        s.project = Some(Project::new(id, "t"));
+        s.start(Project::new(id, "t"), path.clone()).unwrap();
+        assert_eq!(s.file_status().path.as_deref(), Some(path.as_str()));
 
         let m = s.import_media(FIXTURE.to_string()).unwrap();
         assert_eq!((m.width, m.height, m.has_audio), (64, 36, true));
@@ -963,20 +1046,45 @@ mod tests {
             sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[0].duration,
             1.0
         );
-        let Session {
-            project,
-            history,
-            journal,
-            ..
-        } = &mut s;
-        history
-            .undo(project.as_mut().unwrap(), journal as &mut dyn Journal)
-            .unwrap();
+        s.workspace_mut().unwrap().undo().unwrap();
         s.sync_player().unwrap();
         assert_eq!(
             sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[0].duration,
             2.0
         );
         assert_eq!(s.player.as_ref().unwrap().sequence.duration().as_f64(), 2.4);
+
+        // Persistence: save, keep editing, "crash", reopen: the unsaved edit is recovered.
+        assert!(s.file_status().dirty);
+        let st = s.save_project(None).unwrap();
+        assert!(!st.dirty && std::path::Path::new(&path).exists());
+        s.edit(EditOp::Lift {
+            track: v.clone(),
+            start: 0.4,
+            end: 1.0,
+        })
+        .unwrap();
+        let clips_after_lift = sequence_dto(s.first_sequence().unwrap()).tracks[0]
+            .clips
+            .len();
+        drop(s);
+        let mut s2 = Session::new();
+        let st = s2.open_project_file(path.clone()).unwrap();
+        assert_eq!(st.recovered, 1, "the lift was journaled but not saved");
+        assert!(st.dirty);
+        assert_eq!(
+            sequence_dto(s2.first_sequence().unwrap()).tracks[0]
+                .clips
+                .len(),
+            clips_after_lift
+        );
+        // The reopened project plays: media was re-probed and decoders rebuilt.
+        s2.transport(TransportAction::Seek { t: 1.2 }).unwrap();
+        let (w, _, px) = s2.frame_pixels().unwrap();
+        assert_eq!(w, 64);
+        assert!(px
+            .chunks(4)
+            .any(|p| p[0] as u32 + p[1] as u32 + p[2] as u32 > 60));
+        std::fs::remove_dir_all(dir).ok();
     }
 }

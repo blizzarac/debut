@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { detectTarget, loadEngine, type Engine, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
+import { detectTarget, loadEngine, type Engine, type FileStatus, type MediaInfo, type SequenceInfo, type Tick } from "./engine";
 import { Inspector } from "./Inspector";
 import { Timeline, type Selection } from "./Timeline";
 import { Transport } from "./Transport";
@@ -16,9 +16,12 @@ export default function App() {
   const [canUndo, setCanUndo] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
   const [selected, setSelected] = useState<Selection>(null);
+  const [file, setFile] = useState<FileStatus | null>(null);
+  const [filePath, setFilePath] = useState("");
 
   const refresh = useCallback(async (e: Engine) => {
     if (e.media) setSeq(await e.media.sequence().catch(() => null));
+    if (e.fileStatus) setFile(await e.fileStatus().catch(() => null));
     setCanUndo(await e.canUndo());
     setRefreshKey((k) => k + 1);
   }, []);
@@ -30,6 +33,7 @@ export default function App() {
         setVersion(await e.version());
         await e.newProject("Untitled");
         if (e.media) setSeq(await e.media.ensureSequence());
+        if (e.fileStatus) setFile(await e.fileStatus().catch(() => null));
         setStatus("ready");
       })
       .catch((err) => setStatus(`engine failed: ${err}`));
@@ -62,6 +66,30 @@ export default function App() {
 
   const fps = seq ? seq.frame_rate[0] / seq.frame_rate[1] : 25;
 
+  async function save() {
+    if (!engine?.saveProject) return;
+    try {
+      setFile(await engine.saveProject(filePath || null));
+      setStatus("saved");
+    } catch (err) {
+      setStatus(`save failed: ${err}`);
+    }
+  }
+
+  async function openFile() {
+    if (!engine?.openProjectFile || !filePath) return;
+    try {
+      const f = await engine.openProjectFile(filePath);
+      setFile(f);
+      setMediaList([]);
+      setSelected(null);
+      await refresh(engine);
+      setStatus(f.recovered > 0 ? `opened, recovered ${f.recovered} unsaved edits` : "opened");
+    } catch (err) {
+      setStatus(`open failed: ${err}`);
+    }
+  }
+
   return (
     <main style={{ fontFamily: "system-ui", padding: 16, display: "grid", gridTemplateColumns: "260px 1fr", gap: 16, height: "100vh", boxSizing: "border-box" }}>
       <aside style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -77,6 +105,25 @@ export default function App() {
             Redo
           </button>
         </div>
+        {engine?.saveProject && (
+          <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
+            <div style={{ display: "flex", gap: 4 }}>
+              <input value={filePath} onChange={(e) => setFilePath(e.target.value)} placeholder={file?.path ?? "/path/to/project.debut"} style={{ flex: 1 }} />
+              <button onClick={save} title="Save (autosaves every 2 min while dirty)">
+                Save{file?.dirty ? " •" : ""}
+              </button>
+              <button onClick={openFile} disabled={!filePath}>
+                Open
+              </button>
+            </div>
+            {file?.path && (
+              <span style={{ color: "#888" }} title={file.path}>
+                {file.path.split("/").pop()}
+                {file.dirty ? " (unsaved changes)" : ""}
+              </span>
+            )}
+          </div>
+        )}
         {engine?.media ? (
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Media</h2>
