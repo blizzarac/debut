@@ -31,6 +31,8 @@ pub fn run() {
             ipc::media_list,
             ipc::waveform,
             ipc::snap_points,
+            ipc::linked_selection,
+            ipc::set_linked_selection,
             ipc::relink_media,
             ipc::create_proxies,
             ipc::proxy_status,

@@ -50,6 +50,12 @@ class TauriMedia implements MediaApi {
   mediaList() {
     return invoke<MediaInfo[]>("media_list");
   }
+  linkedSelection() {
+    return invoke<boolean>("linked_selection");
+  }
+  setLinkedSelection(on: boolean) {
+    return invoke<void>("set_linked_selection", { on });
+  }
   snapPoints(exclude: string | null) {
     return invoke<SnapPoint[]>("snap_points", { exclude });
   }

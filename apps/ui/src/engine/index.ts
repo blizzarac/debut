@@ -373,7 +373,10 @@ export interface MediaApi {
   importMedia(path: string): Promise<MediaInfo>;
   /** Every media in the project (also after opening a file). */
   mediaList(): Promise<MediaInfo[]>;
-  /** Snap targets for a drag, leaving out the clip being dragged. */
+  /** Whether edits follow a clip's linked partners (same source and span) on other tracks. */
+  linkedSelection?(): Promise<boolean>;
+  setLinkedSelection?(on: boolean): Promise<void>;
+  /** Snap targets for a drag, leaving out the clip being dragged (and its partners). */
   snapPoints?(exclude: string | null): Promise<SnapPoint[]>;
   /** [min, max] audio peaks of a media between source times; null while still being built. */
   waveform?(media: string, start: number, end: number, buckets: number): Promise<[number, number][] | null>;

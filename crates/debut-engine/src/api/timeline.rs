@@ -202,7 +202,7 @@ pub(crate) fn sequence_dto(seq: &Sequence) -> SequenceDto {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum EditOp {
     RippleHead {
@@ -281,6 +281,51 @@ pub enum EditOp {
     },
 }
 
+impl EditOp {
+    /// The same edit on another track (and clip, for clip edits).
+    fn retarget(&self, track: String, clip: String) -> EditOp {
+        let mut op = self.clone();
+        match &mut op {
+            EditOp::RippleHead {
+                track: t, clip: c, ..
+            }
+            | EditOp::RippleTail {
+                track: t, clip: c, ..
+            }
+            | EditOp::Roll {
+                track: t, clip: c, ..
+            }
+            | EditOp::Slip {
+                track: t, clip: c, ..
+            }
+            | EditOp::Slide {
+                track: t, clip: c, ..
+            }
+            | EditOp::Move {
+                track: t, clip: c, ..
+            }
+            | EditOp::Speed {
+                track: t, clip: c, ..
+            }
+            | EditOp::Ramp {
+                track: t, clip: c, ..
+            }
+            | EditOp::Transition {
+                track: t, clip: c, ..
+            } => {
+                *t = track;
+                *c = clip;
+            }
+            EditOp::Blade { track: t, .. }
+            | EditOp::Extract { track: t, .. }
+            | EditOp::Lift { track: t, .. }
+            | EditOp::CloseGaps { track: t } => *t = track,
+            EditOp::Nest { .. } => {}
+        }
+        op
+    }
+}
+
 /// A place an edit may snap to (TL-06).
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct SnapPointDto {
@@ -293,13 +338,28 @@ impl Session {
     /// Where a drag may snap to: sequence start, playhead, every clip edge and
     /// marker, leaving out the clip being dragged.
     pub fn snap_points(&self, exclude: Option<String>) -> Result<Vec<SnapPointDto>, String> {
-        let exclude = match exclude {
-            Some(c) => Some(ClipId(parse_id(&c)?)),
-            None => None,
-        };
         let seq = self.first_sequence()?;
+        // The dragged clip and, with linked selection, its partners move
+        // together, so none of their edges are targets.
+        let mut skip = Vec::new();
+        if let Some(c) = exclude {
+            let id = ClipId(parse_id(&c)?);
+            let track = seq
+                .tracks
+                .iter()
+                .find(|t| t.clip(id).is_some())
+                .ok_or("clip not found")?;
+            if self.linked_selection {
+                skip.extend(
+                    debut_timeline::linked(seq, track.id, id)
+                        .into_iter()
+                        .map(|(_, c)| c),
+                );
+            }
+            skip.push(id);
+        }
         Ok(
-            debut_timeline::snap_targets(seq, seq.frame_rate.snap(self.playhead()), exclude)
+            debut_timeline::snap_targets(seq, seq.frame_rate.snap(self.playhead()), &skip)
                 .into_iter()
                 .map(|s| SnapPointDto {
                     t: secs(s.t),
@@ -377,7 +437,74 @@ impl Session {
         self.exec(cmd)
     }
 
+    /// Apply a timeline edit. With linked selection on, clip edits, blades and
+    /// ripple deletes also apply to the clip's partners on other tracks (TL-05),
+    /// all in one undo step.
     pub fn edit(&mut self, op: EditOp) -> Result<(), String> {
+        let ops = if self.linked_selection {
+            self.with_partners(op)?
+        } else {
+            vec![op]
+        };
+        let mut cmds = Vec::with_capacity(ops.len());
+        for op in ops {
+            cmds.push(self.edit_command(op)?);
+        }
+        let cmd = if cmds.len() == 1 {
+            cmds.pop().unwrap()
+        } else {
+            Command::Group(cmds)
+        };
+        self.exec(cmd)
+    }
+
+    /// `op` plus the same edit retargeted at each linked partner.
+    fn with_partners(&self, op: EditOp) -> Result<Vec<EditOp>, String> {
+        let seq = self.first_sequence()?;
+        let fr = seq.frame_rate;
+        let track_of = |t: &str| parse_id(t).map(TrackId);
+        let partners = match &op {
+            EditOp::RippleHead { track, clip, .. }
+            | EditOp::RippleTail { track, clip, .. }
+            | EditOp::Roll { track, clip, .. }
+            | EditOp::Slip { track, clip, .. }
+            | EditOp::Slide { track, clip, .. }
+            | EditOp::Move { track, clip, .. }
+            | EditOp::Speed { track, clip, .. }
+            | EditOp::Ramp { track, clip, .. } => {
+                debut_timeline::linked(seq, track_of(track)?, ClipId(parse_id(clip)?))
+            }
+            EditOp::Blade { track, at } => {
+                let t = track_of(track)?;
+                debut_timeline::clip_at(seq, t, frames_of(*at, fr))
+                    .map(|c| debut_timeline::linked(seq, t, c))
+                    .unwrap_or_default()
+            }
+            EditOp::Extract { track, start, end } | EditOp::Lift { track, start, end } => {
+                let t = track_of(track)?;
+                debut_timeline::clip_spanning(seq, t, frames_of(*start, fr), frames_of(*end, fr))
+                    .map(|c| debut_timeline::linked(seq, t, c))
+                    .unwrap_or_default()
+            }
+            _ => Vec::new(),
+        };
+        let mut out = Vec::with_capacity(partners.len() + 1);
+        for (t, c) in partners {
+            out.push(op.retarget(id_str(t.0), id_str(c.0)));
+        }
+        out.insert(0, op);
+        Ok(out)
+    }
+
+    pub fn linked_selection(&self) -> bool {
+        self.linked_selection
+    }
+
+    pub fn set_linked_selection(&mut self, on: bool) {
+        self.linked_selection = on;
+    }
+
+    fn edit_command(&mut self, op: EditOp) -> Result<Command, String> {
         let (seq_id, fr) = {
             let seq = self.first_sequence()?;
             (seq.id, seq.frame_rate)
@@ -504,6 +631,6 @@ impl Session {
                 .and_then(|seq| nest_command(seq, frames_of(start, fr), frames_of(end, fr), ids)),
         }
         .map_err(|e| e.to_string())?;
-        self.exec(cmd)
+        Ok(cmd)
     }
 }

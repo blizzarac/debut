@@ -528,6 +528,16 @@ pub fn waveform(
 }
 
 #[tauri::command]
+pub fn linked_selection(state: State<'_, Shared>) -> bool {
+    lock(&state).linked_selection()
+}
+
+#[tauri::command]
+pub fn set_linked_selection(state: State<'_, Shared>, on: bool) {
+    lock(&state).set_linked_selection(on)
+}
+
+#[tauri::command]
 pub fn snap_points(
     state: State<'_, Shared>,
     exclude: Option<String>,

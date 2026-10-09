@@ -21,14 +21,10 @@ pub struct SnapTarget {
 }
 
 /// Every place an edit may snap to: the sequence start, the playhead, the
-/// edges of every clip on every track except `exclude` (the clip being
+/// edges of every clip on every track except `exclude` (the clips being
 /// dragged), and timeline and clip markers. Sorted by time; a time that is
 /// several kinds keeps the first kind in `SnapKind` order.
-pub fn snap_targets(
-    seq: &Sequence,
-    playhead: Rational,
-    exclude: Option<ClipId>,
-) -> Vec<SnapTarget> {
+pub fn snap_targets(seq: &Sequence, playhead: Rational, exclude: &[ClipId]) -> Vec<SnapTarget> {
     let mut out = vec![
         SnapTarget {
             t: Rational::ZERO,
@@ -40,7 +36,7 @@ pub fn snap_targets(
         },
     ];
     for track in &seq.tracks {
-        for c in track.clips.iter().filter(|c| Some(c.id) != exclude) {
+        for c in track.clips.iter().filter(|c| !exclude.contains(&c.id)) {
             for t in [c.timeline_in, c.timeline_out()] {
                 out.push(SnapTarget {
                     t,
@@ -134,14 +130,14 @@ mod tests {
     fn targets_cover_edges_markers_playhead_and_skip_the_dragged_clip() {
         let (p, _, clips) = project();
         let seq = &p.sequences[0];
-        let ts = |exclude| -> Vec<Rational> {
+        let ts = |exclude: &[ClipId]| -> Vec<Rational> {
             snap_targets(seq, Rational::new(5, 2), exclude)
                 .iter()
                 .map(|s| s.t)
                 .collect()
         };
         assert_eq!(
-            ts(None),
+            ts(&[]),
             vec![
                 secs(0),
                 secs(1),
@@ -156,10 +152,10 @@ mod tests {
             ]
         );
         // Dragging the middle clip: its own edges and markers are not targets.
-        assert!(!ts(Some(clips[1])).contains(&secs(5)));
-        assert!(!ts(Some(clips[1])).contains(&Rational::new(11, 2)));
+        assert!(!ts(&[clips[1]]).contains(&secs(5)));
+        assert!(!ts(&[clips[1]]).contains(&Rational::new(11, 2)));
         // Where the playhead sits on a clip edge, the target is reported as the playhead.
-        let on_edge = snap_targets(seq, secs(3), None);
+        let on_edge = snap_targets(seq, secs(3), &[]);
         assert_eq!(
             on_edge.iter().find(|s| s.t == secs(3)).unwrap().kind,
             SnapKind::Playhead

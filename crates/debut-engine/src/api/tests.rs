@@ -1224,6 +1224,97 @@ fn proxies_build_in_the_background_and_switch_the_player() {
     assert_eq!(dims(&s), Some((64, 36)), "stale proxy is not used");
 }
 
+/// Linked selection: picture and sound of one insert edit together (TL-05).
+#[test]
+fn linked_clips_edit_together_until_unlinked() {
+    let Fx {
+        mut s,
+        v,
+        a,
+        clip_id,
+        ..
+    } = fixture("linked_clips_edit_together_until_unlinked");
+    let spans = |s: &Session| {
+        sequence_dto(s.first_sequence().unwrap())
+            .tracks
+            .iter()
+            .map(|t| {
+                t.clips
+                    .iter()
+                    .map(|c| (c.timeline_in, c.duration))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(s.linked_selection());
+    // Speed on the picture retimes the sound too.
+    s.edit(EditOp::Speed {
+        track: v.clone(),
+        clip: clip_id.clone(),
+        speed: 0.5,
+        ripple: true,
+    })
+    .unwrap();
+    assert_eq!(spans(&s), vec![vec![(0.4, 4.0)], vec![(0.4, 4.0)]]);
+    s.undo().unwrap();
+    assert_eq!(
+        spans(&s),
+        vec![vec![(0.4, 2.0)], vec![(0.4, 2.0)]],
+        "one undo step"
+    );
+    // Blade: both tracks split, and the tails stay linked.
+    s.edit(EditOp::Blade {
+        track: v.clone(),
+        at: 1.0,
+    })
+    .unwrap();
+    assert_eq!(
+        spans(&s),
+        vec![vec![(0.4, 0.6), (1.0, 1.4)], vec![(0.4, 0.6), (1.0, 1.4)]]
+    );
+    let tail = sequence_dto(s.first_sequence().unwrap()).tracks[1].clips[1]
+        .id
+        .clone();
+    s.edit(EditOp::Move {
+        track: a.clone(),
+        clip: tail,
+        delta: 1.0,
+    })
+    .unwrap();
+    assert_eq!(
+        spans(&s)[0][1],
+        (2.0, 1.4),
+        "dragging the sound moved the picture"
+    );
+    // Ripple delete of the head takes both.
+    s.edit(EditOp::Extract {
+        track: v.clone(),
+        start: 0.4,
+        end: 1.0,
+    })
+    .unwrap();
+    assert_eq!(spans(&s), vec![vec![(1.4, 1.4)], vec![(1.4, 1.4)]]);
+    // Linked selection off: only the picture moves, which unlinks the pair.
+    s.set_linked_selection(false);
+    let head = sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[0]
+        .id
+        .clone();
+    s.edit(EditOp::Move {
+        track: v.clone(),
+        clip: head.clone(),
+        delta: 0.2,
+    })
+    .unwrap();
+    s.set_linked_selection(true);
+    s.edit(EditOp::Move {
+        track: v.clone(),
+        clip: head,
+        delta: 0.2,
+    })
+    .unwrap();
+    assert_eq!(spans(&s), vec![vec![(1.8, 1.4)], vec![(1.4, 1.4)]]);
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

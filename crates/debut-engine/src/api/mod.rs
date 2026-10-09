@@ -65,6 +65,8 @@ pub struct Session {
     /// Proxy jobs (MED-05) and whether the player decodes from proxies.
     proxies: ProxyJobs,
     use_proxies: bool,
+    /// Edits follow a clip's linked partners on other tracks (TL-05).
+    linked_selection: bool,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -122,6 +124,7 @@ impl Session {
             waveforms: Default::default(),
             proxies: Default::default(),
             use_proxies: false,
+            linked_selection: true,
             player: None,
             audio_out: None,
             backend: AnyBackend::detect(),

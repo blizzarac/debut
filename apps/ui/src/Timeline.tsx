@@ -59,6 +59,14 @@ export function Timeline({
   const setSelected = onSelect;
   const [drag, setDrag] = useState<Drag | null>(null);
   const [snapOn, setSnapOn] = useState(true);
+  const [linkedOn, setLinkedOn] = useState(true);
+  useEffect(() => {
+    media.linkedSelection?.().then(setLinkedOn).catch(() => {});
+  }, [media]);
+  const toggleLinked = () => {
+    const on = !linkedOn;
+    media.setLinkedSelection?.(on).then(() => setLinkedOn(on)).catch(() => {});
+  };
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName;
@@ -204,6 +212,11 @@ export function Timeline({
           </button>
         )}
         <span style={{ flex: 1 }} />
+        {media.setLinkedSelection && (
+          <button onClick={toggleLinked} title="Edit a clip together with its linked picture/sound on other tracks" style={{ fontWeight: linkedOn ? 600 : 400, background: linkedOn ? "#bfdbfe" : undefined }}>
+            Linked {linkedOn ? "on" : "off"}
+          </button>
+        )}
         <button onClick={() => setSnapOn((v) => !v)} title="Snap edges to the playhead, clip edges and markers while dragging (S)" style={{ fontWeight: snapOn ? 600 : 400, background: snapOn ? "#fde68a" : undefined }}>
           Snap {snapOn ? "on" : "off"}
         </button>
@@ -248,7 +261,7 @@ export function Timeline({
                 </text>
                 <rect x={HEADER_W} y={y} width={width - HEADER_W} height={TRACK_H} fill={track.kind === "video" ? "#fafafa" : "#f4f8f4"} stroke="#e0e0e0" onMouseDown={() => setSelected(null)} />
                 {track.clips.map((clip) => {
-                  const dragging = drag && drag.clip.id === clip.id ? drag : null;
+                  const dragging = drag && (drag.clip.id === clip.id || (linkedOn && partners(drag.clip, clip))) ? drag : null;
                   let tin = clip.timeline_in;
                   let dur = clip.duration;
                   if (dragging?.mode === "body") tin += dragging.delta;
@@ -259,7 +272,7 @@ export function Timeline({
                   if (dragging?.mode === "tail") dur = Math.max(1 / fps, dur + dragging.delta);
                   const x = HEADER_W + tin * pxPerSec;
                   const w = Math.max(2, dur * pxPerSec);
-                  const sel = selected?.clip === clip.id;
+                  const sel = selected?.clip === clip.id || (linkedOn && !!selectedClip && partners(selectedClip, clip));
                   const color = clip.title ? (sel ? "#9333ea" : "#a855f7") : clip.nested ? (sel ? "#b45309" : "#f59e0b") : track.kind === "video" ? (sel ? "#3b82f6" : "#60a5fa") : sel ? "#16a34a" : "#4ade80";
                   const start = (mode: Drag["mode"]) => (e: React.MouseEvent) => {
                     e.stopPropagation();
@@ -311,6 +324,21 @@ export function Timeline({
         </svg>
       </div>
     </div>
+  );
+}
+
+/** Linked partners (TL-05): other clips playing the same source over the same span. */
+function partners(a: ClipInfo, b: ClipInfo): boolean {
+  return (
+    a.id !== b.id &&
+    a.media === b.media &&
+    a.nested === b.nested &&
+    JSON.stringify(a.title) === JSON.stringify(b.title) &&
+    a.timeline_in === b.timeline_in &&
+    a.duration === b.duration &&
+    a.source_in === b.source_in &&
+    a.speed === b.speed &&
+    JSON.stringify(a.ramp) === JSON.stringify(b.ramp)
   );
 }
 
