@@ -3,9 +3,10 @@
 //! look-back buffer so the renderer's sequential blocks never re-seek.
 
 use debut_audio::SampleSource;
-use debut_core::{Error, MediaId, Rational, Result};
+use debut_core::{Error, MediaId, Rational, Result, SequenceId};
 use debut_platform::Decoder;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 struct Source {
     decoder: Box<dyn Decoder>,
@@ -23,6 +24,7 @@ pub struct SampleCache {
     sources: HashMap<MediaId, Source>,
     /// Keep this many engine frames behind the read point.
     keep_back: usize,
+    sequences: HashMap<SequenceId, Arc<debut_project::Sequence>>,
 }
 
 impl SampleCache {
@@ -31,7 +33,13 @@ impl SampleCache {
             rate,
             sources: HashMap::new(),
             keep_back: rate as usize / 4,
+            sequences: HashMap::new(),
         }
+    }
+
+    /// Replace the set of sequences compound clips can refer to (TL-07).
+    pub fn set_sequences(&mut self, all: &[debut_project::Sequence]) {
+        self.sequences = all.iter().map(|s| (s.id, Arc::new(s.clone()))).collect();
     }
 
     pub fn add(&mut self, media: MediaId, decoder: Box<dyn Decoder>) -> Result<()> {
@@ -82,6 +90,10 @@ fn resample(input: &[f32], channels: usize, from: u32, to: u32) -> Vec<f32> {
 }
 
 impl SampleSource for SampleCache {
+    fn sequence(&self, id: SequenceId) -> Option<Arc<debut_project::Sequence>> {
+        self.sequences.get(&id).cloned()
+    }
+
     fn read(
         &mut self,
         media: MediaId,

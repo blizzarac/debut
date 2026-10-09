@@ -49,7 +49,7 @@ pub struct Session {
     export_specs_shared: Option<Arc<Mutex<std::collections::HashMap<JobId, ExportSpec>>>>,
 }
 
-type ExportSpec = (Preset, Option<f32>, Vec<(MediaId, String)>);
+type ExportSpec = (Preset, Option<f32>, Vec<(MediaId, String)>, Vec<Sequence>);
 
 impl Default for Session {
     fn default() -> Self {
@@ -222,6 +222,12 @@ impl Session {
                 .add_media(id, Some(Box::new(video)), audio)
                 .map_err(|e| e.to_string())?;
         }
+        let all = self
+            .project()
+            .map(|p| p.sequences.clone())
+            .unwrap_or_default();
+        let player = self.player.as_mut().unwrap();
+        player.set_sequences(&all);
         player.sequence = seq.clone();
         player.transport.set_end(seq.duration());
         Ok(())
@@ -253,6 +259,78 @@ fn frames_of(t: f64, fr: FrameRate) -> Rational {
 
 fn fr_of(seq: &Sequence) -> FrameRate {
     seq.frame_rate
+}
+
+/// Build the command that nests `[start, end)` of `seq`: a new sequence with the
+/// same track layout holding copies of the material in range (re-based to 0),
+/// and, on every track that had something there, a compound clip overwriting
+/// the range. Clips straddling the range are split by the overwrite.
+fn nest_command(
+    seq: &Sequence,
+    start: Rational,
+    end: Rational,
+    ids: &mut IdGen,
+) -> debut_core::Result<Command> {
+    if end <= start {
+        return Err(debut_core::Error::InvalidArgument("nothing to nest".into()));
+    }
+    let mut nested = Sequence::new(
+        ids.fresh(),
+        format!("{} (nested)", seq.name),
+        seq.frame_rate,
+        seq.width,
+        seq.height,
+    );
+    let mut cmds = Vec::new();
+    let mut overwrites = Vec::new();
+    for track in &seq.tracks {
+        let mut inner = Track::new(ids.fresh(), track.kind);
+        inner.mix = track.mix;
+        inner.audio_effects = track.audio_effects.clone();
+        for clip in &track.clips {
+            if clip.timeline_out() <= start || clip.timeline_in >= end {
+                continue;
+            }
+            let mut c = clip.clone();
+            c.id = ids.fresh();
+            c.transition_in = None;
+            if c.timeline_in < start {
+                c.trim_head_to(start);
+            }
+            if c.timeline_out() > end {
+                c.trim_tail_to(end);
+            }
+            c.timeline_in -= start;
+            inner.clips.push(c);
+        }
+        if !inner.clips.is_empty() {
+            overwrites.push((
+                track.id,
+                Clip::new(
+                    ids.fresh(),
+                    ClipSource::Sequence(nested.id),
+                    start,
+                    end - start,
+                    Rational::ZERO,
+                ),
+            ));
+        }
+        nested.tracks.push(inner);
+    }
+    if overwrites.is_empty() {
+        return Err(debut_core::Error::InvalidArgument(
+            "nothing to nest in that range".into(),
+        ));
+    }
+    cmds.push(Command::AddSequence(nested));
+    for (track, clip) in overwrites {
+        let target = Target {
+            sequence: seq.id,
+            track,
+        };
+        cmds.push(Command::overwrite(target, clip, ids));
+    }
+    Ok(Command::Group(cmds))
 }
 
 /// Default length of a freshly added title.
@@ -359,6 +437,8 @@ pub struct ClipDto {
     pub media: Option<String>,
     /// Text and style when this is a title clip (GFX-01).
     pub title: Option<Title>,
+    /// Name of the nested sequence when this is a compound clip (TL-07).
+    pub nested: Option<String>,
     pub timeline_in: f64,
     pub duration: f64,
     pub source_in: f64,
@@ -412,6 +492,10 @@ fn sequence_dto(seq: &Sequence) -> SequenceDto {
                         },
                         title: match &c.source {
                             ClipSource::Title(t) => Some(t.clone()),
+                            _ => None,
+                        },
+                        nested: match &c.source {
+                            ClipSource::Sequence(_) => Some("nested".to_string()),
                             _ => None,
                         },
                         timeline_in: secs(c.timeline_in),
@@ -698,6 +782,10 @@ impl Session {
                     duration: frames_of(d, fr),
                 }),
             }),
+            EditOp::Nest { start, end } => project
+                .sequence(seq_id)
+                .ok_or_else(|| debut_core::Error::NotFound("sequence".into()))
+                .and_then(|seq| nest_command(seq, frames_of(start, fr), frames_of(end, fr), ids)),
         }
         .map_err(|e| e.to_string())?;
         self.exec(cmd)
@@ -1140,7 +1228,11 @@ impl Session {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .submit(preset.name.clone(), job, output, 0);
-        let spec = (preset, normalize, media);
+        let sequences = self
+            .project()
+            .map(|p| p.sequences.clone())
+            .unwrap_or_default();
+        let spec = (preset, normalize, media, sequences);
         if self
             .export_worker
             .load(std::sync::atomic::Ordering::Acquire)
@@ -1180,9 +1272,12 @@ impl Session {
                     };
                     let spec = specs.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
                     let result = (|| -> Result<debut_export::Progress, String> {
-                        let (preset, normalize, media) = spec.ok_or("missing export spec")?;
+                        let (preset, normalize, media, sequences) =
+                            spec.ok_or("missing export spec")?;
                         let mut frames = debut_engine::FrameSource::new(4);
                         let mut samples = debut_engine::SampleCache::new(48_000);
+                        frames.set_sequences(&sequences);
+                        samples.set_sequences(&sequences);
                         for (mid, path) in &media {
                             let dec = FfmpegDecoder::open(path).map_err(|e| e.to_string())?;
                             let has_audio = dec.audio_info().is_some();
@@ -1622,6 +1717,12 @@ pub enum EditOp {
         clip: String,
         duration: Option<f64>,
     },
+    /// Collapse `[start, end)` on every track into a new sequence and put one
+    /// compound clip per track in its place (TL-07).
+    Nest {
+        start: f64,
+        end: f64,
+    },
 }
 
 #[tauri::command]
@@ -1920,6 +2021,48 @@ mod tests {
         })
         .unwrap();
         assert_eq!(sequence_dto(s.first_sequence().unwrap()).duration, 2.4);
+
+        // Nest 1.0..2.0 s (TL-07): a new sequence appears, V1/A1 get compound
+        // clips there, the picture at 1.4 s survives, and undo restores the cut.
+        let seqs_before = s.project().unwrap().sequences.len();
+        s.transport(TransportAction::Seek { t: 1.4 }).unwrap();
+        let (_, _, flat) = s.frame_pixels().unwrap();
+        s.edit(EditOp::Nest {
+            start: 1.0,
+            end: 2.0,
+        })
+        .unwrap();
+        let project = s.project().unwrap();
+        assert_eq!(project.sequences.len(), seqs_before + 1);
+        let dto = sequence_dto(s.first_sequence().unwrap());
+        let v1 = &dto.tracks[0].clips;
+        assert_eq!(v1.len(), 3, "head, compound, tail");
+        assert_eq!(
+            (v1[1].timeline_in, v1[1].duration, v1[1].nested.is_some()),
+            (1.0, 1.0, true)
+        );
+        assert!(dto.tracks[2].clips.iter().any(|c| c.nested.is_some()));
+        let (_, _, nested_px) = s.frame_pixels().unwrap();
+        let worst = flat
+            .iter()
+            .zip(&nested_px)
+            .map(|(a, b)| (*a as i32 - *b as i32).abs())
+            .max()
+            .unwrap_or(0);
+        assert!(
+            worst <= 2,
+            "nesting must not change the picture ({worst}/255)"
+        );
+        assert_eq!(dto.duration, 2.4);
+        s.workspace_mut().unwrap().undo().unwrap();
+        s.sync_player().unwrap();
+        assert_eq!(
+            sequence_dto(s.first_sequence().unwrap()).tracks[0]
+                .clips
+                .len(),
+            1
+        );
+        assert_eq!(s.project().unwrap().sequences.len(), seqs_before);
 
         // Transition: blade V1 at 1.0 s, dissolve 0.4 s into the second piece (its head
         // handle is 0.6 s of source), then check the DTO and that scopes come back.

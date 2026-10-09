@@ -6,7 +6,7 @@
 //! `compose` inserts the input transform for the media's tagged color space
 //! (FX-08), so linearization happens on the GPU.
 
-use debut_core::{Error, MediaId, Rational, Result};
+use debut_core::{Error, MediaId, Rational, Result, SequenceId};
 use debut_platform::Decoder;
 use debut_render::FrameProvider;
 use std::collections::{HashMap, VecDeque};
@@ -33,6 +33,8 @@ pub struct FrameSource {
     /// Rasterized titles by content hash (GFX-01); a title re-renders only when
     /// its text or style changes.
     titles: Mutex<HashMap<u64, Arc<debut_render::Image8>>>,
+    /// Every sequence of the project, for compound clips (TL-07).
+    sequences: HashMap<SequenceId, Arc<debut_project::Sequence>>,
 }
 
 impl FrameSource {
@@ -41,7 +43,17 @@ impl FrameSource {
             sources: HashMap::new(),
             cache_depth: cache_depth.max(1),
             titles: Mutex::new(HashMap::new()),
+            sequences: HashMap::new(),
         }
+    }
+
+    /// Replace the set of sequences compound clips can refer to.
+    pub fn set_sequences(&mut self, all: &[debut_project::Sequence]) {
+        self.sequences = all.iter().map(|s| (s.id, Arc::new(s.clone()))).collect();
+    }
+
+    pub fn sequence(&self, id: SequenceId) -> Option<Arc<debut_project::Sequence>> {
+        self.sequences.get(&id).cloned()
     }
 
     /// The raster for `title`, rendering it on first use. `None` when the text

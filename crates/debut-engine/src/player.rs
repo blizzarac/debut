@@ -35,6 +35,9 @@ impl SourceInfo for FrameSource {
     fn title(&self, title: &debut_project::Title) -> Option<Arc<debut_render::Image8>> {
         FrameSource::title(self, title)
     }
+    fn sequence(&self, id: debut_core::SequenceId) -> Option<Arc<Sequence>> {
+        FrameSource::sequence(self, id)
+    }
 }
 
 impl Player {
@@ -52,6 +55,13 @@ impl Player {
             preview_divisor: 1,
         };
         (player, sink)
+    }
+
+    /// Tell both frame and sample sources about every sequence in the project so
+    /// compound clips resolve (TL-07). Call after any edit that touches sequences.
+    pub fn set_sequences(&mut self, all: &[Sequence]) {
+        self.frames.set_sequences(all);
+        self.samples.set_sequences(all);
     }
 
     /// Register media. Video-only or audio-only files are fine.

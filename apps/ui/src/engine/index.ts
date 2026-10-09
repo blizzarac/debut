@@ -64,6 +64,8 @@ export interface ClipInfo {
   media: string | null;
   /** Set when this is a title clip. */
   title: TitleInfo | null;
+  /** Set when this is a compound clip of a nested sequence. */
+  nested: string | null;
   timeline_in: number;
   duration: number;
   source_in: number;
@@ -147,7 +149,8 @@ export type EditOp =
   | { kind: "blade"; track: string; at: number }
   | { kind: "extract"; track: string; start: number; end: number }
   | { kind: "lift"; track: string; start: number; end: number }
-  | { kind: "transition"; track: string; clip: string; duration: number | null };
+  | { kind: "transition"; track: string; clip: string; duration: number | null }
+  | { kind: "nest"; start: number; end: number };
 
 export type ParamName =
   | "scale"

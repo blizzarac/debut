@@ -7,7 +7,7 @@ use crate::color::{ColorTransform, Grade};
 use crate::graph::{Graph, Image8, ImageRef, LutRef, Node, NodeId};
 use crate::lut::Lut3d;
 use debut_core::color::ColorSpace;
-use debut_core::Rational;
+use debut_core::{Rational, SequenceId};
 use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, Title, TrackKind};
 use std::sync::Arc;
 
@@ -28,7 +28,15 @@ pub trait SourceInfo {
     fn title(&self, _title: &Title) -> Option<Arc<Image8>> {
         None
     }
+    /// Resolve a nested sequence (TL-07) by id. `None` leaves the clip out.
+    fn sequence(&self, _id: SequenceId) -> Option<Arc<Sequence>> {
+        None
+    }
 }
+
+/// How deep compound clips may nest before the renderer stops following them
+/// (also the guard against a sequence that contains itself).
+pub const MAX_NESTING: usize = 8;
 
 /// The working space every layer is converted into before compositing.
 pub const WORKING: ColorSpace = ColorSpace::Linear709;
@@ -41,9 +49,24 @@ pub fn compose(seq: &Sequence, t: Rational, info: &dyn SourceInfo) -> Graph {
 /// (PB-03) renders the same picture with positions scaled, so the viewer and the
 /// full-size export agree.
 pub fn compose_at(seq: &Sequence, t: Rational, info: &dyn SourceInfo, canvas: (u32, u32)) -> Graph {
+    let mut g = Graph::default();
+    let out = compose_into(&mut g, seq, t, info, canvas, 0);
+    g.set_output(out);
+    g
+}
+
+/// Composite `seq` at `t` onto a `canvas`-sized opaque black base inside `g`, and
+/// return the result node. Nested sequences recurse through here (TL-07).
+fn compose_into(
+    g: &mut Graph,
+    seq: &Sequence,
+    t: Rational,
+    info: &dyn SourceInfo,
+    canvas: (u32, u32),
+    depth: usize,
+) -> NodeId {
     let (w, h) = (canvas.0.max(1), canvas.1.max(1));
     let px_scale = w as f32 / seq.width.max(1) as f32;
-    let mut g = Graph::default();
     let mut acc: NodeId = g.add(Node::Solid {
         w,
         h,
@@ -54,13 +77,13 @@ pub fn compose_at(seq: &Sequence, t: Rational, info: &dyn SourceInfo, canvas: (u
             continue;
         };
         let (node, opacity) = match layer {
-            Layer::Single(clip) => match clip_layer(&mut g, clip, t, (w, h), px_scale, info) {
+            Layer::Single(clip) => match clip_layer(g, clip, t, (w, h), px_scale, info, depth) {
                 Some(l) => l,
                 None => continue,
             },
             Layer::Transition { from, to, progress } => {
-                let a = clip_layer(&mut g, from, t, (w, h), px_scale, info);
-                let b = clip_layer(&mut g, to, t, (w, h), px_scale, info);
+                let a = clip_layer(g, from, t, (w, h), px_scale, info, depth);
+                let b = clip_layer(g, to, t, (w, h), px_scale, info, depth);
                 match (a, b) {
                     (Some((na, oa)), Some((nb, ob))) => {
                         let node = g.add(Node::Dissolve {
@@ -82,8 +105,7 @@ pub fn compose_at(seq: &Sequence, t: Rational, info: &dyn SourceInfo, canvas: (u
             opacity,
         });
     }
-    g.set_output(acc);
-    g
+    acc
 }
 
 /// One clip's node chain at sequence time `t` (which may lie in its transition
@@ -96,6 +118,7 @@ fn clip_layer(
     canvas: (u32, u32),
     px_scale: f32,
     info: &dyn SourceInfo,
+    depth: usize,
 ) -> Option<(NodeId, f32)> {
     let (w, h) = canvas;
     // Source node, its colour space, its size and how it fits the canvas: media
@@ -123,8 +146,21 @@ fn clip_layer(
             });
             (src, ColorSpace::Srgb, size, px_scale)
         }
-        // Nested sequences render recursively once Source can hold a sub-graph.
-        ClipSource::Sequence(_) => return None,
+        // A compound clip: composite the nested sequence at its own aspect, in the
+        // same pixel scale as this canvas, then fit it like a media frame.
+        ClipSource::Sequence(id) => {
+            if depth >= MAX_NESTING {
+                return None;
+            }
+            let nested = info.sequence(*id)?;
+            let size = (
+                ((nested.width as f32 * px_scale).round() as u32).max(1),
+                ((nested.height as f32 * px_scale).round() as u32).max(1),
+            );
+            let src = compose_into(g, &nested, clip.source_at(t), info, size, depth + 1);
+            let fit = (w as f32 / size.0 as f32).min(h as f32 / size.1 as f32);
+            (src, WORKING, size, fit)
+        }
     };
     if let Ok(xf) = ColorTransform::between(&space, &WORKING) {
         if !xf.is_identity() {
@@ -196,6 +232,98 @@ mod tests {
         fn dimensions(&self, _: MediaId) -> (u32, u32) {
             (self.0, self.1)
         }
+    }
+
+    /// Fixed media size plus a set of nested sequences.
+    struct Nested(u32, u32, Vec<Arc<Sequence>>);
+    impl SourceInfo for Nested {
+        fn dimensions(&self, _: MediaId) -> (u32, u32) {
+            (self.0, self.1)
+        }
+        fn sequence(&self, id: SequenceId) -> Option<Arc<Sequence>> {
+            self.2.iter().find(|s| s.id == id).cloned()
+        }
+    }
+
+    fn media_seq(ids: &mut IdGen, media: MediaId, w: u32, h: u32) -> Sequence {
+        let mut seq = Sequence::new(ids.fresh(), "inner", FrameRate::FPS_25, w, h);
+        let mut v = Track::new(ids.fresh(), TrackKind::Video);
+        v.clips.push(Clip::new(
+            ids.fresh(),
+            ClipSource::Media(media),
+            Rational::ZERO,
+            Rational::from_int(10),
+            Rational::from_int(3),
+        ));
+        seq.tracks.push(v);
+        seq
+    }
+
+    #[test]
+    fn compound_clip_composites_the_nested_sequence_at_its_own_time() {
+        let mut ids = IdGen::new(11);
+        let m: MediaId = ids.fresh();
+        let inner = media_seq(&mut ids, m, 640, 360);
+        let mut outer = Sequence::new(ids.fresh(), "outer", FrameRate::FPS_25, 1920, 1080);
+        let mut v = Track::new(ids.fresh(), TrackKind::Video);
+        // Outer 2..6 s shows inner from 1 s on.
+        v.clips.push(Clip::new(
+            ids.fresh(),
+            ClipSource::Sequence(inner.id),
+            Rational::from_int(2),
+            Rational::from_int(4),
+            Rational::ONE,
+        ));
+        outer.tracks.push(v);
+        let info = Nested(1280, 720, vec![Arc::new(inner)]);
+
+        // Half-size preview: the nested canvas scales with it (640x360 -> 320x180).
+        let g = compose_at(&outer, Rational::from_int(4), &info, (960, 540));
+        let sizes: Vec<(u32, u32)> = (0..g.len() as u32)
+            .filter_map(|i| match g.node(NodeId(i)) {
+                Node::Solid { w, h, .. } => Some((*w, *h)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            sizes,
+            vec![(960, 540), (320, 180)],
+            "outer base, nested base"
+        );
+        let times: Vec<Rational> = (0..g.len() as u32)
+            .filter_map(|i| match g.node(NodeId(i)) {
+                Node::Source { source_time, .. } => Some(*source_time),
+                _ => None,
+            })
+            .collect();
+        // Outer 4 s -> inner 3 s -> media 3 + 3 = 6 s.
+        assert_eq!(times, vec![Rational::from_int(6)]);
+        // Outside the compound clip: just the base.
+        assert_eq!(compose(&outer, Rational::ONE, &info).len(), 1);
+        // Unknown nested sequence: the clip is left out, not an error.
+        let g = compose(&outer, Rational::from_int(4), &Fixed(1280, 720));
+        assert_eq!(g.len(), 1);
+    }
+
+    #[test]
+    fn self_nesting_terminates() {
+        let mut ids = IdGen::new(12);
+        let mut seq = Sequence::new(ids.fresh(), "loop", FrameRate::FPS_25, 320, 180);
+        let mut v = Track::new(ids.fresh(), TrackKind::Video);
+        v.clips.push(Clip::new(
+            ids.fresh(),
+            ClipSource::Sequence(seq.id),
+            Rational::ZERO,
+            Rational::from_int(10),
+            Rational::ZERO,
+        ));
+        seq.tracks.push(v);
+        let info = Nested(320, 180, vec![Arc::new(seq.clone())]);
+        let g = compose(&seq, Rational::ONE, &info);
+        let bases = (0..g.len() as u32)
+            .filter(|i| matches!(g.node(NodeId(*i)), Node::Solid { .. }))
+            .count();
+        assert_eq!(bases, MAX_NESTING + 1);
     }
 
     #[test]

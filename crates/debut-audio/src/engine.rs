@@ -13,11 +13,11 @@ use crate::clock::Clock;
 use crate::effects::{build, Processor};
 use crate::graph::{mix_into, TrackMix};
 use crate::ring::{ring, Consumer, Producer};
-use debut_core::{MediaId, Rational, Result};
+use debut_core::{MediaId, Rational, Result, SequenceId};
 use debut_platform::audio_out::AudioCallback;
 use debut_project::AudioEffect;
 use debut_project::{ClipSource, Sequence, TrackKind};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -30,11 +30,32 @@ type Chain = (Vec<AudioEffect>, Vec<Box<dyn Processor>>);
 #[derive(Default)]
 pub struct Inserts {
     chains: HashMap<debut_core::TrackId, Chain>,
+    /// Tracks of nested sequences seen while rendering; their chains survive
+    /// `sync` of the top-level sequence.
+    nested: HashSet<debut_core::TrackId>,
 }
 
 impl Inserts {
     /// Make the chains match `seq`'s audio tracks; unchanged chains keep their state.
     pub fn sync(&mut self, seq: &Sequence, sample_rate: u32) {
+        self.sync_tracks(seq, sample_rate);
+        let nested = &self.nested;
+        self.chains
+            .retain(|id, _| nested.contains(id) || seq.tracks.iter().any(|t| t.id == *id));
+    }
+
+    /// Chains for a nested sequence's tracks, kept across top-level syncs.
+    fn sync_nested(&mut self, seq: &Sequence, sample_rate: u32) {
+        self.sync_tracks(seq, sample_rate);
+        self.nested.extend(
+            seq.tracks
+                .iter()
+                .filter(|t| t.kind == TrackKind::Audio)
+                .map(|t| t.id),
+        );
+    }
+
+    fn sync_tracks(&mut self, seq: &Sequence, sample_rate: u32) {
         for t in seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio) {
             let stale = self
                 .chains
@@ -49,8 +70,6 @@ impl Inserts {
                 self.chains.insert(t.id, (t.audio_effects.clone(), procs));
             }
         }
-        self.chains
-            .retain(|id, _| seq.tracks.iter().any(|t| t.id == *id));
     }
 
     pub fn reset(&mut self) {
@@ -79,7 +98,16 @@ pub trait SampleSource {
         frames: usize,
         out: &mut Vec<f32>,
     ) -> Result<u16>;
+
+    /// Resolve a nested sequence (TL-07) so its audio can be mixed in place of a
+    /// compound clip. `None` renders the clip silent.
+    fn sequence(&self, _id: SequenceId) -> Option<Arc<Sequence>> {
+        None
+    }
 }
+
+/// Nesting depth after which compound clips render silent (matches the video side).
+pub const MAX_NESTING: usize = 8;
 
 /// Producer side. Owns the ring's write end and knows where the next sample goes.
 pub struct AudioRenderer {
@@ -234,6 +262,20 @@ pub fn render_span(
     sample_rate: u32,
     bus: &mut [f32],
 ) -> Result<()> {
+    render_span_depth(seq, inserts, source, start, frames, sample_rate, bus, 0)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_span_depth(
+    seq: &Sequence,
+    inserts: &mut Inserts,
+    source: &mut dyn SampleSource,
+    start: i64,
+    frames: usize,
+    sample_rate: u32,
+    bus: &mut [f32],
+    depth: usize,
+) -> Result<()> {
     debug_assert_eq!(bus.len(), frames * CHANNELS);
     let sr = sample_rate as i64;
     let end = start + frames as i64;
@@ -257,19 +299,40 @@ pub fn render_span(
             if b <= a {
                 continue;
             }
-            let media = match &clip.source {
-                ClipSource::Media(m) => *m,
-                ClipSource::Multicam { angles, active } => match angles.get(*active) {
-                    Some(m) => *m,
-                    None => continue,
-                },
-                ClipSource::Sequence(_) => continue,
-                ClipSource::Title(_) => continue,
-            };
             let n = (b - a) as usize;
             let t = Rational::new(a, sr);
-            let ch = source.read(media, clip.source_at(t), n, &mut clip_buf)?;
             let off = (a - start) as usize;
+            let ch = match &clip.source {
+                ClipSource::Media(m) => source.read(*m, clip.source_at(t), n, &mut clip_buf)?,
+                ClipSource::Multicam { angles, active } => match angles.get(*active) {
+                    Some(m) => source.read(*m, clip.source_at(t), n, &mut clip_buf)?,
+                    None => continue,
+                },
+                ClipSource::Sequence(id) => {
+                    if depth >= MAX_NESTING {
+                        continue;
+                    }
+                    let Some(nested) = source.sequence(*id) else {
+                        continue;
+                    };
+                    inserts.sync_nested(&nested, sample_rate);
+                    clip_buf.clear();
+                    clip_buf.resize(n * CHANNELS, 0.0);
+                    let nested_start = (clip.source_at(t) * Rational::from_int(sr)).round();
+                    render_span_depth(
+                        &nested,
+                        inserts,
+                        source,
+                        nested_start,
+                        n,
+                        sample_rate,
+                        &mut clip_buf,
+                        depth + 1,
+                    )?;
+                    CHANNELS as u16
+                }
+                ClipSource::Title(_) => continue,
+            };
             mix_into(
                 &mut track_buf[off * CHANNELS..(off + n) * CHANNELS],
                 &clip_buf,
@@ -392,6 +455,89 @@ mod tests {
         assert!((out[2 * 299] - 480_199.0 * c).abs() < 0.5);
         assert_eq!(sink.underruns.load(Ordering::Relaxed), 0);
         assert_eq!(clock.position_samples(), 48_000 - 100 + 300);
+    }
+
+    /// Ramp media plus one nested sequence.
+    struct RampWith(Arc<Sequence>);
+    impl SampleSource for RampWith {
+        fn read(
+            &mut self,
+            m: MediaId,
+            start: Rational,
+            frames: usize,
+            out: &mut Vec<f32>,
+        ) -> Result<u16> {
+            Ramp.read(m, start, frames, out)
+        }
+        fn sequence(&self, id: SequenceId) -> Option<Arc<Sequence>> {
+            (self.0.id == id).then(|| Arc::clone(&self.0))
+        }
+    }
+
+    #[test]
+    fn compound_clip_mixes_the_nested_sequence_audio() {
+        let mut ids = IdGen::new(6);
+        // Inner: ramp clip 1..2 s at source 10 s. Outer: inner placed at 5 s,
+        // starting from inner time 0.5 s, so inner's clip starts at outer 5.5 s.
+        let (inner, _) = seq(&mut ids);
+        let mut outer = Sequence::new(ids.fresh(), "outer", FrameRate::FPS_25, 16, 9);
+        let mut track = Track::new(ids.fresh(), TrackKind::Audio);
+        track.clips.push(Clip::new(
+            ids.fresh(),
+            ClipSource::Sequence(inner.id),
+            Rational::from_int(5),
+            Rational::from_int(2),
+            Rational::new(1, 2),
+        ));
+        outer.tracks.push(track);
+        let mut source = RampWith(Arc::new(inner.clone()));
+        let mut inserts = Inserts::default();
+        inserts.sync(&outer, 48_000);
+
+        let start = 48_000 * 5 + 24_000 - 10; // 10 samples before inner's clip
+        let mut bus = vec![0.0; 2 * 30];
+        render_span(
+            &outer,
+            &mut inserts,
+            &mut source,
+            start,
+            30,
+            48_000,
+            &mut bus,
+        )
+        .unwrap();
+        assert!(bus[..20].iter().all(|s| *s == 0.0));
+        // Inner clip starts at source 10 s = sample 480 000. The mono ramp is
+        // centre-panned once on the inner track (1/sqrt2 per side); the outer
+        // track passes the stereo result through at unity.
+        let c = std::f32::consts::FRAC_1_SQRT_2;
+        assert!((bus[20] - 480_000.0 * c).abs() < 0.5, "{}", bus[20]);
+        assert!((bus[2 * 29] - 480_019.0 * c).abs() < 0.5);
+
+        // Without a resolver the compound clip is silent, not an error.
+        let mut bus = vec![0.0; 2 * 30];
+        render_span(&outer, &mut inserts, &mut Ramp, start, 30, 48_000, &mut bus).unwrap();
+        assert!(bus.iter().all(|s| *s == 0.0));
+    }
+
+    #[test]
+    fn self_nesting_audio_terminates() {
+        let mut ids = IdGen::new(7);
+        let mut seq = Sequence::new(ids.fresh(), "loop", FrameRate::FPS_25, 16, 9);
+        let mut track = Track::new(ids.fresh(), TrackKind::Audio);
+        track.clips.push(Clip::new(
+            ids.fresh(),
+            ClipSource::Sequence(seq.id),
+            Rational::ZERO,
+            Rational::from_int(10),
+            Rational::ZERO,
+        ));
+        seq.tracks.push(track);
+        let mut source = RampWith(Arc::new(seq.clone()));
+        let mut inserts = Inserts::default();
+        let mut bus = vec![0.0; 2 * 16];
+        render_span(&seq, &mut inserts, &mut source, 100, 16, 48_000, &mut bus).unwrap();
+        assert!(bus.iter().all(|s| *s == 0.0));
     }
 
     #[test]

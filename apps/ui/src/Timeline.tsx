@@ -107,6 +107,13 @@ export function Timeline({
           {selectedClip?.transition_in ? "Remove dissolve" : "Dissolve in"}
         </button>
         <button
+          disabled={!selectedClip}
+          title="Collapse the selected clip's span on every track into a nested sequence"
+          onClick={() => selectedClip && run({ kind: "nest", start: selectedClip.timeline_in, end: selectedClip.timeline_in + selectedClip.duration })}
+        >
+          Nest
+        </button>
+        <button
           title="Add a 5 s title at the playhead on a free video track"
           onClick={async () => {
             const id = await media.addTitle(snap(position), "Title").catch(() => null);
@@ -169,7 +176,7 @@ export function Timeline({
                   const x = HEADER_W + tin * pxPerSec;
                   const w = Math.max(2, dur * pxPerSec);
                   const sel = selected?.clip === clip.id;
-                  const color = clip.title ? (sel ? "#9333ea" : "#a855f7") : track.kind === "video" ? (sel ? "#3b82f6" : "#60a5fa") : sel ? "#16a34a" : "#4ade80";
+                  const color = clip.title ? (sel ? "#9333ea" : "#a855f7") : clip.nested ? (sel ? "#b45309" : "#f59e0b") : track.kind === "video" ? (sel ? "#3b82f6" : "#60a5fa") : sel ? "#16a34a" : "#4ade80";
                   const start = (mode: Drag["mode"]) => (e: React.MouseEvent) => {
                     e.stopPropagation();
                     setSelected({ track: track.id, clip: clip.id });
