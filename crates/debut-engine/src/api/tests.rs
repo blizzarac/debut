@@ -600,6 +600,16 @@ fn captions_burn_in_settings_and_subtitle_files() {
     assert!(std::fs::read_to_string(&vtt)
         .unwrap()
         .starts_with("WEBVTT\n"));
+    // SCC (CEA-608) round trip through the session, by extension.
+    let scc = dir.join("c.scc").to_string_lossy().into_owned();
+    assert_eq!(s.export_srt(&scc).unwrap(), 1);
+    assert!(std::fs::read_to_string(&scc)
+        .unwrap()
+        .starts_with("Scenarist_SCC V1.0"));
+    let before = s.captions().unwrap().len();
+    assert_eq!(s.import_srt(&scc).unwrap(), 1);
+    assert_eq!(s.captions().unwrap().len(), before + 1);
+    s.undo().unwrap();
     s.remove_caption(&cap).unwrap();
     assert!(s.captions().unwrap().is_empty());
 }

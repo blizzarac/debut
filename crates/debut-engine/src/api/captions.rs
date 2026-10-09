@@ -87,11 +87,17 @@ impl Session {
         })
     }
 
-    /// Read an .srt file and add every cue (one undoable step); returns the count.
+    /// Read a caption file (.scc as Scenarist SCC, anything else as SubRip)
+    /// and add every cue (one undoable step); returns the count.
     pub fn import_srt(&mut self, path: &str) -> Result<usize, String> {
         let bytes = self.store.read(path).map_err(|e| e.to_string())?;
         let text = String::from_utf8_lossy(&bytes);
-        let cues = debut_graphics::parse_srt(&text).map_err(|e| e.to_string())?;
+        let cues = if path.to_lowercase().ends_with(".scc") {
+            debut_graphics::parse_scc(&text)
+        } else {
+            debut_graphics::parse_srt(&text)
+        }
+        .map_err(|e| e.to_string())?;
         let seq_id = self.first_sequence()?.id;
         let cmds: Vec<Command> = cues
             .into_iter()
@@ -116,16 +122,19 @@ impl Session {
         self.exec(Command::SetCaptionSettings { sequence, settings })
     }
 
-    /// Write the sequence's captions to `path`: WebVTT for a `.vtt` extension,
-    /// SubRip otherwise; returns the count.
+    /// Write the sequence's captions to `path`: WebVTT for `.vtt`, Scenarist
+    /// SCC for `.scc`, SubRip otherwise; returns the count.
     pub fn export_srt(&self, path: &str) -> Result<usize, String> {
         let seq = self.first_sequence()?;
         let cues = seq
             .captions
             .iter()
             .map(|c| (c.start, c.end, c.text.as_str()));
-        let text = if path.to_lowercase().ends_with(".vtt") {
+        let lower = path.to_lowercase();
+        let text = if lower.ends_with(".vtt") {
             debut_graphics::format_vtt(cues)
+        } else if lower.ends_with(".scc") {
+            debut_graphics::format_scc(cues)
         } else {
             debut_graphics::format_srt(cues)
         };

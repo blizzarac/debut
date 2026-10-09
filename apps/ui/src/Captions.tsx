@@ -55,7 +55,7 @@ export function Captions({ captions, list, fps, position, onSeek, onChanged }: {
         <button onClick={() => act(captions.add(position, position + 2, "Caption"))} title="2 s caption at the playhead" style={{ whiteSpace: "nowrap" }}>
           + at playhead
         </button>
-        <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/subs.srt" style={{ flex: 1, minWidth: 90 }} />
+        <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/subs.srt" title="Captions file: .srt, .vtt (export) or .scc (CEA-608)" style={{ flex: 1, minWidth: 90 }} />
         <button disabled={!path} onClick={() => captions.importSrt(path).then((n) => { setStatus(`imported ${n} cues`); onChanged(); }).catch((e) => setStatus(String(e)))}>
           Import
         </button>
