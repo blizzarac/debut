@@ -70,4 +70,6 @@ wasm-pack build apps/web --target web        # browser (once wasm-bindgen is ena
 5. ~~`debut-export` reusing the graph~~ Done: `FfmpegEncoder` (H.264/AAC), `export()` job, `ExportQueue`, presets. Still open: CI gate on NFR-02 – NFR-04 numbers, smart render, HDR.
 6. ~~`apps/web` builds for wasm32~~ Done (wasm-bindgen API over the command log). Still open: `debut-platform-web` implementations (WebCodecs, OPFS, AudioWorklet), browser render-match test.
 7. Timeline: ~~trim tools and three-point editing~~ Done. Still open: selection/patching, snapping, speed ramps, shortcuts, snapshots.
-8. Shells: Tauri desktop app and the shared TypeScript UI.
+8. ~~Shells: Tauri desktop app and the shared TypeScript UI~~ Done: Tauri 2 shell with media/edit/transport IPC, React UI with viewer, transport (JKL) and timeline (ripple trim, slide, blade, extract, lift); verified end to end headless (Rust test) and visually under Xvfb. Known gap: frames cross IPC as RGBA8 per tick, fine for proxies but not full-res 4K — the viewer needs a shared GPU surface next.
+9. Browser: `debut-platform-web` (WebCodecs, OPFS, AudioWorklet) so the wasm engine can decode and play.
+10. Color (OCIO pipeline, LUTs) and audio effects/loudness.
