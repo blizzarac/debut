@@ -3,61 +3,9 @@
 //! interleaved stereo at the engine rate, allocation-free once built, with a
 //! serializable [`AudioEffect`] description the project stores.
 
-use serde::{Deserialize, Serialize};
-
 pub const CHANNELS: usize = 2;
 
-/// What the project stores per track; the renderer builds processors from it.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum AudioEffect {
-    Eq {
-        bands: Vec<EqBand>,
-    },
-    Compressor {
-        threshold_db: f32,
-        ratio: f32,
-        attack_ms: f32,
-        release_ms: f32,
-        makeup_db: f32,
-    },
-    Limiter {
-        ceiling_db: f32,
-        release_ms: f32,
-    },
-    Gate {
-        threshold_db: f32,
-        attack_ms: f32,
-        release_ms: f32,
-    },
-    /// Compresses only a sibilance band (default 5–9 kHz).
-    DeEsser {
-        frequency_hz: f32,
-        threshold_db: f32,
-        ratio: f32,
-    },
-    Reverb {
-        room: f32,
-        damping: f32,
-        mix: f32,
-    },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
-pub struct EqBand {
-    pub kind: EqKind,
-    pub frequency_hz: f32,
-    pub gain_db: f32,
-    pub q: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EqKind {
-    LowShelf,
-    Peak,
-    HighShelf,
-    HighPass,
-    LowPass,
-}
+pub use debut_project::audio_fx::{AudioEffect, EqBand, EqKind};
 
 pub trait Processor: Send {
     /// Process interleaved stereo in place.

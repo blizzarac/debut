@@ -10,16 +10,63 @@
 //! ```
 
 use crate::clock::Clock;
+use crate::effects::{build, Processor};
 use crate::graph::{mix_into, TrackMix};
 use crate::ring::{ring, Consumer, Producer};
 use debut_core::{MediaId, Rational, Result};
 use debut_platform::audio_out::AudioCallback;
+use debut_project::AudioEffect;
 use debut_project::{ClipSource, Sequence, TrackKind};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub const CHANNELS: usize = 2;
+
+/// A track's insert description and the processors built from it.
+type Chain = (Vec<AudioEffect>, Vec<Box<dyn Processor>>);
+
+/// Stateful insert chains per track, rebuilt when a track's description changes.
+#[derive(Default)]
+pub struct Inserts {
+    chains: HashMap<debut_core::TrackId, Chain>,
+}
+
+impl Inserts {
+    /// Make the chains match `seq`'s audio tracks; unchanged chains keep their state.
+    pub fn sync(&mut self, seq: &Sequence, sample_rate: u32) {
+        for t in seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio) {
+            let stale = self
+                .chains
+                .get(&t.id)
+                .is_none_or(|(desc, _)| *desc != t.audio_effects);
+            if stale {
+                let procs = t
+                    .audio_effects
+                    .iter()
+                    .map(|e| build(e, sample_rate))
+                    .collect();
+                self.chains.insert(t.id, (t.audio_effects.clone(), procs));
+            }
+        }
+        self.chains
+            .retain(|id, _| seq.tracks.iter().any(|t| t.id == *id));
+    }
+
+    pub fn reset(&mut self) {
+        for (_, procs) in self.chains.values_mut() {
+            procs.iter_mut().for_each(|p| p.reset());
+        }
+    }
+
+    fn process(&mut self, track: debut_core::TrackId, buf: &mut [f32]) {
+        if let Some((_, procs)) = self.chains.get_mut(&track) {
+            for p in procs {
+                p.process(buf);
+            }
+        }
+    }
+}
 
 /// Decoded audio for one media, at the engine sample rate.
 pub trait SampleSource {
@@ -43,6 +90,7 @@ pub struct AudioRenderer {
     /// Rate the queued audio was rendered at; a change flushes the ring.
     rate: Rational,
     mixes: HashMap<debut_core::TrackId, TrackMix>,
+    inserts: Inserts,
     scratch: Vec<f32>,
     block: Vec<f32>,
 }
@@ -65,6 +113,7 @@ impl AudioRenderer {
             write_pos: 0,
             rate: Rational::ONE,
             mixes: HashMap::new(),
+            inserts: Inserts::default(),
             scratch: Vec::new(),
             block: Vec::new(),
         };
@@ -85,6 +134,7 @@ impl AudioRenderer {
     /// Discard queued audio and continue from the clock's current position.
     /// Call after a seek or a rate change.
     pub fn resync(&mut self) {
+        self.inserts.reset();
         self.producer.clear();
         self.write_pos = self.clock.position_samples();
         self.rate = self.clock.rate();
@@ -139,9 +189,11 @@ impl AudioRenderer {
 
         self.scratch.clear();
         self.scratch.resize(src_frames * CHANNELS, 0.0);
+        self.inserts.sync(seq, sr as u32);
         render_span(
             seq,
             &self.mixes,
+            &mut self.inserts,
             source,
             start,
             src_frames,
@@ -177,10 +229,13 @@ impl AudioRenderer {
 
 /// Mix every audible audio track of `seq` over `[start, start + frames)` timeline
 /// samples (at `sample_rate`) into the stereo `bus`, which must already be
-/// `frames * CHANNELS` long and zeroed. Shared by playback and export (EXP-01).
+/// `frames * CHANNELS` long and zeroed. Each track is summed into its own buffer,
+/// run through its inserts, then added to the bus. Shared by playback and export.
+#[allow(clippy::too_many_arguments)]
 pub fn render_span(
     seq: &Sequence,
     mixes: &HashMap<debut_core::TrackId, TrackMix>,
+    inserts: &mut Inserts,
     source: &mut dyn SampleSource,
     start: i64,
     frames: usize,
@@ -195,11 +250,14 @@ pub fn render_span(
         .iter()
         .any(|t| mixes.get(&t.id).is_some_and(|m| m.solo));
     let mut clip_buf = Vec::new();
+    let mut track_buf = vec![0.0f32; frames * CHANNELS];
     for track in seq.tracks.iter().filter(|t| t.kind == TrackKind::Audio) {
         let mix = mixes.get(&track.id).copied().unwrap_or_default();
         if !mix.audible(any_solo) {
             continue;
         }
+        track_buf.fill(0.0);
+        let mut touched = false;
         for clip in &track.clips {
             let cin = (clip.timeline_in * Rational::from_int(sr)).round();
             let cout = (clip.timeline_out() * Rational::from_int(sr)).round();
@@ -220,11 +278,18 @@ pub fn render_span(
             let ch = source.read(media, clip.source_at(t), n, &mut clip_buf)?;
             let off = (a - start) as usize;
             mix_into(
-                &mut bus[off * CHANNELS..(off + n) * CHANNELS],
+                &mut track_buf[off * CHANNELS..(off + n) * CHANNELS],
                 &clip_buf,
                 ch,
                 &mix,
             );
+            touched = true;
+        }
+        if touched || !track.audio_effects.is_empty() {
+            inserts.process(track.id, &mut track_buf);
+            for (b, t) in bus.iter_mut().zip(&track_buf) {
+                *b += *t;
+            }
         }
     }
     Ok(())
@@ -403,5 +468,73 @@ mod tests {
             (out[0] - out[2] - 1.0).abs() < 0.01,
             "2x: step of two source samples per frame: {out:?}"
         );
+    }
+
+    #[test]
+    fn track_inserts_shape_the_track_before_the_bus() {
+        use debut_project::{AudioEffect, EqBand, EqKind};
+        let mut ids = IdGen::new(8);
+        let (mut seq, track) = seq(&mut ids);
+        // A low-pass at 100 Hz on a track playing a 4 kHz tone silences it.
+        seq.tracks[0].audio_effects = vec![AudioEffect::Eq {
+            bands: vec![EqBand {
+                kind: EqKind::LowPass,
+                frequency_hz: 100.0,
+                gain_db: 0.0,
+                q: 0.707,
+            }],
+        }];
+        struct Tone;
+        impl SampleSource for Tone {
+            fn read(
+                &mut self,
+                _: MediaId,
+                start: Rational,
+                frames: usize,
+                out: &mut Vec<f32>,
+            ) -> Result<u16> {
+                let s0 = (start * Rational::from_int(48_000)).round();
+                out.clear();
+                out.extend((0..frames).map(|i| {
+                    ((s0 + i as i64) as f32 * 4000.0 * std::f32::consts::TAU / 48_000.0).sin()
+                }));
+                Ok(1)
+            }
+        }
+        let mixes = HashMap::new();
+        let mut inserts = Inserts::default();
+        inserts.sync(&seq, 48_000);
+        let mut bus = vec![0.0; 2 * 4800];
+        render_span(
+            &seq,
+            &mixes,
+            &mut inserts,
+            &mut Tone,
+            48_000 + 24_000,
+            4800,
+            48_000,
+            &mut bus,
+        )
+        .unwrap();
+        let peak = bus[2 * 2400..].iter().fold(0.0f32, |p, s| p.max(s.abs()));
+        assert!(peak < 0.01, "filtered tone peak {peak}");
+        // Dropping the insert restores the tone; sync picks the change up.
+        seq.tracks[0].audio_effects.clear();
+        inserts.sync(&seq, 48_000);
+        let mut bus = vec![0.0; 2 * 4800];
+        render_span(
+            &seq,
+            &mixes,
+            &mut inserts,
+            &mut Tone,
+            48_000 + 24_000,
+            4800,
+            48_000,
+            &mut bus,
+        )
+        .unwrap();
+        let peak = bus.iter().fold(0.0f32, |p, s| p.max(s.abs()));
+        assert!(peak > 0.6, "unfiltered tone peak {peak}");
+        let _ = track;
     }
 }

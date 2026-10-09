@@ -180,6 +180,7 @@ mod tests {
             range: (Rational::ZERO, Rational::ONE),
             sample_rate: 48_000,
             mixes: HashMap::new(),
+            gain_db: 0.0,
         }
     }
 
@@ -219,6 +220,7 @@ mod tests {
             Ok(Progress {
                 frames_done: 3,
                 frames_total: 25,
+                ..Default::default()
             }),
         );
         assert_eq!(q.get(a).unwrap().state, JobState::Cancelled);

@@ -12,7 +12,7 @@
 use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
-use debut_project::{Clip, Effect, Param, Project, Sequence, Track};
+use debut_project::{AudioEffect, Clip, Effect, Param, Project, Sequence, Track};
 use serde::{Deserialize, Serialize};
 
 /// Which track a primitive operates on.
@@ -106,6 +106,11 @@ pub enum Command {
         effect: usize,
         param: Param,
         curve: Curve,
+    },
+    /// Replace a track's audio insert chain (AUD-05).
+    SetTrackAudio {
+        target: Target,
+        effects: Vec<AudioEffect>,
     },
     // ---- project structure (MED-07, TL-01) ----------------------------------
     AddMedia(MediaRef),
@@ -350,6 +355,10 @@ impl Command {
                 *slot = curve.clone();
                 Ok(())
             }),
+            Command::SetTrackAudio { target, effects } => {
+                track_mut(project, *target)?.audio_effects = effects.clone();
+                Ok(())
+            }
             Command::AddMedia(m) => {
                 if project.media.iter().any(|x| x.id == m.id) {
                     return Err(Error::InvalidArgument("media id already exists".into()));
@@ -573,6 +582,10 @@ impl Command {
                     curve: curve.clone(),
                 })
             }
+            Command::SetTrackAudio { target, .. } => Ok(Command::SetTrackAudio {
+                target: *target,
+                effects: track(project, *target)?.audio_effects.clone(),
+            }),
             Command::AddMedia(m) => Ok(Command::RemoveMedia(m.id)),
             Command::RemoveMedia(id) => {
                 let m = project

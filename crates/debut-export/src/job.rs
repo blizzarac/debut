@@ -2,7 +2,7 @@
 //! the audio mixer into an [`Encoder`] (EXP-01, EXP-04). Playback and export share
 //! `compose`/`render`/`render_span`, so the file matches the viewer.
 
-use debut_audio::{render_span, SampleSource, TrackMix, CHANNELS};
+use debut_audio::{render_span, Inserts, LoudnessMeter, SampleSource, TrackMix, CHANNELS};
 use debut_core::{Rational, Result, TrackId};
 use debut_platform::codec::{AudioBlock, Encoder, VideoFrame};
 use debut_project::Sequence;
@@ -19,12 +19,17 @@ pub struct ExportJob {
     pub range: (Rational, Rational),
     pub sample_rate: u32,
     pub mixes: HashMap<TrackId, TrackMix>,
+    /// Master gain applied to the mixed audio (loudness normalization, AUD-06).
+    pub gain_db: f32,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Progress {
     pub frames_done: u64,
     pub frames_total: u64,
+    /// Integrated loudness of what was written so far, once measurable.
+    pub loudness_lufs: Option<f32>,
+    pub true_peak_db: f32,
 }
 
 /// Cooperative control shared with the queue / UI (EXP-03): the job checks it
@@ -99,8 +104,14 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
     let mut progress = Progress {
         frames_done: 0,
         frames_total: total,
+        loudness_lufs: None,
+        true_peak_db: f32::NEG_INFINITY,
     };
     let mut bus = Vec::new();
+    let mut inserts = Inserts::default();
+    inserts.sync(&job.sequence, sr);
+    let mut meter = LoudnessMeter::new(sr);
+    let gain = 10f32.powf(job.gain_db / 20.0);
 
     for n in first..last {
         while control.is_paused() {
@@ -133,12 +144,19 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
             render_span(
                 &job.sequence,
                 &job.mixes,
+                &mut inserts,
                 samples,
                 audio_cursor,
                 count,
                 sr,
                 &mut bus,
             )?;
+            if gain != 1.0 {
+                bus.iter_mut().for_each(|s| *s *= gain);
+            }
+            meter.push(&bus);
+            progress.loudness_lufs = meter.integrated();
+            progress.true_peak_db = meter.true_peak_db();
             encoder.push_audio(&AudioBlock {
                 pts: Rational::new(audio_cursor, sr as i64),
                 channels: CHANNELS as u16,
@@ -152,6 +170,45 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
         on_progress(progress);
     }
     Ok(progress)
+}
+
+/// Loudness of the job's audio alone (no video, no encoder): the first pass of a
+/// normalize-to-target export. Returns (integrated LUFS, true peak dBTP).
+pub fn measure_loudness(
+    job: &ExportJob,
+    samples: &mut dyn SampleSource,
+) -> Result<(Option<f32>, f32)> {
+    let sr = job.sample_rate;
+    let start = (job.range.0 * Rational::from_int(sr as i64)).round();
+    let end = (job.range.1 * Rational::from_int(sr as i64)).round();
+    let mut inserts = Inserts::default();
+    inserts.sync(&job.sequence, sr);
+    let mut meter = LoudnessMeter::new(sr);
+    let gain = 10f32.powf(job.gain_db / 20.0);
+    let block = 4800usize;
+    let mut bus = vec![0.0f32; block * CHANNELS];
+    let mut cursor = start;
+    while cursor < end {
+        let n = ((end - cursor) as usize).min(block);
+        bus.clear();
+        bus.resize(n * CHANNELS, 0.0);
+        render_span(
+            &job.sequence,
+            &job.mixes,
+            &mut inserts,
+            samples,
+            cursor,
+            n,
+            sr,
+            &mut bus,
+        )?;
+        if gain != 1.0 {
+            bus.iter_mut().for_each(|s| *s *= gain);
+        }
+        meter.push(&bus);
+        cursor += n as i64;
+    }
+    Ok((meter.integrated(), meter.true_peak_db()))
 }
 
 #[cfg(test)]

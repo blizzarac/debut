@@ -10,6 +10,6 @@ pub mod hdr; // EXP-06 HDR10 / HLG metadata (pending)
 pub mod smart; // EXP-05 pass-through of unmodified segments (pending)
 pub mod upload; // EXP-09 (pending)
 
-pub use job::{export, Control, ExportJob, Progress};
+pub use job::{export, measure_loudness, Control, ExportJob, Progress};
 pub use presets::{Preset, VideoCodec};
 pub use queue::{ExportQueue, JobId, JobState};

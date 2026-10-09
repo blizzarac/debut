@@ -57,6 +57,9 @@ pub struct Track {
     pub id: TrackId,
     pub kind: TrackKind,
     pub clips: Vec<Clip>,
+    /// Audio inserts, in order (AUD-05). Ignored on video tracks.
+    #[serde(default)]
+    pub audio_effects: Vec<crate::audio_fx::AudioEffect>,
 }
 
 impl Track {
@@ -65,6 +68,7 @@ impl Track {
             id,
             kind,
             clips: Vec::new(),
+            audio_effects: Vec::new(),
         }
     }
 

@@ -4,6 +4,7 @@
 //! mutated through `debut-command`, so every change is undoable and syncable.
 //! The on-disk schema is versioned; `schema::migrate` upgrades any older version.
 
+pub mod audio_fx;
 pub mod bin;
 pub mod effect;
 pub mod marker;
@@ -11,6 +12,7 @@ pub mod media_ref;
 pub mod schema;
 pub mod sequence;
 
+pub use audio_fx::{AudioEffect, EqBand, EqKind};
 pub use effect::{Effect, GradeFx, Param, TransformFx};
 pub use sequence::{Clip, ClipSource, Sequence, Track, TrackKind};
 

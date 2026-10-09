@@ -1,8 +1,9 @@
 //! Export a sequence built on the fixture to an MP4 and decode it back.
 
+use debut_audio::normalize_gain;
 use debut_core::{FrameRate, IdGen, MediaId, Rational};
 use debut_engine::{FrameSource, SampleCache};
-use debut_export::{export, Control, ExportJob};
+use debut_export::{export, measure_loudness, Control, ExportJob};
 use debut_platform::{Decoder, Encoder};
 use debut_platform_native::codec::{
     AudioEncodeSettings, EncodeSettings, FfmpegDecoder, FfmpegEncoder,
@@ -50,12 +51,29 @@ fn exports_a_range_with_audio_and_video() {
         .unwrap();
 
     // Export 0.2 s .. 1.2 s: 25 frames, the first 7-8 black/silent, the rest from the clip.
-    let job = ExportJob {
+    let mut job = ExportJob {
         sequence: seq,
         range: (Rational::new(1, 5), Rational::new(6, 5)),
         sample_rate: 48_000,
         mixes: HashMap::new(),
+        gain_db: 0.0,
     };
+    // Two-pass loudness normalization to the web target: measure, set gain, re-measure.
+    let (lufs, tp) = measure_loudness(&job, &mut samples).unwrap();
+    let lufs = lufs.expect("the tone is measurable");
+    let gain = normalize_gain(lufs, -14.0, tp, -1.0);
+    job.gain_db = 20.0 * gain.log10();
+    let (after, tp_after) = measure_loudness(&job, &mut samples).unwrap();
+    let after = after.unwrap();
+    let headroom_limited = tp_after > -1.05;
+    assert!(
+        (after + 14.0).abs() < 0.5 || headroom_limited,
+        "normalized: {after} LUFS, {tp_after} dBTP"
+    );
+    assert!(
+        tp_after <= -0.9,
+        "true peak stays under the ceiling: {tp_after}"
+    );
     let path = std::env::temp_dir().join(format!("debut-export-{}.mp4", std::process::id()));
     let mut encoder = FfmpegEncoder::create(
         &path,
