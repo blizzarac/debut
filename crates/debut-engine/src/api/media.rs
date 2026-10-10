@@ -45,6 +45,27 @@ pub struct RuleDto {
     pub value: String,
 }
 
+/// How long a still image runs when it is put on the timeline.
+pub const STILL_DURATION: Rational = Rational { num: 5, den: 1 };
+
+/// (width, height, duration, has_audio) of an opened file: 0 x 0 for sound
+/// only, `STILL_DURATION` for a single image; `None` for neither.
+pub(crate) fn media_info(dec: &dyn debut_platform::Decoder) -> Option<(u32, u32, Rational, bool)> {
+    let has_audio = dec.audio_info().is_some();
+    match (dec.video_info(), dec.audio_info()) {
+        (Some(v), _) => {
+            let duration = if v.duration == Rational::ZERO {
+                STILL_DURATION
+            } else {
+                v.duration
+            };
+            Some((v.width, v.height, duration, has_audio))
+        }
+        (None, Some(a)) => Some((0, 0, a.duration, true)),
+        (None, None) => None,
+    }
+}
+
 impl Session {
     pub fn import_media(&mut self, path: String) -> Result<MediaDto, String> {
         let media = self.probe_media(&path)?;
@@ -82,8 +103,11 @@ impl Session {
             .platform
             .open_decoder(&path)
             .map_err(|e| e.to_string())?;
-        let v = dec.video_info().ok_or("file has no video stream")?.clone();
-        let has_audio = dec.audio_info().is_some();
+        let info = media_info(dec.as_ref()).ok_or("the file has neither picture nor sound")?;
+        let still = dec
+            .video_info()
+            .is_some_and(|v| v.duration == Rational::ZERO);
+        let frame_rate = dec.video_info().map(|v| v.frame_rate);
         let tags = dec.tags();
         let start_timecode = tags.timecode.as_deref().and_then(Timecode::parse);
         self.project_mut()?;
@@ -93,7 +117,8 @@ impl Session {
             path: path.clone(),
             online: true,
             metadata: MediaMetadata {
-                frame_rate: Some(v.frame_rate),
+                frame_rate,
+                still,
                 audio_channels: dec.audio_info().map(|a| a.channels).unwrap_or(0),
                 start_timecode,
                 reel: tags.reel.clone(),
@@ -104,8 +129,7 @@ impl Session {
             keywords: vec![],
             rating: 0,
         };
-        self.probed
-            .insert(id, (v.width, v.height, v.duration, has_audio));
+        self.probed.insert(id, info);
         Ok(media)
     }
 
@@ -116,11 +140,8 @@ impl Session {
             .platform
             .open_decoder(&path)
             .map_err(|e| format!("cannot open {path}: {e}"))?;
-        let v = dec.video_info().ok_or("file has no video stream")?.clone();
-        self.probed.insert(
-            id,
-            (v.width, v.height, v.duration, dec.audio_info().is_some()),
-        );
+        let info = media_info(dec.as_ref()).ok_or("the file has neither picture nor sound")?;
+        self.probed.insert(id, info);
         self.offline.remove(&id);
         self.forget_waveform(id);
         if let Some(p) = &mut self.player {
@@ -139,11 +160,8 @@ impl Session {
             }
             match self.platform.open_decoder(&m.path) {
                 Ok(dec) => {
-                    if let Some(v) = dec.video_info() {
-                        self.probed.insert(
-                            m.id,
-                            (v.width, v.height, v.duration, dec.audio_info().is_some()),
-                        );
+                    if let Some(info) = media_info(dec.as_ref()) {
+                        self.probed.insert(m.id, info);
                     }
                     self.offline.remove(&m.id);
                 }

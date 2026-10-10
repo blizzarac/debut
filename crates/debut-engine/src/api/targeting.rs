@@ -120,8 +120,10 @@ impl Session {
         let video = resolve(seq, p.video, TrackKind::Video);
         let audio = resolve(seq, p.audio, TrackKind::Audio);
         let media_id = MediaId(parse_id(media)?);
-        let &(_, _, duration, has_audio) = self.probed.get(&media_id).ok_or("unknown media")?;
+        let &(width, _, duration, has_audio) = self.probed.get(&media_id).ok_or("unknown media")?;
+        // Sound-only media goes on the audio track alone.
         let tracks: Vec<TrackId> = video
+            .filter(|_| width > 0)
             .into_iter()
             .chain(audio.filter(|_| has_audio))
             .collect();

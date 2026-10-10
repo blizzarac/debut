@@ -70,6 +70,11 @@ impl Player {
         self.samples.remove(media);
     }
 
+    /// Whether `media` has decoders here already (picture or sound).
+    pub fn has_media(&self, media: MediaId) -> bool {
+        self.frames.has(media) || self.samples.has(media)
+    }
+
     /// Register media. Video-only or audio-only files are fine.
     pub fn add_media(
         &mut self,

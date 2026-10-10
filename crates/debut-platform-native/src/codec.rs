@@ -129,7 +129,14 @@ impl FfmpegDecoder {
                 let ctx = ff::codec::context::Context::from_parameters(stream.parameters())
                     .map_err(err)?;
                 let decoder = ctx.decoder().audio().map_err(err)?;
-                let layout = decoder.channel_layout();
+                // WAV and some other files leave the layout unspecified;
+                // the resampler wants one, so use the usual one for the count.
+                let layout = match decoder.channel_layout() {
+                    l if l.is_empty() || l.bits() == 0 => {
+                        ff::ChannelLayout::default(decoder.channels() as i32)
+                    }
+                    l => l,
+                };
                 let resampler = ff::software::resampling::Context::get(
                     decoder.format(),
                     layout,
@@ -246,6 +253,9 @@ impl FfmpegDecoder {
         };
         let mut decoded = ff::frame::Audio::empty();
         while a.decoder.receive_frame(&mut decoded).is_ok() {
+            if decoded.channel_layout().is_empty() || decoded.channel_layout().bits() == 0 {
+                decoded.set_channel_layout(ff::ChannelLayout::default(decoded.channels() as i32));
+            }
             let mut packed = ff::frame::Audio::empty();
             a.resampler.run(&decoded, &mut packed).map_err(err)?;
             let pts = decoded.pts().or(decoded.timestamp()).unwrap_or(0);
@@ -924,6 +934,30 @@ mod tests {
                 reason: "FFmpeg has no teleport support".into()
             }
         );
+    }
+
+    #[test]
+    fn opens_stills_and_audio_only_files() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
+        // A PNG: one frame, no duration; any seek still yields it.
+        let mut png = FfmpegDecoder::open(format!("{dir}still_64x36.png")).unwrap();
+        let v = png.video_info().unwrap();
+        assert_eq!((v.width, v.height, v.duration), (64, 36, Rational::ZERO));
+        png.seek(Rational::from_int(2)).unwrap();
+        assert!(png.next_video().unwrap().is_some());
+        // A mono WAV with no channel layout in its header.
+        let mut wav = FfmpegDecoder::open(format!("{dir}tone_16k_1500ms.wav")).unwrap();
+        assert!(wav.video_info().is_none());
+        let a = wav.audio_info().unwrap();
+        assert_eq!(
+            (a.channels, a.sample_rate, a.duration),
+            (1, 16_000, Rational::new(3, 2))
+        );
+        let mut samples = 0;
+        while let Some(b) = wav.next_audio().unwrap() {
+            samples += b.samples.len();
+        }
+        assert_eq!(samples, 24_000);
     }
 
     #[test]

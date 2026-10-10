@@ -216,7 +216,7 @@ export function MediaPanel({
                   offline
                 </button>
               )}
-              {name(m)} · {m.width}×{m.height} · {m.duration.toFixed(2)}s
+              {name(m)} · {m.width ? `${m.width}×${m.height}` : "sound"} · {m.duration.toFixed(2)}s
               {m.timecode && <span title={m.reel ? `reel ${m.reel}` : undefined}> · TC {m.timecode}</span>}
               <ProxyBadge status={proxies[m.id]} />
             </span>

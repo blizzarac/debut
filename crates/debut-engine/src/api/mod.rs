@@ -316,11 +316,8 @@ impl Session {
             .unwrap_or_default();
         for (id, path) in media {
             if let Ok(dec) = self.platform.open_decoder(&path) {
-                if let Some(v) = dec.video_info() {
-                    self.probed.insert(
-                        id,
-                        (v.width, v.height, v.duration, dec.audio_info().is_some()),
-                    );
+                if let Some(info) = media_info(dec.as_ref()) {
+                    self.probed.insert(id, info);
                 }
             }
         }
@@ -418,7 +415,7 @@ impl Session {
         }
         let player = self.player.as_mut().unwrap();
         for (id, path, video_path) in media {
-            if player.frames.dimensions(id).is_some() {
+            if player.has_media(id) {
                 continue;
             }
             // A missing or unreadable file must not take the whole project down:
@@ -431,6 +428,15 @@ impl Session {
                 }
             };
             self.offline.remove(&id);
+            // A sound-only file has no picture to show.
+            if video.video_info().is_none() {
+                if video.audio_info().is_some() {
+                    player
+                        .add_media(id, None, Some(video))
+                        .map_err(|e| e.to_string())?;
+                }
+                continue;
+            }
             // Audio always comes from the original (proxies are video only).
             let audio = if video_path == path {
                 if video.audio_info().is_some() {

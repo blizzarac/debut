@@ -25,6 +25,8 @@ struct Source {
     recent: VecDeque<Cached>,
     /// pts of the last frame pulled from the decoder, to tell forward from backward.
     last_pts: Option<Rational>,
+    /// A single image: its one frame stands for every time.
+    still: bool,
 }
 
 pub struct FrameSource {
@@ -114,6 +116,7 @@ impl FrameSource {
             .video_info()
             .ok_or_else(|| Error::InvalidArgument("media has no video stream".into()))?;
         let frame_duration = info.frame_rate.frame_duration();
+        let still = info.duration == Rational::ZERO;
         self.sources.insert(
             media,
             Source {
@@ -121,6 +124,7 @@ impl FrameSource {
                 frame_duration,
                 recent: VecDeque::new(),
                 last_pts: None,
+                still,
             },
         );
         Ok(())
@@ -215,6 +219,24 @@ impl FrameProvider for FrameSource {
         let Some(src) = self.sources.get_mut(&media) else {
             return Ok((OFFLINE_SIZE.0, OFFLINE_SIZE.1, offline_frame()));
         };
+        if src.still {
+            if let Some(c) = src.recent.front() {
+                return Ok((c.width, c.height, c.pixels.clone()));
+            }
+            src.decoder.seek(Rational::ZERO)?;
+            let f = src
+                .decoder
+                .next_video()?
+                .ok_or_else(|| Error::NotFound(format!("no picture in {media:?}")))?;
+            let out = (f.width, f.height, f.rgba8.clone());
+            src.recent.push_back(Cached {
+                pts: f.pts,
+                width: f.width,
+                height: f.height,
+                pixels: f.rgba8,
+            });
+            return Ok(out);
+        }
         let covers = |c: &Cached| c.pts <= t && t < c.pts + src.frame_duration;
 
         if let Some(c) = src.recent.iter().find(|c| covers(c)) {

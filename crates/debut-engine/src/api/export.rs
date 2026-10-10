@@ -211,7 +211,9 @@ impl Session {
                                 continue;
                             };
                             let has_audio = dec.audio_info().is_some();
-                            frames.add(*mid, dec).map_err(|e| e.to_string())?;
+                            if dec.video_info().is_some() {
+                                frames.add(*mid, dec).map_err(|e| e.to_string())?;
+                            }
                             if has_audio {
                                 let audio =
                                     platform.open_decoder(path).map_err(|e| e.to_string())?;
@@ -372,11 +374,8 @@ impl Session {
         for m in &imported.media {
             match self.platform.open_decoder(&m.path) {
                 Ok(dec) => {
-                    if let Some(v) = dec.video_info() {
-                        self.probed.insert(
-                            m.id,
-                            (v.width, v.height, v.duration, dec.audio_info().is_some()),
-                        );
+                    if let Some(info) = media_info(dec.as_ref()) {
+                        self.probed.insert(m.id, info);
                     }
                     self.offline.remove(&m.id);
                 }
@@ -407,7 +406,7 @@ impl Session {
                 debut_media::fcpxml::fcpxml(seq, project, &durations).into_bytes()
             }
             "aaf" => {
-                // Probed media has a picture; the rest is sound only.
+                // A 0-pixel picture means sound only.
                 let media = self
                     .probed
                     .iter()
@@ -416,7 +415,7 @@ impl Session {
                             width,
                             height,
                             duration,
-                            has_video: true,
+                            has_video: width > 0,
                             has_audio,
                         };
                         (*id, info)

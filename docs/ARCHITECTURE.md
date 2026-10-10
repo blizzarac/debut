@@ -136,5 +136,6 @@ wasm-pack build apps/web --target web        # browser (once wasm-bindgen is ena
     - `debut_media::ingest` picks media files by extension (skipping hidden files and sidecars) and plans copies that keep a card's folder structure. `Session::ingest_folder` copies to project storage on request, checks each copy against the original by checksum (`FileStore::checksum`, streaming FNV-1a), imports only verified copies, reuses identical copies on a re-run, and skips media already in the project. One undo step.
     - `FileStore` gained `is_dir`, a streaming `copy` and `checksum`.
     - The media panel has "Ingest a folder or card" and, when files are missing, "Relink all".
-    - Not done: audio-only and still-image imports (the importer still requires a video stream), ingest presets and MHL reports.
-52. Still open: Display-trait output to SDI/HDMI cards (PB-09), VST3/AU plugins, the browser platform (item 45).
+    - Not done: ingest presets and MHL reports.
+52. ~~Sound-only files and stills~~ Done: `media_info` probes any file with picture or sound. Sound-only files are 0 x 0 and go on audio tracks alone (`insert_media`); the player and export open only the decoders a file has. A single image (no duration) runs 5 s by default, is marked `MediaMetadata::still`, and `FrameSource` decodes it once and shows it at every time. The native decoder now gives WAV and other files without a channel layout the usual layout for their channel count (they failed to open before). Tested with a mono WAV and a PNG through import, insert, playback and export.
+53. Still open: Display-trait output to SDI/HDMI cards (PB-09), VST3/AU plugins, the browser platform (item 45).

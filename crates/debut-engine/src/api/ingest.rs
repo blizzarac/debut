@@ -76,11 +76,8 @@ impl Session {
                     // Only files that really open count.
                     match self.platform.open_decoder(&path) {
                         Ok(dec) => {
-                            if let Some(v) = dec.video_info() {
-                                self.probed.insert(
-                                    id,
-                                    (v.width, v.height, v.duration, dec.audio_info().is_some()),
-                                );
+                            if let Some(info) = media_info(dec.as_ref()) {
+                                self.probed.insert(id, info);
                             }
                             self.offline.remove(&id);
                             self.forget_waveform(id);

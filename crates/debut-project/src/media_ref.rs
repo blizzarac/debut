@@ -30,6 +30,9 @@ pub struct MediaMetadata {
     pub audio_channels: u16,
     /// True for VFR sources; conform rules apply on the timeline (MED-03).
     pub variable_frame_rate: bool,
+    /// A single image (PNG, JPEG, ...): every source time shows it.
+    #[serde(default)]
+    pub still: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

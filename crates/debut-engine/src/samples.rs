@@ -30,6 +30,10 @@ pub struct SampleCache {
 }
 
 impl SampleCache {
+    pub fn has(&self, media: MediaId) -> bool {
+        self.sources.contains_key(&media)
+    }
+
     pub fn set_plugins(&mut self, host: Option<Arc<dyn debut_platform::PluginHost>>) {
         self.plugins = host;
     }

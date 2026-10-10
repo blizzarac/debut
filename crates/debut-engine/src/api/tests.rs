@@ -2226,3 +2226,78 @@ fn ingest_copies_verifies_imports_and_relinks_moved_media() {
     assert_eq!(m.path, new_path);
     assert!(m.online);
 }
+
+/// Sound-only files and stills import, insert on the right tracks, play and
+/// export (MED-01).
+#[test]
+fn audio_only_and_still_media_import_play_and_export() {
+    let Fx {
+        mut s, dir, v, a, ..
+    } = fixture("audio_only_and_still");
+    let fixtures = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../debut-platform-native/tests/fixtures/"
+    );
+    let wav = s
+        .import_media(format!("{fixtures}tone_16k_1500ms.wav"))
+        .unwrap();
+    assert_eq!(
+        (wav.width, wav.height, wav.duration, wav.has_audio),
+        (0, 0, 1.5, true)
+    );
+    let png = s
+        .import_media(format!("{fixtures}still_64x36.png"))
+        .unwrap();
+    assert_eq!(
+        (png.width, png.height, png.duration, png.has_audio),
+        (64, 36, 5.0, false)
+    );
+
+    // The sound goes on A1 only, the still on V1 only.
+    let count = |s: &Session, t: &str| {
+        s.sequence()
+            .unwrap()
+            .tracks
+            .iter()
+            .find(|x| x.id == t)
+            .unwrap()
+            .clips
+            .len()
+    };
+    let (v0, a0) = (count(&s, &v), count(&s, &a));
+    s.insert_media(&wav.id, 3.0, true).unwrap();
+    assert_eq!((count(&s, &v), count(&s, &a)), (v0, a0 + 1));
+    s.insert_media(&png.id, 3.0, true).unwrap();
+    assert_eq!((count(&s, &v), count(&s, &a)), (v0 + 1, a0 + 1));
+
+    // The still shows at its start and four seconds in.
+    let mut seen = Vec::new();
+    for t in [3.0, 7.0] {
+        s.transport(TransportAction::Seek { t }).unwrap();
+        let (_, _, px) = s.frame_pixels().unwrap();
+        let mean = px.iter().map(|&b| b as u64).sum::<u64>() / px.len() as u64;
+        seen.push((px.len(), mean));
+    }
+    assert_eq!(seen[0], seen[1], "the same picture throughout");
+    assert!(
+        seen[0].1 > 40,
+        "not black or the offline slate: {:?}",
+        seen[0]
+    );
+
+    // Export runs with the sound-only file in the sequence.
+    let out = dir.join("mixed.mp4").to_string_lossy().into_owned();
+    let job = s
+        .export_start(out.clone(), "YouTube 1080p", None, false, false)
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let state = loop {
+        let st = s.export_status();
+        let e = st.iter().find(|e| e.id == job).unwrap();
+        if e.state == "done" || e.state == "failed" || std::time::Instant::now() > deadline {
+            break (e.state.clone(), e.error.clone());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(state.0, "done", "{:?}", state.1);
+}
