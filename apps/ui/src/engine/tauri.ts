@@ -118,6 +118,12 @@ class TauriMedia implements MediaApi {
   relinkMedia(media: string, path: string) {
     return invoke<void>("relink_media", { media, path });
   }
+  relinkFolder(dir: string) {
+    return invoke<{ relinked: [string, string][]; ambiguous: [string, string[]][]; not_found: string[] }>("relink_folder", { dir });
+  }
+  ingestFolder(source: string, copyTo: string | null) {
+    return invoke<{ imported: number; skipped: number; copied: number; bytes_copied: number; failed: [string, string][] }>("ingest_folder", { source, copyTo });
+  }
   createProxies(media: string[], divisor: 2 | 4) {
     return invoke<void>("create_proxies", { media, divisor });
   }

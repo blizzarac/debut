@@ -29,6 +29,7 @@ mod captions;
 mod collab;
 mod effects;
 mod export;
+mod ingest;
 mod markers;
 mod media;
 mod mixer;
@@ -55,8 +56,8 @@ pub use self::snapshots::{ClipChangeDto, SnapshotDiffDto, SnapshotDto};
 pub use self::targeting::TargetingDto;
 use self::waveforms::WaveformCache;
 pub use self::{
-    ai::*, captions::*, effects::*, export::*, markers::*, media::*, multicam::*, playback::*,
-    plugins::*, timeline::*, titles::*,
+    ai::*, captions::*, effects::*, export::*, ingest::*, markers::*, media::*, multicam::*,
+    playback::*, plugins::*, timeline::*, titles::*,
 };
 
 pub struct Session {

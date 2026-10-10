@@ -412,6 +412,20 @@ pub fn import_media(state: State<'_, Shared>, path: String) -> Result<MediaDto, 
 }
 
 #[tauri::command]
+pub fn relink_folder(state: State<'_, Shared>, dir: String) -> Result<RelinkReport, String> {
+    lock(&state).relink_folder(&dir)
+}
+
+#[tauri::command]
+pub fn ingest_folder(
+    state: State<'_, Shared>,
+    source: String,
+    copy_to: Option<String>,
+) -> Result<IngestReport, String> {
+    lock(&state).ingest_folder(&source, copy_to.as_deref())
+}
+
+#[tauri::command]
 pub fn relink_media(state: State<'_, Shared>, media: String, path: String) -> Result<(), String> {
     lock(&state).relink_media(&media, path)
 }

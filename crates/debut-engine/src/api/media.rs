@@ -47,6 +47,37 @@ pub struct RuleDto {
 
 impl Session {
     pub fn import_media(&mut self, path: String) -> Result<MediaDto, String> {
+        let media = self.probe_media(&path)?;
+        let id = media.id;
+        let start_timecode = media.metadata.start_timecode;
+        let reel = media.metadata.reel.clone();
+        self.exec(Command::AddMedia(media))?;
+        let (width, height, duration, has_audio) = self.probed[&id];
+        let fr = self
+            .project()
+            .and_then(|p| p.media.iter().find(|m| m.id == id))
+            .and_then(|m| m.metadata.frame_rate)
+            .unwrap_or(FrameRate::FPS_25);
+        Ok(MediaDto {
+            id: id_str(id.0),
+            path,
+            width,
+            height,
+            duration: secs(duration),
+            frame_rate: [fr.0.num, fr.0.den],
+            has_audio,
+            bins: Vec::new(),
+            keywords: Vec::new(),
+            rating: 0,
+            online: true,
+            timecode: start_timecode.map(|t| t.to_string()),
+            reel,
+        })
+    }
+
+    /// Open a file and describe it as a new `MediaRef` (not yet added).
+    pub(crate) fn probe_media(&mut self, path: &str) -> Result<MediaRef, String> {
+        let path = path.to_string();
         let dec = self
             .platform
             .open_decoder(&path)
@@ -75,22 +106,7 @@ impl Session {
         };
         self.probed
             .insert(id, (v.width, v.height, v.duration, has_audio));
-        self.exec(Command::AddMedia(media))?;
-        Ok(MediaDto {
-            id: id_str(id.0),
-            path,
-            width: v.width,
-            height: v.height,
-            duration: secs(v.duration),
-            frame_rate: [v.frame_rate.0.num, v.frame_rate.0.den],
-            has_audio,
-            bins: Vec::new(),
-            keywords: Vec::new(),
-            rating: 0,
-            online: true,
-            timecode: start_timecode.map(|t| t.to_string()),
-            reel: tags.reel,
-        })
+        Ok(media)
     }
 
     /// Point `media` at `path` (relink, MED-05): the player reloads it.

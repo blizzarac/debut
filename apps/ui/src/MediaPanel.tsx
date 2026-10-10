@@ -29,6 +29,10 @@ export function MediaPanel({
   const [ruleValue, setRuleValue] = useState("");
   const [tagging, setTagging] = useState<string | null>(null);
   const [relink, setRelink] = useState<{ id: string; path: string } | null>(null);
+  const [folder, setFolder] = useState("");
+  const [copyTo, setCopyTo] = useState("");
+  const [relinkDir, setRelinkDir] = useState("");
+  const [ingesting, setIngesting] = useState(false);
   const [proxies, setProxies] = useState<Record<string, ProxyStatus>>({});
   const [proxyDiv, setProxyDiv] = useState<2 | 4>(2);
   const [useProxies, setUseProxies] = useState(false);
@@ -81,6 +85,53 @@ export function MediaPanel({
         <input value={path} onChange={(e) => setPath(e.target.value)} placeholder="/path/to/clip.mp4" style={{ flex: 1, minWidth: 0 }} onKeyDown={(e) => e.key === "Enter" && importMedia()} />
         <button onClick={importMedia}>Import</button>
       </div>
+      {media.ingestFolder && (
+        <details style={{ margin: "4px 0" }}>
+          <summary style={{ cursor: "pointer", color: "#555" }}>Ingest a folder or card</summary>
+          <div style={{ display: "flex", gap: 4, flexWrap: "wrap", marginTop: 4 }}>
+            <input value={folder} onChange={(e) => setFolder(e.target.value)} placeholder="/media/card" style={{ flex: 1, minWidth: 90 }} />
+            <input value={copyTo} onChange={(e) => setCopyTo(e.target.value)} placeholder="copy to (optional)" title="Copy the files here first, keeping their folders; each copy is checked against the original before it is imported" style={{ flex: 1, minWidth: 90 }} />
+            <button
+              disabled={!folder || ingesting}
+              onClick={() => {
+                setIngesting(true);
+                onStatus(copyTo ? "copying and verifying…" : "importing…");
+                media
+                  .ingestFolder!(folder, copyTo || null)
+                  .then((r) => {
+                    const mb = (r.bytes_copied / 1e6).toFixed(1);
+                    onStatus(`imported ${r.imported}${r.copied ? `, copied ${r.copied} (${mb} MB, verified)` : ""}${r.skipped ? `, ${r.skipped} already in the project` : ""}${r.failed.length ? `; failed: ${r.failed.map(([f, why]) => `${f.split("/").pop()} (${why})`).join(", ")}` : ""}`);
+                    onChanged();
+                  })
+                  .catch((e) => onStatus(`ingest failed: ${e}`))
+                  .finally(() => setIngesting(false));
+              }}
+            >
+              Ingest
+            </button>
+          </div>
+        </details>
+      )}
+      {media.relinkFolder && list.some((m) => m.online === false) && (
+        <div style={{ display: "flex", gap: 4, margin: "4px 0" }} title="Look for every missing file by name under this folder">
+          <input value={relinkDir} onChange={(e) => setRelinkDir(e.target.value)} placeholder="find missing files in…" style={{ flex: 1, minWidth: 0 }} />
+          <button
+            disabled={!relinkDir || ingesting}
+            style={{ color: "#c33", borderColor: "#c33" }}
+            onClick={() =>
+              media
+                .relinkFolder!(relinkDir)
+                .then((r) => {
+                  onStatus(`relinked ${r.relinked.length}${r.ambiguous.length ? `; several matches for ${r.ambiguous.map((a) => a[0]).join(", ")}` : ""}${r.not_found.length ? `; not found: ${r.not_found.join(", ")}` : ""}`);
+                  onChanged();
+                })
+                .catch((e) => onStatus(`relink failed: ${e}`))
+            }
+          >
+            Relink all
+          </button>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 4, flexWrap: "wrap", margin: "6px 0" }}>
         <button style={chip(bin === null)} onClick={() => setBin(null)}>
           All ({list.length})

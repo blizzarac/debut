@@ -2161,3 +2161,68 @@ printf '{"transcription":[{"offsets":{"from":100,"to":900},"text":" one %s"},{"o
     s.undo().unwrap();
     assert!(s.captions().unwrap().is_empty(), "one undo step");
 }
+
+/// Folder ingest with verified copies, and batch relink (MED-01/02/06/13).
+#[test]
+fn ingest_copies_verifies_imports_and_relinks_moved_media() {
+    let Fx { mut s, dir, .. } = fixture("ingest_and_relink");
+    // A "card": one clip in a subfolder, a sidecar, a hidden file.
+    let card = dir.join("card");
+    std::fs::create_dir_all(card.join("CLIP")).unwrap();
+    std::fs::copy(FIXTURE, card.join("CLIP/A001.mp4")).unwrap();
+    std::fs::write(card.join("CLIP/A001.xml"), b"<xml/>").unwrap();
+    std::fs::write(card.join(".hidden.mp4"), b"x").unwrap();
+    let dest = dir.join("footage");
+    let before = s.media_list().unwrap().len();
+    let r = s
+        .ingest_folder(&card.to_string_lossy(), Some(&dest.to_string_lossy()))
+        .unwrap();
+    assert_eq!((r.imported, r.copied, r.skipped), (1, 1, 0), "{r:?}");
+    assert!(r.failed.is_empty(), "{:?}", r.failed);
+    assert_eq!(r.bytes_copied, std::fs::metadata(FIXTURE).unwrap().len());
+    let copied = dest.join("CLIP/A001.mp4").to_string_lossy().into_owned();
+    assert!(s.media_list().unwrap().iter().any(|m| m.path == copied));
+    // Running it again reuses the verified copy and imports nothing twice.
+    let again = s
+        .ingest_folder(&card.to_string_lossy(), Some(&dest.to_string_lossy()))
+        .unwrap();
+    assert_eq!((again.imported, again.copied, again.skipped), (0, 0, 1));
+    s.undo().unwrap();
+    assert_eq!(s.media_list().unwrap().len(), before, "one undo step");
+    s.redo().unwrap();
+
+    // The footage folder moves; relink finds the clip by name.
+    let moved = dir.join("moved");
+    std::fs::rename(&dest, &moved).unwrap();
+    let id = s
+        .media_list()
+        .unwrap()
+        .into_iter()
+        .find(|m| m.path == copied)
+        .unwrap()
+        .id;
+    s.open_project_json(&s.project_json().unwrap()).unwrap(); // re-probe: now offline
+    assert!(
+        !s.media_list()
+            .unwrap()
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap()
+            .online
+    );
+    let r = s.relink_folder(&moved.to_string_lossy()).unwrap();
+    let new_path = moved.join("CLIP/A001.mp4").to_string_lossy().into_owned();
+    assert!(
+        r.relinked
+            .contains(&("A001.mp4".to_string(), new_path.clone())),
+        "{r:?}"
+    );
+    let m = s
+        .media_list()
+        .unwrap()
+        .into_iter()
+        .find(|m| m.id == id)
+        .unwrap();
+    assert_eq!(m.path, new_path);
+    assert!(m.online);
+}

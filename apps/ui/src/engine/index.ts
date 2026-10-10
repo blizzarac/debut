@@ -515,6 +515,10 @@ export interface MediaApi {
   assignMedia(media: string, bin: string | null): Promise<void>;
   /** Point a media at another file; the player reloads it. */
   relinkMedia(media: string, path: string): Promise<void>;
+  /** Find every missing file by name under `dir` and relink single matches. */
+  relinkFolder?(dir: string): Promise<{ relinked: [string, string][]; ambiguous: [string, string[]][]; not_found: string[] }>;
+  /** Import a folder of media; with `copyTo`, copy (and verify) it there first. */
+  ingestFolder?(source: string, copyTo: string | null): Promise<{ imported: number; skipped: number; copied: number; bytes_copied: number; failed: [string, string][] }>;
   /** Build 1/2 or 1/4 resolution proxies in the background (MED-05). */
   createProxies?(media: string[], divisor: 2 | 4): Promise<void>;
   proxyStatus?(): Promise<ProxyStatus[]>;

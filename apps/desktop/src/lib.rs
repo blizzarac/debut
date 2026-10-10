@@ -52,6 +52,8 @@ pub fn run() {
             ipc::compare_snapshot,
             ipc::set_linked_selection,
             ipc::relink_media,
+            ipc::relink_folder,
+            ipc::ingest_folder,
             ipc::create_proxies,
             ipc::proxy_status,
             ipc::use_proxies,
