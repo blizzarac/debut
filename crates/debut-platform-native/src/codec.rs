@@ -4,7 +4,8 @@
 use crate::hwdecode;
 use debut_core::{Error, FrameRate, Rational, Result};
 use debut_platform::codec::{
-    AudioBlock, AudioInfo, DecodePath, Decoder, SourceTags, VideoFrame, VideoInfo,
+    AudioBlock, AudioInfo, DecodePath, Decoder, HdrSettings, HdrTransfer, SourceTags, VideoFrame,
+    VideoInfo,
 };
 use ffmpeg_next as ff;
 use std::collections::VecDeque;
@@ -219,7 +220,7 @@ impl FfmpegDecoder {
             };
             let key = (frame.format(), frame.width(), frame.height());
             if v.scaler.as_ref().map(|s| (s.0, s.1, s.2)) != Some(key) {
-                let scaler = ff::software::scaling::Context::get(
+                let mut scaler = ff::software::scaling::Context::get(
                     key.0,
                     key.1,
                     key.2,
@@ -229,6 +230,7 @@ impl FfmpegDecoder {
                     ff::software::scaling::Flags::BILINEAR,
                 )
                 .map_err(err)?;
+                read_matrix(&mut scaler, frame);
                 v.scaler = Some((key.0, key.1, key.2, scaler));
             }
             let mut rgba = ff::frame::Video::empty();
@@ -248,6 +250,7 @@ impl FfmpegDecoder {
                 width: w,
                 height: h,
                 rgba8,
+                ..Default::default()
             });
         }
         Ok(())
@@ -572,6 +575,109 @@ fn rate_options(
     opts
 }
 
+/// Tag the stream's colour: Rec.709 for SDR, Rec.2020 with the PQ or HLG
+/// curve for HDR, limited range either way. Players and the container's
+/// `colr` box read these.
+fn tag_colour(enc: &mut ff::encoder::video::Video, hdr: Option<&HdrSettings>) {
+    use ff::ffi::{AVColorPrimaries, AVColorRange, AVColorSpace, AVColorTransferCharacteristic};
+    let (pri, trc, spc) = match hdr.map(|h| h.transfer) {
+        None => (
+            AVColorPrimaries::AVCOL_PRI_BT709,
+            AVColorTransferCharacteristic::AVCOL_TRC_BT709,
+            AVColorSpace::AVCOL_SPC_BT709,
+        ),
+        Some(t) => (
+            AVColorPrimaries::AVCOL_PRI_BT2020,
+            match t {
+                HdrTransfer::Pq => AVColorTransferCharacteristic::AVCOL_TRC_SMPTE2084,
+                HdrTransfer::Hlg => AVColorTransferCharacteristic::AVCOL_TRC_ARIB_STD_B67,
+            },
+            AVColorSpace::AVCOL_SPC_BT2020_NCL,
+        ),
+    };
+    // SAFETY: the context is valid and not yet opened; these are plain fields.
+    unsafe {
+        let ctx = enc.as_mut_ptr();
+        (*ctx).color_primaries = pri;
+        (*ctx).color_trc = trc;
+        (*ctx).colorspace = spc;
+        (*ctx).color_range = AVColorRange::AVCOL_RANGE_MPEG;
+    }
+}
+
+/// x265 parameters for an HDR stream: HDR10 SEI (mastering display and
+/// content light level) for PQ, headers on every keyframe for both.
+fn x265_hdr_params(hdr: &HdrSettings) -> String {
+    match hdr.transfer {
+        HdrTransfer::Pq => format!(
+            "log-level=error:hdr10=1:hdr10-opt=1:repeat-headers=1:master-display={}:max-cll={},{}",
+            hdr.master_display(),
+            hdr.max_cll,
+            hdr.max_fall
+        ),
+        HdrTransfer::Hlg => "log-level=error:repeat-headers=1".to_string(),
+    }
+}
+
+/// Decode with the matrix and range the frame is tagged with. Untagged
+/// frames get Rec.709 from 720 lines up and Rec.601 below, as players guess.
+fn read_matrix(scaler: &mut ff::software::scaling::Context, frame: &ff::frame::Video) {
+    use ff::color::{Range, Space};
+    use ff::ffi::{
+        sws_getCoefficients, sws_setColorspaceDetails, SWS_CS_BT2020, SWS_CS_ITU601, SWS_CS_ITU709,
+    };
+    if !matches!(
+        frame.format(),
+        ff::format::Pixel::YUV420P
+            | ff::format::Pixel::YUV422P
+            | ff::format::Pixel::YUV444P
+            | ff::format::Pixel::YUV420P10LE
+            | ff::format::Pixel::YUV422P10LE
+            | ff::format::Pixel::YUV444P10LE
+            | ff::format::Pixel::NV12
+            | ff::format::Pixel::P010LE
+    ) {
+        return;
+    }
+    // The constants' type differs between FFmpeg bindings.
+    #[allow(clippy::unnecessary_cast)]
+    let cs = match frame.color_space() {
+        Space::BT709 => SWS_CS_ITU709,
+        Space::BT2020NCL | Space::BT2020CL => SWS_CS_BT2020,
+        Space::SMPTE170M | Space::BT470BG => SWS_CS_ITU601,
+        _ if frame.height() >= 720 => SWS_CS_ITU709,
+        _ => SWS_CS_ITU601,
+    } as i32;
+    let full = i32::from(frame.color_range() == Range::JPEG);
+    // SAFETY: valid scaler; the coefficient tables are static in swscale.
+    unsafe {
+        let table = sws_getCoefficients(cs);
+        sws_setColorspaceDetails(
+            scaler.as_mut_ptr(),
+            table,
+            full,
+            table,
+            1,
+            0,
+            1 << 16,
+            1 << 16,
+        );
+    }
+}
+
+/// Full-range RGB in, limited-range YUV out, with the Rec.709 or Rec.2020
+/// matrix (swscale otherwise picks Rec.601).
+fn set_matrix(scaler: &mut ff::software::scaling::Context, bt2020: bool) {
+    use ff::ffi::{sws_getCoefficients, sws_setColorspaceDetails, SWS_CS_BT2020, SWS_CS_ITU709};
+    #[allow(clippy::unnecessary_cast)] // the constants' type differs between bindings
+    let cs = if bt2020 { SWS_CS_BT2020 } else { SWS_CS_ITU709 } as i32;
+    // SAFETY: valid scaler; the coefficient tables are static in swscale.
+    unsafe {
+        let table = sws_getCoefficients(cs);
+        sws_setColorspaceDetails(scaler.as_mut_ptr(), table, 1, table, 0, 0, 1 << 16, 1 << 16);
+    }
+}
+
 struct VideoEnc {
     stream_index: usize,
     encoder: ff::encoder::Video,
@@ -630,10 +736,17 @@ impl FfmpegEncoder {
         let fr = settings.frame_rate.0;
         // Requested hardware encoder first, software H.264 as the fallback
         // (NFR-09): the first one that opens wins.
-        let software = ff::encoder::find(ff::codec::Id::H264)
-            .ok_or_else(|| Error::Unsupported("no H.264 encoder".into()))?;
+        // HDR is 10-bit HEVC on x265 (EXP-06): it takes the HDR10 metadata
+        // as parameters, which the hardware encoders spell differently.
+        let software = if settings.hdr.is_some() {
+            ff::encoder::find_by_name("libx265")
+                .ok_or_else(|| Error::Unsupported("HDR export needs libx265".into()))?
+        } else {
+            ff::encoder::find(ff::codec::Id::H264)
+                .ok_or_else(|| Error::Unsupported("no H.264 encoder".into()))?
+        };
         let mut candidates: Vec<(String, ff::Codec)> = Vec::new();
-        if let Some(name) = &settings.encoder {
+        if let (Some(name), None) = (&settings.encoder, &settings.hdr) {
             if let Some(codec) = ff::encoder::find_by_name(name) {
                 if probe_encoder(name) {
                     candidates.push((name.clone(), codec));
@@ -649,7 +762,10 @@ impl FfmpegEncoder {
             let Ok(mut enc) = ctx.encoder().video() else {
                 continue;
             };
-            let format = input_format(&name);
+            let format = match settings.hdr {
+                Some(_) => ff::format::Pixel::YUV420P10LE,
+                None => input_format(&name),
+            };
             enc.set_width(settings.width);
             enc.set_height(settings.height);
             enc.set_format(format);
@@ -660,13 +776,17 @@ impl FfmpegEncoder {
             if global_header {
                 enc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
             }
-            let opts = rate_options(
+            let mut opts = rate_options(
                 &name,
                 settings.crf,
                 settings.width,
                 settings.height,
                 fr.as_f64(),
             );
+            tag_colour(&mut enc, settings.hdr.as_ref());
+            if let Some(hdr) = &settings.hdr {
+                opts.set("x265-params", &x265_hdr_params(hdr));
+            }
             match enc.open_with(opts) {
                 Ok(e) => {
                     opened = Some((name, e, format, time_base));
@@ -686,8 +806,12 @@ impl FfmpegEncoder {
             stream.set_time_base(time_base);
             stream.set_rate(ff::Rational::new(fr.num as i32, fr.den as i32));
             stream.set_avg_frame_rate(ff::Rational::new(fr.num as i32, fr.den as i32));
-            let scaler = ff::software::scaling::Context::get(
-                ff::format::Pixel::RGBA,
+            let mut scaler = ff::software::scaling::Context::get(
+                if settings.hdr.is_some() {
+                    ff::format::Pixel::RGBA64LE
+                } else {
+                    ff::format::Pixel::RGBA
+                },
                 settings.width,
                 settings.height,
                 format,
@@ -696,6 +820,7 @@ impl FfmpegEncoder {
                 ff::software::scaling::Flags::BILINEAR,
             )
             .map_err(err)?;
+            set_matrix(&mut scaler, settings.hdr.is_some());
             VideoEnc {
                 stream_index: stream.index(),
                 encoder,
@@ -831,16 +956,45 @@ impl debut_platform::Encoder for FfmpegEncoder {
                 "frame size does not match encoder".into(),
             ));
         }
-        let mut rgba = ff::frame::Video::new(ff::format::Pixel::RGBA, frame.width, frame.height);
-        let stride = rgba.stride(0);
-        let row = (frame.width * 4) as usize;
-        {
+        let pixels = (frame.width * frame.height * 4) as usize;
+        let rgba = if self.settings.hdr.is_some() {
+            if frame.rgba16.len() != pixels {
+                return Err(Error::InvalidArgument(
+                    "an HDR encoder takes 16-bit frames".into(),
+                ));
+            }
+            let mut rgba =
+                ff::frame::Video::new(ff::format::Pixel::RGBA64LE, frame.width, frame.height);
+            let stride = rgba.stride(0);
+            let row = (frame.width * 4) as usize;
+            let data = rgba.data_mut(0);
+            for y in 0..frame.height as usize {
+                let line = &mut data[y * stride..y * stride + row * 2];
+                for (out, v) in line
+                    .chunks_exact_mut(2)
+                    .zip(&frame.rgba16[y * row..(y + 1) * row])
+                {
+                    out.copy_from_slice(&v.to_le_bytes());
+                }
+            }
+            rgba
+        } else {
+            if frame.rgba8.len() != pixels {
+                return Err(Error::InvalidArgument(
+                    "an SDR encoder takes 8-bit frames".into(),
+                ));
+            }
+            let mut rgba =
+                ff::frame::Video::new(ff::format::Pixel::RGBA, frame.width, frame.height);
+            let stride = rgba.stride(0);
+            let row = (frame.width * 4) as usize;
             let data = rgba.data_mut(0);
             for y in 0..frame.height as usize {
                 data[y * stride..y * stride + row]
                     .copy_from_slice(&frame.rgba8[y * row..(y + 1) * row]);
             }
-        }
+            rgba
+        };
         let mut yuv = ff::frame::Video::empty();
         self.video.scaler.run(&rgba, &mut yuv).map_err(err)?;
         yuv.set_pts(Some(self.video.next_pts));
@@ -1101,6 +1255,7 @@ mod tests {
                 bitrate: 64_000,
             }),
             encoder: None,
+            hdr: None,
         };
         let mut enc = Box::new(FfmpegEncoder::create(&path, settings).unwrap());
         // 30 frames: left half red, right half ramps from black to white.
@@ -1122,6 +1277,7 @@ mod tests {
                 width: 64,
                 height: 36,
                 rgba8,
+                ..Default::default()
             })
             .unwrap();
             // 1 920 stereo frames of a 1 kHz tone per video frame.
@@ -1185,6 +1341,170 @@ mod tests {
     }
 
     #[test]
+    fn encodes_hdr10_with_tags_and_metadata() {
+        use debut_platform::Encoder;
+        // libavutil/mastering_display_metadata.h (not in the generated bindings).
+        #[repr(C)]
+        struct Mastering {
+            display_primaries: [[ff::ffi::AVRational; 2]; 3],
+            white_point: [ff::ffi::AVRational; 2],
+            min_luminance: ff::ffi::AVRational,
+            max_luminance: ff::ffi::AVRational,
+            has_primaries: i32,
+            has_luminance: i32,
+        }
+        #[repr(C)]
+        struct LightLevel {
+            max_cll: u32,
+            max_fall: u32,
+        }
+        let path = std::env::temp_dir().join(format!("debut-hdr-{}.mp4", std::process::id()));
+        let settings = EncodeSettings {
+            width: 64,
+            height: 36,
+            frame_rate: FrameRate::FPS_25,
+            crf: 20,
+            audio: None,
+            encoder: Some("h264_nvenc".into()),
+            hdr: Some(HdrSettings::hdr10()),
+        };
+        let mut enc = Box::new(FfmpegEncoder::create(&path, settings).unwrap());
+        assert_eq!(enc.encoder_name(), "libx265");
+        // An 8-bit frame is refused: the encoder wants 16-bit HDR pixels.
+        assert!(enc
+            .push_video(&VideoFrame {
+                width: 64,
+                height: 36,
+                rgba8: vec![0; 64 * 36 * 4],
+                ..Default::default()
+            })
+            .is_err());
+        // PQ code 0.508 (100 nits) grey on the left, 0.752 (1 000 nits) right.
+        let mut rgba16 = Vec::with_capacity(64 * 36 * 4);
+        for _y in 0..36 {
+            for x in 0..64 {
+                let v = if x < 32 { 33_292 } else { 49_283 };
+                rgba16.extend_from_slice(&[v, v, v, 65_535]);
+            }
+        }
+        for n in 0..10 {
+            enc.push_video(&VideoFrame {
+                pts: FrameRate::FPS_25.frame_to_time(n),
+                width: 64,
+                height: 36,
+                rgba16: rgba16.clone(),
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        enc.finish().unwrap();
+
+        // Container / stream tags.
+        let input = ff::format::input(&path).unwrap();
+        let stream = input.streams().best(ff::media::Type::Video).unwrap();
+        let ctx = ff::codec::context::Context::from_parameters(stream.parameters()).unwrap();
+        let mut dec = ctx.decoder().video().unwrap();
+        // SAFETY: plain reads of the stream's codec parameters.
+        let par = unsafe { &*stream.parameters().as_ptr() };
+        assert_eq!(par.codec_id, ff::ffi::AVCodecID::AV_CODEC_ID_HEVC);
+        assert_eq!(
+            par.color_trc,
+            ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_SMPTE2084
+        );
+        assert_eq!(
+            par.color_primaries,
+            ff::ffi::AVColorPrimaries::AVCOL_PRI_BT2020
+        );
+        assert_eq!(par.color_space, ff::ffi::AVColorSpace::AVCOL_SPC_BT2020_NCL);
+        // HDR10 SEI on the decoded frames: 10-bit, mastering display, MaxCLL.
+        let index = stream.index();
+        let mut input = input;
+        let mut frame = ff::frame::Video::empty();
+        let mut got = false;
+        for (s, packet) in input.packets() {
+            if s.index() != index {
+                continue;
+            }
+            dec.send_packet(&packet).unwrap();
+            if dec.receive_frame(&mut frame).is_ok() {
+                got = true;
+                break;
+            }
+        }
+        if !got {
+            dec.send_eof().unwrap();
+            dec.receive_frame(&mut frame).unwrap();
+        }
+        assert_eq!(frame.format(), ff::format::Pixel::YUV420P10LE);
+        let mastering = frame
+            .side_data(ff::frame::side_data::Type::MasteringDisplayMetadata)
+            .expect("mastering display metadata");
+        // SAFETY: the side data of that type is an AVMasteringDisplayMetadata.
+        let m = unsafe { &*(mastering.data().as_ptr() as *const Mastering) };
+        assert_eq!(m.has_luminance, 1);
+        assert_eq!(m.max_luminance.num / m.max_luminance.den, 1000);
+        let light = frame
+            .side_data(ff::frame::side_data::Type::ContentLightLevel)
+            .expect("content light level");
+        // SAFETY: as above, an AVContentLightMetadata.
+        let l = unsafe { &*(light.data().as_ptr() as *const LightLevel) };
+        assert_eq!((l.max_cll, l.max_fall), (1000, 400));
+
+        // Our decoder reads it back through the Rec.2020 matrix: the PQ code
+        // values come out as they went in (8-bit here).
+        let mut ours = FfmpegDecoder::open(&path).unwrap();
+        let f = ours.next_video().unwrap().unwrap();
+        let px = |x: usize| &f.rgba8[(18 * 64 + x) * 4..][..3];
+        for c in px(8) {
+            assert!((*c as i32 - 130).abs() <= 3, "left {:?}", px(8));
+        }
+        for c in px(56) {
+            assert!((*c as i32 - 192).abs() <= 3, "right {:?}", px(56));
+        }
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn encodes_hlg_tags() {
+        use debut_platform::Encoder;
+        let path = std::env::temp_dir().join(format!("debut-hlg-{}.mp4", std::process::id()));
+        let settings = EncodeSettings {
+            width: 64,
+            height: 36,
+            frame_rate: FrameRate::FPS_25,
+            crf: 20,
+            audio: None,
+            encoder: None,
+            hdr: Some(HdrSettings::hlg()),
+        };
+        let mut enc = Box::new(FfmpegEncoder::create(&path, settings).unwrap());
+        for n in 0..3 {
+            enc.push_video(&VideoFrame {
+                pts: FrameRate::FPS_25.frame_to_time(n),
+                width: 64,
+                height: 36,
+                rgba16: vec![32_768; 64 * 36 * 4],
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        enc.finish().unwrap();
+        let input = ff::format::input(&path).unwrap();
+        let stream = input.streams().best(ff::media::Type::Video).unwrap();
+        // SAFETY: a plain read of the stream's codec parameters.
+        let par = unsafe { &*stream.parameters().as_ptr() };
+        assert_eq!(
+            par.color_trc,
+            ff::ffi::AVColorTransferCharacteristic::AVCOL_TRC_ARIB_STD_B67
+        );
+        assert_eq!(
+            par.format,
+            ff::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P10LE as i32
+        );
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn hardware_encoder_detection_and_software_fallback() {
         // Whatever this machine has, the probe must not panic and every entry
         // must name a known codec family.
@@ -1206,6 +1526,7 @@ mod tests {
                 crf: 23,
                 audio: None,
                 encoder: Some("h264_definitely_not_an_encoder".into()),
+                hdr: None,
             },
         )
         .unwrap();

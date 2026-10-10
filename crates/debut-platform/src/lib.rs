@@ -19,7 +19,7 @@ pub use ai::{Transcriber, TranscriptSegment};
 pub use audio_out::AudioOut;
 pub use codec::{
     AudioBlock, AudioEncodeSettings, AudioInfo, DecodePath, Decoder, EncodeSettings, Encoder,
-    HwEncoder, SourceTags, VideoFrame, VideoInfo,
+    HdrSettings, HdrTransfer, HwEncoder, SourceTags, VideoFrame, VideoInfo,
 };
 pub use display::Display;
 pub use file_store::FileStore;

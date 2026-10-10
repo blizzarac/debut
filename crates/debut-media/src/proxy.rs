@@ -117,6 +117,7 @@ pub fn build(
             width: w,
             height: h,
             rgba8: px,
+            ..Default::default()
         };
         while time(n) + half < f.pts {
             if !emit(cur.as_ref().unwrap_or(&small), &mut n)? {
@@ -192,6 +193,7 @@ mod tests {
                 width: 4,
                 height: 4,
                 rgba8: vec![i as u8; 64],
+                ..Default::default()
             }))
         }
         fn next_audio(&mut self) -> Result<Option<AudioBlock>> {

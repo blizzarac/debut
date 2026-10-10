@@ -1,6 +1,7 @@
 //! The export queue, its worker thread and codec capabilities (EXP-01 .. EXP-03, NFR-09).
 
 use super::*;
+use debut_platform::{HdrSettings, HdrTransfer};
 
 pub(crate) type ExportSpec = (
     Preset,
@@ -30,6 +31,8 @@ pub struct XmlImportDto {
 pub struct PresetDto {
     pub name: String,
     pub loudness_lufs: f32,
+    /// "pq" or "hlg" for HDR presets.
+    pub hdr: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -42,6 +45,9 @@ pub struct ExportStatusDto {
     pub frames_total: u64,
     pub loudness_lufs: Option<f32>,
     pub true_peak_db: f32,
+    /// Measured MaxCLL / MaxFALL in nits (HDR exports).
+    pub max_cll: Option<f32>,
+    pub max_fall: Option<f32>,
     pub error: Option<String>,
 }
 
@@ -65,6 +71,10 @@ impl Session {
             .map(|p| PresetDto {
                 name: p.name,
                 loudness_lufs: p.loudness_lufs,
+                hdr: p.hdr.map(|t| match t {
+                    HdrTransfer::Pq => "pq".to_string(),
+                    HdrTransfer::Hlg => "hlg".to_string(),
+                }),
             })
             .collect()
     }
@@ -133,6 +143,7 @@ impl Session {
             range: (Rational::ZERO, self.first_sequence()?.duration()),
             sample_rate: 48_000,
             gain_db: 0.0,
+            hdr: preset.hdr,
         };
         let media: Vec<(MediaId, String)> = self
             .project()
@@ -242,6 +253,10 @@ impl Session {
                                         bitrate: preset.audio_bitrate.max(96_000),
                                     }),
                                     encoder,
+                                    hdr: preset.hdr.map(|t| match t {
+                                        HdrTransfer::Pq => HdrSettings::hdr10(),
+                                        HdrTransfer::Hlg => HdrSettings::hlg(),
+                                    }),
                                 },
                             )
                             .map_err(|e| e.to_string())?;
@@ -322,6 +337,8 @@ impl Session {
                 frames_total: e.progress.frames_total,
                 loudness_lufs: e.progress.loudness_lufs,
                 true_peak_db: e.progress.true_peak_db,
+                max_cll: e.progress.light.map(|l| l.max_cll),
+                max_fall: e.progress.light.map(|l| l.max_fall),
                 error: e.error.clone(),
             })
             .collect()

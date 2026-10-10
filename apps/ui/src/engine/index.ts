@@ -213,6 +213,8 @@ export interface PluginsApi {
 export interface ExportPreset {
   name: string;
   loudness_lufs: number;
+  /** "pq" or "hlg" for HDR presets (10-bit HEVC, Rec.2020). */
+  hdr?: "pq" | "hlg" | null;
 }
 
 export interface CodecCapabilities {
@@ -229,6 +231,9 @@ export interface ExportStatus {
   frames_total: number;
   loudness_lufs: number | null;
   true_peak_db: number;
+  /** Measured light levels in nits (HDR exports). */
+  max_cll?: number | null;
+  max_fall?: number | null;
   error: string | null;
 }
 

@@ -2,9 +2,10 @@
 //! the audio mixer into an [`Encoder`] (EXP-01, EXP-04). Playback and export share
 //! `compose`/`render`/`render_span`, so the file matches the viewer.
 
+use crate::hdr::{encode_rgba16, LightLevels};
 use debut_audio::{render_span, Inserts, LoudnessMeter, SampleSource, CHANNELS};
 use debut_core::{Rational, Result};
-use debut_platform::codec::{AudioBlock, Encoder, VideoFrame};
+use debut_platform::codec::{AudioBlock, Encoder, HdrTransfer, VideoFrame};
 use debut_project::Sequence;
 use debut_render::compose::{compose, SourceInfo};
 use debut_render::{Backend, FrameProvider, Rgba};
@@ -19,6 +20,8 @@ pub struct ExportJob {
     pub sample_rate: u32,
     /// Master gain applied to the mixed audio (loudness normalization, AUD-06).
     pub gain_db: f32,
+    /// Write 16-bit Rec.2020 PQ/HLG frames for an HDR encoder (EXP-06).
+    pub hdr: Option<HdrTransfer>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -28,6 +31,8 @@ pub struct Progress {
     /// Integrated loudness of what was written so far, once measurable.
     pub loudness_lufs: Option<f32>,
     pub true_peak_db: f32,
+    /// MaxCLL / MaxFALL of the frames written so far (HDR exports only).
+    pub light: Option<LightLevels>,
 }
 
 /// Cooperative control shared with the queue / UI (EXP-03): the job checks it
@@ -87,6 +92,7 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
         frames_total: total,
         loudness_lufs: None,
         true_peak_db: f32::NEG_INFINITY,
+        light: job.hdr.map(|_| LightLevels::default()),
     };
     let mut bus = Vec::new();
     let mut inserts = Inserts::default();
@@ -106,13 +112,29 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
         let graph = compose(&job.sequence, t, frames);
         let img = graph.render(backend, frames)?;
         let (w, h) = backend.size(&img);
-        let rgba8 = backend.download_rgba8(&img, debut_render::Transfer::Srgb);
-        encoder.push_video(&VideoFrame {
-            pts: t,
-            width: w,
-            height: h,
-            rgba8,
-        })?;
+        let frame = match job.hdr {
+            Some(transfer) => {
+                let px = backend.download(&img);
+                if let Some(light) = progress.light.as_mut() {
+                    light.add_frame(&px);
+                }
+                VideoFrame {
+                    pts: t,
+                    width: w,
+                    height: h,
+                    rgba16: encode_rgba16(&px, transfer),
+                    ..Default::default()
+                }
+            }
+            None => VideoFrame {
+                pts: t,
+                width: w,
+                height: h,
+                rgba8: backend.download_rgba8(&img, debut_render::Transfer::Srgb),
+                ..Default::default()
+            },
+        };
+        encoder.push_video(&frame)?;
 
         // Audio up to the end of this frame; exact per-frame counts at any rate.
         let next_cursor = (Rational::from_int(n + 1) * spf

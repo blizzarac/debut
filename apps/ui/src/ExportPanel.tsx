@@ -33,6 +33,7 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
 
   const target = presets.find((p) => p.name === preset)?.loudness_lufs ?? -14;
   const hwCount = caps?.hardware_encoders.length ?? 0;
+  const hdr = presets.find((p) => p.name === preset)?.hdr ?? null;
 
   async function start() {
     setError("");
@@ -66,6 +67,11 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
             </option>
           ))}
         </select>
+        {hdr && (
+          <span title={hdr === "pq" ? "10-bit HEVC (x265), Rec.2020, PQ with HDR10 metadata for a 1000-nit P3 grade. Scene white (1.0) is 100 nits." : "10-bit HEVC (x265), Rec.2020, hybrid log-gamma"} style={{ color: "#a60" }}>
+            HDR {hdr.toUpperCase()}
+          </span>
+        )}
         <label>
           <input type="checkbox" checked={normalize} onChange={(e) => setNormalize(e.target.checked)} /> normalize to {target} LUFS
         </label>
@@ -116,6 +122,7 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
             <div style={{ color: "#666" }}>
               {j.frames_done}/{j.frames_total} frames
               {j.loudness_lufs !== null ? ` · ${j.loudness_lufs.toFixed(1)} LUFS · ${j.true_peak_db.toFixed(1)} dBTP` : ""}
+              {j.max_cll != null ? ` · MaxCLL ${Math.round(j.max_cll)} · MaxFALL ${Math.round(j.max_fall ?? 0)} nits` : ""}
             </div>
           </li>
         ))}

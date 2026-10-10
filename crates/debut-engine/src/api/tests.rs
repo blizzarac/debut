@@ -2343,3 +2343,36 @@ fn variable_frame_rate_media_holds_frames_across_gaps() {
     assert_eq!(at(0.64), held);
     assert_ne!(at(0.72), held, "after the gap the picture moves on");
 }
+
+/// HDR presets (EXP-06) write 10-bit HEVC with PQ/HLG tags and report the
+/// light levels they measured.
+#[test]
+fn hdr_presets_export_hevc() {
+    let Fx { mut s, dir, .. } = fixture("hdr_export");
+    let presets = s.export_presets();
+    let pq = presets
+        .iter()
+        .find(|p| p.hdr.as_deref() == Some("pq"))
+        .unwrap();
+    assert!(presets.iter().any(|p| p.hdr.as_deref() == Some("hlg")));
+    let out = dir.join("hdr.mp4").to_string_lossy().into_owned();
+    let job = s
+        .export_start(out.clone(), &pq.name.clone(), None, false, true)
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    let e = loop {
+        let e = s.export_status().into_iter().find(|e| e.id == job).unwrap();
+        if e.state == "done" || e.state == "failed" || std::time::Instant::now() > deadline {
+            break e;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    };
+    assert_eq!(e.state, "done", "{:?}", e.error);
+    // The SDR fixture graded into HDR: nothing brighter than 100-nit white
+    // (plus the Rec.709 → 2020 overshoot of saturated colours).
+    let cll = e.max_cll.unwrap();
+    assert!(cll > 10.0 && cll <= 101.0, "MaxCLL {cll}");
+    assert!(e.max_fall.unwrap() <= cll);
+    let dec = s.platform.open_decoder(&out).unwrap();
+    assert_eq!(dec.video_info().unwrap().codec, "hevc");
+}

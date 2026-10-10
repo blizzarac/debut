@@ -186,6 +186,7 @@ mod tests {
             range: (Rational::ZERO, Rational::ONE),
             sample_rate: 48_000,
             gain_db: 0.0,
+            hdr: None,
         }
     }
 

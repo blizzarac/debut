@@ -28,6 +28,12 @@ pub struct Rational {
     pub den: i64,
 }
 
+impl Default for Rational {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
 impl Rational {
     pub const ZERO: Rational = Rational { num: 0, den: 1 };
     pub const ONE: Rational = Rational { num: 1, den: 1 };

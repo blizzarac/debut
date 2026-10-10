@@ -1,6 +1,7 @@
 //! Delivery presets (EXP-02). Platform-neutral descriptions; the platform encoder
 //! maps them onto the codecs it has.
 
+use debut_platform::codec::HdrTransfer;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,6 +24,9 @@ pub struct Preset {
     pub size: Option<(u32, u32)>,
     /// Loudness target the audio is normalized to (AUD-06), in LUFS.
     pub loudness_lufs: f32,
+    /// HDR delivery (EXP-06): 10-bit HEVC, Rec.2020, PQ or HLG.
+    #[serde(default)]
+    pub hdr: Option<HdrTransfer>,
 }
 
 impl Preset {
@@ -34,6 +38,7 @@ impl Preset {
             audio_bitrate: 384_000,
             size: Some((3840, 2160)),
             loudness_lufs: -14.0,
+            hdr: None,
         }
     }
 
@@ -45,6 +50,7 @@ impl Preset {
             audio_bitrate: 256_000,
             size: Some((1920, 1080)),
             loudness_lufs: -14.0,
+            hdr: None,
         }
     }
 
@@ -56,6 +62,7 @@ impl Preset {
             audio_bitrate: 192_000,
             size: Some((1080, 1920)),
             loudness_lufs: -14.0,
+            hdr: None,
         }
     }
 
@@ -67,6 +74,7 @@ impl Preset {
             audio_bitrate: 0,
             size: None,
             loudness_lufs: -23.0,
+            hdr: None,
         }
     }
 
@@ -78,6 +86,33 @@ impl Preset {
             audio_bitrate: 0,
             size: None,
             loudness_lufs: -23.0,
+            hdr: None,
+        }
+    }
+
+    /// HDR10: PQ with static metadata, for streaming platforms and TVs.
+    pub fn hdr10() -> Self {
+        Self {
+            name: "HDR10 (HEVC, PQ)".into(),
+            codec: VideoCodec::Hevc,
+            quality: 18,
+            audio_bitrate: 384_000,
+            size: None,
+            loudness_lufs: -14.0,
+            hdr: Some(HdrTransfer::Pq),
+        }
+    }
+
+    /// HLG: the broadcast HDR signal, viewable on SDR sets too.
+    pub fn hlg() -> Self {
+        Self {
+            name: "HLG (HEVC)".into(),
+            codec: VideoCodec::Hevc,
+            quality: 18,
+            audio_bitrate: 256_000,
+            size: None,
+            loudness_lufs: -23.0,
+            hdr: Some(HdrTransfer::Hlg),
         }
     }
 
@@ -88,6 +123,8 @@ impl Preset {
             Self::instagram_reel(),
             Self::broadcast_ebu(),
             Self::master(),
+            Self::hdr10(),
+            Self::hlg(),
         ]
     }
 }

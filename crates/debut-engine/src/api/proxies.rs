@@ -58,6 +58,7 @@ fn build_one(
                 crf: 23,
                 audio: None,
                 encoder: None,
+                hdr: None,
             },
         )
         .map_err(|e| e.to_string())?;

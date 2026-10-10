@@ -56,6 +56,7 @@ fn exports_a_range_with_audio_and_video() {
         range: (Rational::new(1, 5), Rational::new(6, 5)),
         sample_rate: 48_000,
         gain_db: 0.0,
+        hdr: None,
     };
     // Two-pass loudness normalization to the web target: measure, set gain, re-measure.
     let (lufs, tp) = measure_loudness(&job, &mut samples).unwrap();
@@ -82,6 +83,7 @@ fn exports_a_range_with_audio_and_video() {
             frame_rate: FrameRate::FPS_25,
             crf: 20,
             encoder: None,
+            hdr: None,
             audio: Some(AudioEncodeSettings {
                 channels: 2,
                 sample_rate: 48_000,
