@@ -170,6 +170,7 @@ mod tests {
         fn video_info(&self) -> Option<&VideoInfo> {
             static INFO: std::sync::OnceLock<VideoInfo> = std::sync::OnceLock::new();
             Some(INFO.get_or_init(|| VideoInfo {
+                variable_frame_rate: false,
                 width: 4,
                 height: 4,
                 frame_rate: FrameRate::FPS_25,

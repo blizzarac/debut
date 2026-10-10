@@ -98,6 +98,7 @@ impl FfmpegDecoder {
                     stream.avg_frame_rate()
                 };
                 let info = VideoInfo {
+                    variable_frame_rate: false, // measured below
                     width: decoder.width(),
                     height: decoder.height(),
                     frame_rate: FrameRate::new(
@@ -168,6 +169,11 @@ impl FfmpegDecoder {
         };
 
         let tags = read_tags(&input);
+        let mut input = input;
+        let mut video = video;
+        if let Some(v) = video.as_mut() {
+            v.info.variable_frame_rate = scan_variable_rate(&mut input, v.index);
+        }
         Ok(Self {
             input,
             video,
@@ -353,6 +359,24 @@ fn read_tags(input: &ff::format::context::Input) -> SourceTags {
         look(stream.metadata());
     }
     tags
+}
+
+/// Read the first video packets' timestamps (demuxing only) to tell a
+/// variable frame rate, then rewind.
+fn scan_variable_rate(input: &mut ff::format::context::Input, index: usize) -> bool {
+    let mut pts = Vec::new();
+    for (stream, packet) in input.packets().take(2000) {
+        if stream.index() == index {
+            if let Some(p) = packet.pts() {
+                pts.push(p);
+            }
+            if pts.len() >= 240 {
+                break;
+            }
+        }
+    }
+    let _ = input.seek(0, ..);
+    debut_platform::codec::uneven_timestamps(&pts)
 }
 
 /// Give the codec context the first candidate device its codec can decode
@@ -933,6 +957,32 @@ mod tests {
                 wanted: "hardware".into(),
                 reason: "FFmpeg has no teleport support".into()
             }
+        );
+    }
+
+    #[test]
+    fn tells_variable_frame_rate_and_still_decodes_from_the_start() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/");
+        assert!(
+            !FfmpegDecoder::open(FIXTURE)
+                .unwrap()
+                .video_info()
+                .unwrap()
+                .variable_frame_rate
+        );
+        let mut d = FfmpegDecoder::open(format!("{dir}vfr_64x36_2s.mp4")).unwrap();
+        assert!(d.video_info().unwrap().variable_frame_rate);
+        // The scan rewound: every frame comes, from the first.
+        let mut pts = Vec::new();
+        while let Some(f) = d.next_video().unwrap() {
+            pts.push(f.pts);
+        }
+        assert_eq!(pts.len(), 45);
+        assert_eq!(pts[0], Rational::ZERO);
+        // The gap where frames 10..19 were dropped.
+        assert_eq!(
+            (pts[9], pts[10]),
+            (Rational::new(9, 30), Rational::new(20, 30))
         );
     }
 

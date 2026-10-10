@@ -25,6 +25,9 @@ pub struct MediaDto {
     pub timecode: Option<String>,
     #[serde(default)]
     pub reel: Option<String>,
+    /// Variable frame rate: playback holds frames across its gaps (MED-03).
+    #[serde(default)]
+    pub vfr: bool,
 }
 
 #[derive(Serialize)]
@@ -72,6 +75,7 @@ impl Session {
         let id = media.id;
         let start_timecode = media.metadata.start_timecode;
         let reel = media.metadata.reel.clone();
+        let vfr = media.metadata.variable_frame_rate;
         self.exec(Command::AddMedia(media))?;
         let (width, height, duration, has_audio) = self.probed[&id];
         let fr = self
@@ -93,6 +97,7 @@ impl Session {
             online: true,
             timecode: start_timecode.map(|t| t.to_string()),
             reel,
+            vfr,
         })
     }
 
@@ -122,6 +127,7 @@ impl Session {
                 audio_channels: dec.audio_info().map(|a| a.channels).unwrap_or(0),
                 start_timecode,
                 reel: tags.reel.clone(),
+                variable_frame_rate: dec.video_info().is_some_and(|v| v.variable_frame_rate),
                 camera: tags.camera.clone(),
                 ..Default::default()
             },
@@ -198,6 +204,7 @@ impl Session {
                     online: !self.offline.contains(&m.id) && self.store.exists(&m.path),
                     timecode: m.metadata.start_timecode.map(|t| t.to_string()),
                     reel: m.metadata.reel.clone(),
+                    vfr: m.metadata.variable_frame_rate,
                 }
             })
             .collect())

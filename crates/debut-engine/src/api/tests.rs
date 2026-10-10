@@ -2301,3 +2301,45 @@ fn audio_only_and_still_media_import_play_and_export() {
     };
     assert_eq!(state.0, "done", "{:?}", state.1);
 }
+
+/// Variable-frame-rate media (MED-03) is flagged on import and conformed by
+/// time: inside a gap the last frame before it holds.
+#[test]
+fn variable_frame_rate_media_holds_frames_across_gaps() {
+    let Fx { mut s, v, .. } = fixture("vfr_media");
+    let fixtures = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../debut-platform-native/tests/fixtures/"
+    );
+    let m = s
+        .import_media(format!("{fixtures}vfr_64x36_2s.mp4"))
+        .unwrap();
+    assert!(m.vfr);
+    assert!(
+        s.media_list()
+            .unwrap()
+            .iter()
+            .find(|x| x.id == m.id)
+            .unwrap()
+            .vfr
+    );
+    assert!(
+        !s.media_list()
+            .unwrap()
+            .iter()
+            .find(|x| x.id != m.id)
+            .unwrap()
+            .vfr
+    );
+    // On V1 from 3 s; the source has frames at 0.30 s and then 0.667 s.
+    s.add_clip(&v, &m.id, 3.0).unwrap();
+    let mut at = |t: f64| {
+        s.transport(TransportAction::Seek { t: 3.0 + t }).unwrap();
+        s.frame_pixels().unwrap().2
+    };
+    let held = at(0.32);
+    assert_eq!(at(0.36), held, "inside the gap the frame holds");
+    assert_eq!(at(0.48), held);
+    assert_eq!(at(0.64), held);
+    assert_ne!(at(0.72), held, "after the gap the picture moves on");
+}

@@ -12,6 +12,7 @@ use debut_render::FrameProvider;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 
+#[derive(Clone)]
 struct Cached {
     pts: Rational,
     width: u32,
@@ -253,7 +254,23 @@ impl FrameProvider for FrameSource {
             src.recent.clear();
         }
 
-        let mut best: Option<Cached> = None;
+        // Stepping forward, the frame on screen may already be here: with a
+        // variable frame rate (MED-03) it holds across a gap, and the next
+        // frame decoded can lie beyond `t`.
+        let mut best: Option<Cached> = if far {
+            None
+        } else {
+            src.recent
+                .iter()
+                .filter(|c| c.pts <= t)
+                .max_by_key(|c| c.pts)
+                .cloned()
+        };
+        let keep = |recent: &mut VecDeque<Cached>, c: Cached| {
+            if !recent.iter().any(|r| r.pts == c.pts) {
+                recent.push_back(c);
+            }
+        };
         while let Some(f) = src.decoder.next_video()? {
             src.last_pts = Some(f.pts);
             let c = Cached {
@@ -265,13 +282,13 @@ impl FrameProvider for FrameSource {
             let done = covers(&c) || f.pts > t;
             if f.pts > t && best.is_some() {
                 // Overshot: keep the previous frame (covers t up to the next pts).
-                src.recent.push_back(c);
+                keep(&mut src.recent, c);
                 break;
             }
             // Keep the frames passed on the way: reverse playback (TL-09)
             // then finds the previous frames here instead of seeking again.
             if let Some(prev) = best.replace(c) {
-                src.recent.push_back(prev);
+                keep(&mut src.recent, prev);
                 if src.recent.len() > self.cache_depth {
                     src.recent.pop_front();
                 }
@@ -282,10 +299,62 @@ impl FrameProvider for FrameSource {
         }
         let best = best.ok_or_else(|| Error::NotFound(format!("no frame at {t} in {media:?}")))?;
         let out = (best.width, best.height, best.pixels.clone());
-        src.recent.push_back(best);
+        keep(&mut src.recent, best);
         while src.recent.len() > self.cache_depth {
             src.recent.pop_front();
         }
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use debut_core::IdGen;
+
+    /// Whatever order frames are asked for in, a time inside a variable-rate
+    /// gap shows the frame before it (MED-03): stepping forward from the
+    /// last frame before the gap once showed the one after it.
+    #[test]
+    fn holds_the_frame_before_a_variable_rate_gap() {
+        let p = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../debut-platform-native/tests/fixtures/vfr_64x36_2s.mp4"
+        );
+        let open = || Box::new(debut_platform_native::codec::FfmpegDecoder::open(p).unwrap());
+        let mut direct = open();
+        let mut frames = Vec::new();
+        while let Some(f) = direct.next_video().unwrap() {
+            frames.push((f.pts, f.rgba8));
+        }
+        let mut fs = FrameSource::new(8);
+        let id: MediaId = IdGen::new(1).fresh();
+        fs.add(id, open()).unwrap();
+        // Frames at 0.30 s, then 0.667 s; asked forwards, then backwards.
+        let times = [0, 4, 28, 32, 36, 48, 64, 68, 64, 36, 32];
+        let expect = [
+            0.0,
+            1.0 / 30.0,
+            8.0 / 30.0,
+            0.3,
+            0.3,
+            0.3,
+            0.3,
+            20.0 / 30.0,
+            0.3,
+            0.3,
+            0.3,
+        ];
+        for (t, want) in times.iter().zip(expect) {
+            let (_, _, px) = fs.frame(id, Rational::new(*t, 100)).unwrap();
+            let got = frames
+                .iter()
+                .find(|(_, b)| *b == px)
+                .map(|(p, _)| p.as_f64());
+            assert!(
+                got.is_some_and(|g| (g - want).abs() < 1e-9),
+                "at {t}/100 s: {got:?}, want {want}"
+            );
+        }
     }
 }

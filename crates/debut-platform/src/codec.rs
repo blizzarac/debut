@@ -10,6 +10,23 @@ pub struct VideoInfo {
     pub frame_rate: FrameRate,
     pub duration: Rational,
     pub codec: String,
+    /// Frames come at uneven intervals (phones, screen recordings, MED-03).
+    /// Playback conforms by time: each sequence frame shows the source frame
+    /// on screen at that moment, held across gaps.
+    pub variable_frame_rate: bool,
+}
+
+/// Whether presentation timestamps (any order, any time base) are unevenly
+/// spaced: the longest gap between frames is over 1.5x the shortest.
+pub fn uneven_timestamps(pts: &[i64]) -> bool {
+    let mut sorted = pts.to_vec();
+    sorted.sort_unstable();
+    sorted.dedup();
+    let deltas: Vec<i64> = sorted.windows(2).map(|w| w[1] - w[0]).collect();
+    match (deltas.iter().min(), deltas.iter().max()) {
+        (Some(&lo), Some(&hi)) if lo > 0 => hi * 2 > lo * 3,
+        _ => false,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -38,6 +55,20 @@ pub struct AudioBlock {
     pub channels: u16,
     pub sample_rate: u32,
     pub samples: Vec<f32>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tells_uneven_timestamps() {
+        assert!(!uneven_timestamps(&[0, 512, 1024, 1536, 2048]));
+        // Rounded timestamps (30 fps in milliseconds) and B-frame order are fine.
+        assert!(!uneven_timestamps(&[0, 67, 33, 100, 133, 167]));
+        assert!(uneven_timestamps(&[0, 512, 1024, 5632, 6144]));
+        assert!(!uneven_timestamps(&[0]));
+    }
 }
 
 pub trait Decoder: Send {

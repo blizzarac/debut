@@ -46,6 +46,8 @@ export interface MediaInfo {
   /** Start timecode and reel from the file's tags. */
   timecode: string | null;
   reel: string | null;
+  /** Variable frame rate: playback holds frames across its gaps. */
+  vfr?: boolean;
 }
 
 /** How a multicam clip lines up its angles. */
