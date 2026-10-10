@@ -2499,6 +2499,28 @@ fn smart_render_copies_untouched_prores() {
     while let Some(f) = dec.next_video().unwrap() {
         if n < 50 {
             assert_eq!(f.rgba8, want[n], "frame {n}");
+        } else {
+            // The rendered half (a neutral grade) has no colour shift: SDR
+            // exports encode Rec.709 as they decode it. What differs is
+            // ProRes Proxy generation noise on a tiny, busy picture.
+            let diff = f
+                .rgba8
+                .iter()
+                .zip(&want[n - 50])
+                .map(|(a, b)| (*a as i32 - *b as i32).abs())
+                .sum::<i32>() as f64
+                / f.rgba8.len() as f64;
+            let bias = f
+                .rgba8
+                .iter()
+                .zip(&want[n - 50])
+                .map(|(a, b)| *a as i32 - *b as i32)
+                .sum::<i32>() as f64
+                / f.rgba8.len() as f64;
+            assert!(
+                bias.abs() < 1.0 && diff < 5.0,
+                "frame {n}: mean difference {diff}, bias {bias}"
+            );
         }
         n += 1;
     }

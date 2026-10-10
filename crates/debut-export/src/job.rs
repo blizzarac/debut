@@ -67,6 +67,12 @@ impl Control {
     }
 }
 
+/// The curve SDR exports are encoded with. The encoder tags them Rec.709,
+/// so this is BT.1886's inverse: an untouched Rec.709 source comes back out
+/// with the values it went in with (and matches smart-render copies,
+/// EXP-05). The viewer shows sRGB instead, for the screen it is on.
+pub const SDR_OUTPUT: debut_render::Transfer = debut_render::Transfer::Bt1886;
+
 /// Linear premultiplied f32 -> display-encoded straight RGBA8 (the CPU reference
 /// for the GPU output pass).
 pub fn to_rgba8(px: &[Rgba]) -> Vec<u8> {
@@ -205,7 +211,7 @@ fn render_frame<B: Backend, S: SourceInfo + FrameProvider>(
             pts: t,
             width: w,
             height: h,
-            rgba8: backend.download_rgba8(&img, debut_render::Transfer::Srgb),
+            rgba8: backend.download_rgba8(&img, SDR_OUTPUT),
             ..Default::default()
         },
     };
