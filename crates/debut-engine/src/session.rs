@@ -140,6 +140,20 @@ impl Workspace {
         self.dirty
     }
 
+    /// The project was changed outside the history (collaboration): mark it
+    /// unsaved. Remote edits are not undoable here; autosave keeps them.
+    pub fn touch(&mut self) {
+        self.dirty = true;
+    }
+
+    /// Replace the project wholesale (joining a shared session); history is
+    /// cleared because its entries describe another document.
+    pub fn replace_project(&mut self, project: Project) {
+        self.project = project;
+        self.history.clear();
+        self.dirty = true;
+    }
+
     pub fn execute(&mut self, cmd: Command) -> Result<()> {
         self.history
             .execute(&mut self.project, cmd, &mut self.journal)?;

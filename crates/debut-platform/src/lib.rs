@@ -10,6 +10,7 @@ pub mod audio_out;
 pub mod codec;
 pub mod display;
 pub mod file_store;
+pub mod net;
 pub mod plugin_host;
 pub mod threads;
 
@@ -20,6 +21,7 @@ pub use codec::{
 };
 pub use display::Display;
 pub use file_store::FileStore;
+pub use net::Connection;
 pub use plugin_host::PluginHost;
 pub use threads::Threads;
 
@@ -77,4 +79,11 @@ pub trait Platform: Send + Sync + 'static {
     /// Bytes of a TrueType/OpenType font for `family` (or a font file path), or
     /// of a fallback face; `None` when the platform has no usable font (GFX-01).
     fn font(&self, family: &str) -> Option<std::sync::Arc<[u8]>>;
+
+    /// Open a line connection to `addr` ("host:port"), for collaboration.
+    fn connect(&self, addr: &str) -> debut_core::Result<Box<dyn Connection>> {
+        Err(debut_core::Error::Unsupported(format!(
+            "network connections are not available here ({addr})"
+        )))
+    }
 }

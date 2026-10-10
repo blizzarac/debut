@@ -12,6 +12,7 @@ members = [
     "crates/debut-graphics",
     "crates/debut-export",
     "crates/debut-collab",
+    "crates/debut-collab-server",
     "crates/debut-engine",
     "crates/debut-platform-native",
     "crates/debut-platform-web",
@@ -39,6 +40,7 @@ debut-render = { path = "crates/debut-render" }
 debut-graphics = { path = "crates/debut-graphics" }
 debut-export = { path = "crates/debut-export" }
 debut-collab = { path = "crates/debut-collab" }
+debut-collab-server = { path = "crates/debut-collab-server" }
 debut-engine = { path = "crates/debut-engine" }
 debut-platform-native = { path = "crates/debut-platform-native" }
 debut-platform-web = { path = "crates/debut-platform-web" }

@@ -1587,6 +1587,139 @@ fn patching_and_targeting() {
     assert!(!s.targeting().unwrap().targeted.contains(&a));
 }
 
+/// Two editors and a reviewer on one shared project (COL).
+#[test]
+fn collaborators_share_edits_presence_and_locks() {
+    let Fx {
+        mut s, v, clip_id, ..
+    } = fixture("collaborators_share_edits_presence_and_locks");
+    // Host: serve the open project; everyone (the host too) joins over TCP.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let server = debut_collab_server::serve(listener, s.project().unwrap().clone(), None).unwrap();
+    let addr = server.addr.to_string();
+    let mut b = native();
+    let id = b.ids.fresh();
+    b.start(
+        Project::new(id, "b"),
+        std::env::temp_dir()
+            .join("debut-collab-b.debut")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .unwrap();
+    let mut r = native();
+    let id = r.ids.fresh();
+    r.start(
+        Project::new(id, "r"),
+        std::env::temp_dir()
+            .join("debut-collab-r.debut")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .unwrap();
+    s.collab_join(&addr, "Ana".into(), "editor").unwrap();
+    b.collab_join(&addr, "Ben".into(), "editor").unwrap();
+    r.collab_join(&addr, "Rae".into(), "reviewer").unwrap();
+    // Poll everyone until a condition holds (or fail after ~5 s).
+    let settle = |sessions: &mut [&mut Session], done: &dyn Fn(&[&mut Session]) -> bool| {
+        for _ in 0..250 {
+            for x in sessions.iter_mut() {
+                x.collab_poll(None).unwrap();
+            }
+            if done(sessions) {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let st: Vec<_> = sessions.iter().map(|x| x.collab_status()).collect();
+        panic!("collaborators did not settle: {st:#?}");
+    };
+    let clips = |x: &Session| -> Vec<(f64, f64)> {
+        x.first_sequence()
+            .map(|seq| {
+                sequence_dto(seq).tracks[0]
+                    .clips
+                    .iter()
+                    .map(|c| (c.timeline_in, c.duration))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    settle(&mut [&mut s, &mut b, &mut r], &|xs| {
+        xs.iter().all(|x| {
+            x.collab_status().unwrap().joined && x.collab_status().unwrap().peers.len() == 2
+        })
+    });
+    // Ben now has Ana's project.
+    assert_eq!(clips(&b), clips(&s));
+
+    // Ana trims; Ben sees it.
+    s.edit(EditOp::RippleTail {
+        track: v.clone(),
+        clip: clip_id.clone(),
+        delta: -0.4,
+    })
+    .unwrap();
+    settle(&mut [&mut s, &mut b, &mut r], &|xs| {
+        clips(xs[1]) == clips(xs[0]) && xs[0].collab_status().unwrap().pending == 0
+    });
+    assert_eq!(clips(&b)[0], (0.4, 1.6));
+
+    // The reviewer cannot touch the cut, but can leave a comment.
+    assert!(r
+        .edit(EditOp::Blade {
+            track: v.clone(),
+            at: 1.0
+        })
+        .is_err());
+    r.add_marker(1.0, "tighten this".into(), None).unwrap();
+    settle(&mut [&mut s, &mut b, &mut r], &|xs| {
+        xs[0].markers().unwrap().len() == 1
+    });
+
+    // Ana locks V1: Ben's trim is refused and rolled back on his side.
+    s.collab_lock(&v, true).unwrap();
+    settle(&mut [&mut s, &mut b, &mut r], &|xs| {
+        xs[1].collab_status().unwrap().locks.len() == 1
+    });
+    assert_eq!(b.collab_status().unwrap().locks[0].owner, "Ana");
+    b.edit(EditOp::RippleTail {
+        track: v.clone(),
+        clip: clip_id.clone(),
+        delta: -0.4,
+    })
+    .unwrap();
+    settle(&mut [&mut s, &mut b, &mut r], &|xs| {
+        xs[1].collab_status().unwrap().pending == 0
+    });
+    assert_eq!(clips(&b)[0], (0.4, 1.6), "rolled back");
+    assert!(b
+        .collab_status()
+        .unwrap()
+        .notes
+        .iter()
+        .any(|n| n.contains("locked")));
+
+    // Presence: Ben sees Ana's playhead.
+    s.transport(TransportAction::Seek { t: 1.2 }).unwrap();
+    settle(&mut [&mut s, &mut b, &mut r], &|xs| {
+        xs[1]
+            .collab_status()
+            .unwrap()
+            .peers
+            .iter()
+            .any(|p| p.name == "Ana" && (p.playhead - 1.2).abs() < 0.05)
+    });
+    // Everyone agrees with the server.
+    let truth = debut_project::schema::to_json(&server.project()).unwrap();
+    for x in [&s, &b, &r] {
+        assert_eq!(
+            debut_project::schema::to_json(x.project().unwrap()).unwrap(),
+            truth
+        );
+    }
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

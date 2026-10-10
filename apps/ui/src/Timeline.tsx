@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useShortcut } from "./shortcuts";
-import type { ClipInfo, Targeting, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, TitleTemplate, TrackInfo } from "./engine";
+import { peerColor } from "./Collab";
+import type { ClipInfo, Peer, Targeting, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, TitleTemplate, TrackInfo } from "./engine";
 
 const TRACK_H = 44;
 const RULER_H = 22;
@@ -38,6 +39,9 @@ export function Timeline({
   onEdited,
   markers = [],
   onOpenNested,
+  peers = [],
+  locks = [],
+  onLock,
 }: {
   seq: SequenceInfo;
   position: number;
@@ -49,6 +53,11 @@ export function Timeline({
   markers?: MarkerInfo[];
   /** Double-click on a compound clip opens its nested sequence. */
   onOpenNested?: (sequence: string) => void;
+  /** Collaborators (their playheads are drawn) and track locks (COL). */
+  peers?: Peer[];
+  locks?: { track: string; owner: string }[];
+  /** Click a track name to lock or unlock it for yourself. */
+  onLock?: (track: string, on: boolean) => void;
 }) {
   const [pxPerSec, setPxPerSec] = useState(120);
   const [templates, setTemplates] = useState<TitleTemplate[]>([{ id: "title", name: "Title", description: "", saved: false }]);
@@ -265,11 +274,27 @@ export function Timeline({
             const y = RULER_H + i * TRACK_H;
             return (
               <g key={track.id}>
-                <rect x={0} y={y} width={HEADER_W} height={TRACK_H} fill="#e8e8e8" stroke="#ccc" />
-                <text x={8} y={y + TRACK_H / 2 + 4} fontSize={12} fill="#333">
-                  {track.kind === "video" ? "V" : "A"}
-                  {seq.tracks.filter((t) => t.kind === track.kind).indexOf(track) + 1}
-                </text>
+                {(() => {
+                  const lock = locks.find((l) => l.track === track.id);
+                  return (
+                    <>
+                      <rect x={0} y={y} width={HEADER_W} height={TRACK_H} fill={lock ? "#fee2e2" : "#e8e8e8"} stroke="#ccc" />
+                      <text
+                        x={8}
+                        y={y + TRACK_H / 2 + 4}
+                        fontSize={12}
+                        fill="#333"
+                        style={{ cursor: onLock ? "pointer" : undefined }}
+                        onMouseDown={() => onLock?.(track.id, !(lock?.owner === "you"))}
+                      >
+                        <title>{lock ? `Locked by ${lock.owner}` : onLock ? "Click to lock this track for yourself" : ""}</title>
+                        {track.kind === "video" ? "V" : "A"}
+                        {seq.tracks.filter((t) => t.kind === track.kind).indexOf(track) + 1}
+                        {lock ? " 🔒" : ""}
+                      </text>
+                    </>
+                  );
+                })()}
                 {targeting && (
                   <>
                     {(() => {
@@ -355,6 +380,17 @@ export function Timeline({
           {drag?.snapAt != null && (
             <line x1={HEADER_W + drag.snapAt * pxPerSec} y1={RULER_H} x2={HEADER_W + drag.snapAt * pxPerSec} y2={height} stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4 3" pointerEvents="none" />
           )}
+          {/* collaborators' playheads */}
+          {peers
+            .filter((p) => p.sequence === seq.id)
+            .map((p) => (
+              <g key={p.client} pointerEvents="none">
+                <line x1={HEADER_W + p.playhead * pxPerSec} y1={0} x2={HEADER_W + p.playhead * pxPerSec} y2={height} stroke={peerColor(p.client)} strokeWidth={1.5} strokeDasharray="3 2" />
+                <text x={HEADER_W + p.playhead * pxPerSec + 3} y={10} fontSize={9} fill={peerColor(p.client)}>
+                  {p.name}
+                </text>
+              </g>
+            ))}
           {/* playhead */}
           <line x1={HEADER_W + position * pxPerSec} y1={0} x2={HEADER_W + position * pxPerSec} y2={height} stroke="#e11" strokeWidth={2} pointerEvents="none" />
         </svg>

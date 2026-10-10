@@ -1,0 +1,3 @@
+# A standalone server: it owns its threads, sockets and project file.
+disallowed-methods = []
+disallowed-types = []

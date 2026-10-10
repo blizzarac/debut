@@ -5,6 +5,7 @@ pub mod codec; // FFmpeg; NVENC / VideoToolbox / Quick Sync / AMF encoders
 pub mod display; // native window, SDI/HDMI output (PB-09) — pending
 pub mod file_store; // native FS
 pub mod fonts; // system font discovery
+pub mod net; // TCP line connections (collaboration)
 pub mod plugin_host; // OpenFX, VST3, AU, out-of-process (NFR-07) — pending
 pub mod threads; // native pool
 
@@ -94,6 +95,10 @@ impl Platform for NativePlatform {
             .spawn(job)
             .map(|_| ())
             .map_err(|e| debut_core::Error::Other(format!("spawn {name}: {e}")))
+    }
+
+    fn connect(&self, addr: &str) -> debut_core::Result<Box<dyn debut_platform::Connection>> {
+        Ok(Box::new(net::TcpConnection::connect(addr)?))
     }
 
     fn font(&self, family: &str) -> Option<Arc<[u8]>> {

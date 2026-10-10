@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { captureNextChord, chordLabel, installShortcuts, setKeymap, useShortcut } from "./shortcuts";
-import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type Shortcuts, type Chord, type Keymap, type SyncBy, type Tick } from "./engine";
+import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type CollabStatus, type Shortcuts, type Chord, type Keymap, type SyncBy, type Tick } from "./engine";
 import { Captions } from "./Captions";
 import { MediaPanel } from "./MediaPanel";
 import { ExportPanel } from "./ExportPanel";
 import { Inspector, TitleEditor } from "./Inspector";
+import { Collab } from "./Collab";
 import { Markers } from "./Markers";
 import { MaskOverlay } from "./MaskOverlay";
 import { Snapshots } from "./Snapshots";
@@ -39,6 +40,28 @@ export default function App() {
     }
   });
   const [showKeys, setShowKeys] = useState(false);
+  // Shared session (COL): polled while joined.
+  const [collab, setCollab] = useState<CollabStatus | null>(null);
+  const [collabOn, setCollabOn] = useState(false);
+  useEffect(() => {
+    if (!engine?.collab || !collabOn) return;
+    let stop = false;
+    const id = setInterval(() => {
+      engine
+        .collab!.poll(selectedRef.current?.clip ?? null)
+        .then(([changed, st]) => {
+          if (stop) return;
+          setCollab(st);
+          if (!st) setCollabOn(false);
+          if (changed) refresh(engine);
+        })
+        .catch(() => {});
+    }, 300);
+    return () => {
+      stop = true;
+      clearInterval(id);
+    };
+  }, [engine, collabOn]); // eslint-disable-line react-hooks/exhaustive-deps
   // The user's own keys per preset, kept in this browser (TL-12).
   const [overrides, setOverrides] = useState<Record<string, Chord[]>>({});
   const [activeMap, setActiveMap] = useState<Keymap | null>(null);
@@ -303,7 +326,7 @@ export default function App() {
         {engine?.saveProject && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>
             <div style={{ display: "flex", gap: 4 }}>
-              <input value={filePath} onChange={(e) => setFilePath(e.target.value)} placeholder={file?.path ?? "/path/to/project.debut"} style={{ flex: 1 }} />
+              <input value={filePath} onChange={(e) => setFilePath(e.target.value)} placeholder={file?.path ?? "/path/to/project.debut"} style={{ flex: 1, minWidth: 0 }} />
               <button onClick={save} title="Save (autosaves every 2 min while dirty)" style={{ whiteSpace: "nowrap" }}>
                 Save{file?.dirty ? " •" : ""}
               </button>
@@ -345,6 +368,24 @@ export default function App() {
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Markers</h2>
             <Markers markers={engine.markers} list={markerList} fps={fps} onSeek={(t) => engine.player!.transport({ kind: "seek", t })} onChanged={() => refresh(engine)} />
+          </>
+        )}
+        {engine?.collab && engine.player && (
+          <>
+            <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Share</h2>
+            <Collab
+              api={{
+                ...engine.collab,
+                host: (p, n) => engine.collab!.host(p, n).then((a) => (setCollabOn(true), a)),
+                join: (a, n, r) => engine.collab!.join(a, n, r).then(() => setCollabOn(true)),
+                leave: () => engine.collab!.leave().then(() => (setCollab(null), setCollabOn(false), refresh(engine))),
+                poll: (c) => engine.collab!.poll(c),
+                lock: (t, on) => engine.collab!.lock(t, on),
+              }}
+              status={collab}
+              fps={fps}
+              onStatus={setStatus}
+            />
           </>
         )}
         {engine?.snapshots && engine.player && (
@@ -411,6 +452,9 @@ export default function App() {
             onEdited={() => refresh(engine)}
             onOpenNested={openSequence}
             markers={markerList}
+            peers={collab?.peers}
+            locks={collab?.locks}
+            onLock={collab?.joined && engine.collab ? (t, on) => engine.collab!.lock(t, on).catch(() => {}) : undefined}
           />
           </>
         ) : null}

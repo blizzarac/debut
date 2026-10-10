@@ -1,6 +1,6 @@
 [package]
-name = "debut-collab"
-description = "Collaboration: operation sync, locking, presence, review comments, offline reconciliation"
+name = "debut-collab-server"
+description = "Collaboration server: orders edits from connected editors over TCP (JSON lines)"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,6 +10,4 @@ repository.workspace = true
 debut-core.workspace = true
 debut-project.workspace = true
 debut-command.workspace = true
-serde.workspace = true
-serde_json.workspace = true
-thiserror.workspace = true
+debut-collab.workspace = true

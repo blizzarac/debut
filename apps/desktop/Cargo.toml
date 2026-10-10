@@ -17,4 +17,5 @@ tauri-build.workspace = true
 debut-engine.workspace = true
 debut-project.workspace = true
 debut-platform-native.workspace = true
+debut-collab-server.workspace = true
 tauri.workspace = true

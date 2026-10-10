@@ -24,3 +24,4 @@ serde_json.workspace = true
 
 [dev-dependencies]
 debut-platform-native.workspace = true
+debut-collab-server.workspace = true

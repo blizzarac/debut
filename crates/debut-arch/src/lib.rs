@@ -25,6 +25,9 @@ pub enum Layer {
     Engine,
     /// `debut-platform-native` / `-web`: implementations of the platform traits.
     PlatformImpl,
+    /// Standalone services (the collaboration server): may use the model,
+    /// commands and domain crates, and own threads and sockets.
+    Service,
     /// `apps/desktop` / `apps/web`: translate IPC or JS calls to the engine.
     Shell,
     /// Workspace tooling (this crate).
@@ -49,6 +52,7 @@ pub fn layer_of(name: &str) -> Option<Layer> {
         | "debut-export" | "debut-collab" => Layer::Domain,
         "debut-engine" => Layer::Engine,
         "debut-platform-native" | "debut-platform-web" => Layer::PlatformImpl,
+        "debut-collab-server" => Layer::Service,
         "debut-desktop" | "debut-web" => Layer::Shell,
         "debut-arch" => Layer::Tooling,
         _ => return None,
@@ -89,6 +93,8 @@ const SHELL_WORKSPACE_DEPS: &[&str] = &[
     "debut-core",
     "debut-project",
     "debut-command",
+    // Hosting a collaboration session from the app.
+    "debut-collab-server",
 ];
 
 /// Workspace graph: crate name -> names of its normal (non-dev, non-build)
@@ -113,6 +119,9 @@ pub fn check(graph: &Graph) -> Vec<String> {
                     let ok = match layer {
                         _ if layer.engine_side() => dl.engine_side() && dl <= layer,
                         Layer::PlatformImpl => dl <= Layer::PlatformTraits,
+                        // Services build on the model, commands and domain
+                        // crates, never on the engine or a platform.
+                        Layer::Service => dl.engine_side() && dl <= Layer::Domain,
                         Layer::Shell => {
                             SHELL_WORKSPACE_DEPS.contains(&dep.as_str())
                                 || own_platform(krate) == Some(dep.as_str())

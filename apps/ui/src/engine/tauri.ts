@@ -26,6 +26,8 @@ import type {
   KeyOverride,
   Keymap,
   SnapshotDiff,
+  CollabApi,
+  CollabStatus,
   SnapshotInfo,
   SnapshotsApi,
   SyncBy,
@@ -252,6 +254,24 @@ class TauriExport implements ExportApi {
   }
 }
 
+class TauriCollab implements CollabApi {
+  host(port: number, name: string) {
+    return invoke<string>("collab_host", { port, name });
+  }
+  join(addr: string, name: string, role: "editor" | "reviewer") {
+    return invoke<void>("collab_join", { addr, name, role });
+  }
+  leave() {
+    return invoke<void>("collab_leave");
+  }
+  poll(clip: string | null) {
+    return invoke<[boolean, CollabStatus | null]>("collab_poll", { clip });
+  }
+  lock(track: string, on: boolean) {
+    return invoke<void>("collab_lock", { track, on });
+  }
+}
+
 class TauriSnapshots implements SnapshotsApi {
   list() {
     return invoke<SnapshotInfo[]>("snapshots");
@@ -319,6 +339,7 @@ export class TauriEngine implements Engine {
   captions = new TauriCaptions();
   markers = new TauriMarkers();
   snapshots = new TauriSnapshots();
+  collab = new TauriCollab();
   media = new TauriMedia();
   player = new TauriPlayer();
   effects = new TauriEffects();

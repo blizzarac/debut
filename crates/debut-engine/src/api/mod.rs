@@ -25,6 +25,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
 mod captions;
+mod collab;
 mod effects;
 mod export;
 mod markers;
@@ -40,6 +41,7 @@ mod timeline;
 mod titles;
 mod waveforms;
 
+pub use self::collab::{CollabDto, LockDto, PeerDto};
 pub use self::mixer::DuckDto;
 use self::mixer::*;
 use self::proxies::ProxyJobs;
@@ -77,6 +79,8 @@ pub struct Session {
     linked_selection: bool,
     /// Source patching and track targeting per sequence (TL-05).
     patches: std::collections::HashMap<SequenceId, self::targeting::Patch>,
+    /// Shared editing session, when joined (COL).
+    collab: Option<self::collab::Collab>,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -136,6 +140,7 @@ impl Session {
             use_proxies: false,
             linked_selection: true,
             patches: Default::default(),
+            collab: None,
             player: None,
             audio_out: None,
             backend: AnyBackend::detect(),
@@ -177,13 +182,38 @@ impl Session {
     }
 
     pub fn undo(&mut self) -> Result<bool, String> {
+        // In a shared session an undo is an ordinary edit for the others.
+        let shared = self.collab.is_some().then(|| {
+            self.workspace
+                .as_ref()
+                .and_then(|w| w.history.peek_undo())
+                .map(|(apply, back)| (apply.clone(), back.clone()))
+        });
+        if let Some(Some((apply, _))) = &shared {
+            self.collab_before(apply)?;
+        }
         let r = self.workspace_mut()?.undo().map_err(|e| e.to_string())?;
+        if let (true, Some(Some((apply, back)))) = (r, shared) {
+            self.collab_after(apply, back);
+        }
         self.sync_player()?;
         Ok(r)
     }
 
     pub fn redo(&mut self) -> Result<bool, String> {
+        let shared = self.collab.is_some().then(|| {
+            self.workspace
+                .as_ref()
+                .and_then(|w| w.history.peek_redo())
+                .map(|(apply, back)| (apply.clone(), back.clone()))
+        });
+        if let Some(Some((apply, _))) = &shared {
+            self.collab_before(apply)?;
+        }
         let r = self.workspace_mut()?.redo().map_err(|e| e.to_string())?;
+        if let (true, Some(Some((apply, back)))) = (r, shared) {
+            self.collab_after(apply, back);
+        }
         self.sync_player()?;
         Ok(r)
     }
@@ -293,9 +323,14 @@ impl Session {
     }
 
     pub(crate) fn exec(&mut self, cmd: Command) -> Result<(), String> {
+        let inverse = self.collab_before(&cmd)?;
+        let sent = inverse.as_ref().map(|_| cmd.clone());
         self.workspace_mut()?
             .execute(cmd)
             .map_err(|e| e.to_string())?;
+        if let (Some(cmd), Some(inverse)) = (sent, inverse) {
+            self.collab_after(cmd, inverse);
+        }
         self.sync_player()
     }
 

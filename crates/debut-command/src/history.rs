@@ -62,6 +62,23 @@ impl History {
         !self.done.is_empty()
     }
 
+    /// What `undo` would apply, and what would redo it (collaboration sends
+    /// an undo to others as an ordinary edit).
+    pub fn peek_undo(&self) -> Option<(&Command, &Command)> {
+        self.done.last().map(|e| (&e.inverse, &e.forward))
+    }
+
+    /// What `redo` would apply, and what would undo it.
+    pub fn peek_redo(&self) -> Option<(&Command, &Command)> {
+        self.undone.last().map(|e| (&e.forward, &e.inverse))
+    }
+
+    /// Forget all entries (the project was replaced from elsewhere).
+    pub fn clear(&mut self) {
+        self.done.clear();
+        self.undone.clear();
+    }
+
     pub fn can_redo(&self) -> bool {
         !self.undone.is_empty()
     }

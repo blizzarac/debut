@@ -708,7 +708,20 @@ version = "0.1.0"
 dependencies = [
  "debut-command",
  "debut-core",
+ "debut-project",
+ "serde",
+ "serde_json",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "debut-collab-server"
+version = "0.1.0"
+dependencies = [
+ "debut-collab",
+ "debut-command",
+ "debut-core",
+ "debut-project",
 ]
 
 [[package]]
@@ -734,6 +747,7 @@ dependencies = [
 name = "debut-desktop"
 version = "0.1.0"
 dependencies = [
+ "debut-collab-server",
  "debut-engine",
  "debut-platform-native",
  "debut-project",
@@ -747,6 +761,7 @@ version = "0.1.0"
 dependencies = [
  "debut-audio",
  "debut-collab",
+ "debut-collab-server",
  "debut-command",
  "debut-core",
  "debut-export",

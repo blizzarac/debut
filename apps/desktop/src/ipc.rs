@@ -628,3 +628,51 @@ pub fn snap_points(
 ) -> Result<Vec<SnapPointDto>, String> {
     lock(&state).snap_points(exclude)
 }
+
+/// The collaboration server this app hosts, if any.
+static HOSTED: Mutex<Option<debut_collab_server::Handle>> = Mutex::new(None);
+
+/// Host a shared session on `port` with the open project and join it.
+#[tauri::command]
+pub fn collab_host(state: State<'_, Shared>, port: u16, name: String) -> Result<String, String> {
+    let mut s = lock(&state);
+    let project = s.project_snapshot().ok_or("no project open")?;
+    let listener = std::net::TcpListener::bind(("0.0.0.0", port))
+        .map_err(|e| format!("cannot listen on port {port}: {e}"))?;
+    let handle = debut_collab_server::serve(listener, project, None).map_err(|e| e.to_string())?;
+    let local = format!("127.0.0.1:{}", handle.addr.port());
+    *HOSTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+    s.collab_join(&local, name, "editor")?;
+    Ok(local)
+}
+
+#[tauri::command]
+pub fn collab_join(
+    state: State<'_, Shared>,
+    addr: String,
+    name: String,
+    role: String,
+) -> Result<(), String> {
+    lock(&state).collab_join(&addr, name, &role)
+}
+
+#[tauri::command]
+pub fn collab_leave(state: State<'_, Shared>) {
+    lock(&state).collab_leave();
+}
+
+/// Read the network; returns the session state and whether the project changed.
+#[tauri::command]
+pub fn collab_poll(
+    state: State<'_, Shared>,
+    clip: Option<String>,
+) -> Result<(bool, Option<CollabDto>), String> {
+    let mut s = lock(&state);
+    let changed = s.collab_poll(clip)?;
+    Ok((changed, s.collab_status()))
+}
+
+#[tauri::command]
+pub fn collab_lock(state: State<'_, Shared>, track: String, on: bool) -> Result<(), String> {
+    lock(&state).collab_lock(&track, on)
+}

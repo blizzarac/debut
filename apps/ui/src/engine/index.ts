@@ -547,7 +547,42 @@ export interface XmlImport {
   skipped: string[];
 }
 
+/** A collaborator in the shared session (COL-02). */
+export interface Peer {
+  client: number;
+  name: string;
+  role: "editor" | "reviewer";
+  sequence: string | null;
+  playhead: number;
+  clip: string | null;
+}
+
+export interface CollabStatus {
+  connected: boolean;
+  joined: boolean;
+  address: string;
+  name: string;
+  role: "editor" | "reviewer";
+  client: number;
+  version: number;
+  pending: number;
+  peers: Peer[];
+  locks: { track: string; client: number; owner: string }[];
+  notes: string[];
+}
+
+export interface CollabApi {
+  /** Serve the open project on `port` and join it; returns the local address. */
+  host(port: number, name: string): Promise<string>;
+  join(addr: string, name: string, role: "editor" | "reviewer"): Promise<void>;
+  leave(): Promise<void>;
+  /** Read the network; [project changed, session state]. */
+  poll(clip: string | null): Promise<[boolean, CollabStatus | null]>;
+  lock(track: string, on: boolean): Promise<void>;
+}
+
 export interface Engine extends ProjectApi {
+  collab?: CollabApi;
   /** Keyboard shortcut presets (debut, Premiere Pro, Final Cut Pro, Avid). */
   shortcuts?(): Promise<Shortcuts>;
   /** A preset with the user's own keys on top: each overridden action gets exactly its keys. */
