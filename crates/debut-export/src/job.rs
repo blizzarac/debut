@@ -90,6 +90,7 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
     };
     let mut bus = Vec::new();
     let mut inserts = Inserts::default();
+    inserts.set_plugins(samples.plugins());
     inserts.sync(&job.sequence, sr);
     let mut meter = LoudnessMeter::new(sr);
     let gain = 10f32.powf(job.gain_db / 20.0);
@@ -162,6 +163,7 @@ pub fn measure_loudness(
     let start = (job.range.0 * Rational::from_int(sr as i64)).round();
     let end = (job.range.1 * Rational::from_int(sr as i64)).round();
     let mut inserts = Inserts::default();
+    inserts.set_plugins(samples.plugins());
     inserts.sync(&job.sequence, sr);
     let mut meter = LoudnessMeter::new(sr);
     let gain = 10f32.powf(job.gain_db / 20.0);

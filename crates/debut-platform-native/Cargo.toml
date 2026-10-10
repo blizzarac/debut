@@ -12,3 +12,4 @@ debut-platform.workspace = true
 thiserror.workspace = true
 ffmpeg-next.workspace = true
 cpal.workspace = true
+serde_json.workspace = true

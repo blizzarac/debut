@@ -16,6 +16,7 @@ use crate::graph::{mix_into, TrackMix};
 use crate::ring::{ring, Consumer, Producer};
 use debut_core::{MediaId, Rational, Result, SequenceId};
 use debut_platform::audio_out::AudioCallback;
+use debut_platform::PluginHost;
 use debut_project::AudioEffect;
 use debut_project::{Clip, ClipSource, Sequence, TrackKind};
 use std::collections::{HashMap, HashSet};
@@ -36,9 +37,27 @@ pub struct Inserts {
     /// Tracks of nested sequences seen while rendering; their chains survive
     /// `sync` of the top-level sequence.
     nested: HashSet<debut_core::TrackId>,
+    /// Where CLAP inserts run (AUD-09); without it they pass audio through.
+    plugins: Option<Arc<dyn PluginHost>>,
 }
 
 impl Inserts {
+    /// The plugin host CLAP inserts run in. Chains holding a plugin insert
+    /// are rebuilt when it changes.
+    pub fn set_plugins(&mut self, host: Option<Arc<dyn PluginHost>>) {
+        let same = match (&self.plugins, &host) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same {
+            self.plugins = host;
+            self.chains.retain(|_, (desc, _)| {
+                !desc.iter().any(|e| matches!(e, AudioEffect::Plugin { .. }))
+            });
+        }
+    }
+
     /// Make the chains match `seq`'s audio tracks; unchanged chains keep their state.
     pub fn sync(&mut self, seq: &Sequence, sample_rate: u32) {
         self.sync_tracks(seq, sample_rate);
@@ -70,7 +89,12 @@ impl Inserts {
                 let procs = t
                     .audio_effects
                     .iter()
-                    .map(|e| build(e, sample_rate))
+                    .map(|e| match e {
+                        AudioEffect::Plugin { .. } => {
+                            crate::plugin::build(e, sample_rate, self.plugins.clone())
+                        }
+                        _ => build(e, sample_rate),
+                    })
                     .collect();
                 self.chains.insert(t.id, (t.audio_effects.clone(), procs));
             }
@@ -117,6 +141,11 @@ pub trait SampleSource {
     /// Resolve a nested sequence (TL-07) so its audio can be mixed in place of a
     /// compound clip. `None` renders the clip silent.
     fn sequence(&self, _id: SequenceId) -> Option<Arc<Sequence>> {
+        None
+    }
+
+    /// Where CLAP track inserts run (AUD-09); `None` passes them through.
+    fn plugins(&self) -> Option<Arc<dyn PluginHost>> {
         None
     }
 }
@@ -226,6 +255,7 @@ impl AudioRenderer {
 
         self.scratch.clear();
         self.scratch.resize(src_frames * CHANNELS, 0.0);
+        self.inserts.set_plugins(source.plugins());
         self.inserts.sync(seq, sr as u32);
         render_span(
             seq,

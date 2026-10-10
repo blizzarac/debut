@@ -1,4 +1,5 @@
-import type { Duck, InsertKind, MixerApi, SequenceInfo, TrackInfo } from "./engine";
+import type { Duck, InsertKind, MixerApi, PluginsApi, SequenceInfo, TrackInfo } from "./engine";
+import { PluginParams, PluginPicker } from "./Plugins";
 
 const INSERTS: [InsertKind, string][] = [
   ["eq_lowcut", "Low cut"],
@@ -14,7 +15,7 @@ const DUCK_DEFAULTS = { amount_db: -12, threshold_db: -40, attack_ms: 80, releas
 
 /** One strip per audio track: fader, pan, mute/solo, inserts, and ducking
  * under another track (AUD-02, AUD-05, AUD-08). */
-export function Mixer({ seq, mixer, onChanged }: { seq: SequenceInfo; mixer: MixerApi; onChanged: () => void }) {
+export function Mixer({ seq, mixer, plugins, onChanged }: { seq: SequenceInfo; mixer: MixerApi; plugins?: PluginsApi; onChanged: () => void }) {
   const tracks = seq.tracks.filter((t) => t.kind === "audio");
   const act = (p: Promise<void>) => p.then(onChanged).catch((e) => console.warn("mixer rejected", e));
   const strip = (t: TrackInfo, n: number) => (
@@ -43,6 +44,7 @@ export function Mixer({ seq, mixer, onChanged }: { seq: SequenceInfo; mixer: Mix
             </option>
           ))}
         </select>
+        {plugins && mixer.addPluginInsert && <PluginPicker api={plugins} kind="clap" label="+ plugin" onPick={(path, index) => act(mixer.addPluginInsert!(t.id, path, index))} />}
       </div>
       {mixer.setTrackDuck && (
         <div style={{ marginBottom: 4 }} title="Lower this track while the chosen track (e.g. dialogue) plays">
@@ -89,6 +91,7 @@ export function Mixer({ seq, mixer, onChanged }: { seq: SequenceInfo; mixer: Mix
             <button onClick={() => act(mixer.removeInsert(t.id, i))} title="Remove" style={{ fontSize: 10 }}>
               ×
             </button>
+            {!!t.insert_params?.[i]?.length && mixer.setInsertParam && <PluginParams params={t.insert_params[i]} onSet={(name, value) => act(mixer.setInsertParam!(t.id, i, name, value))} />}
           </li>
         ))}
       </ol>

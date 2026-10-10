@@ -361,7 +361,7 @@ export default function App() {
             {engine.media && selectedTitle && (
               <TitleEditor media={engine.media} selected={selected} title={selectedTitle} onChanged={() => refresh(engine)} />
             )}
-            <Inspector effects={engine.effects} selected={selected} position={Math.round((tick?.position ?? 0) * 25) / 25} refreshKey={refreshKey} onChanged={() => refresh(engine)} />
+            <Inspector effects={engine.effects} plugins={engine.plugins} selected={selected} position={Math.round((tick?.position ?? 0) * 25) / 25} refreshKey={refreshKey} onChanged={() => refresh(engine)} />
           </>
         )}
         {engine?.markers && engine.player && (
@@ -403,7 +403,7 @@ export default function App() {
         {engine?.mixer && seq && seq.tracks.some((t) => t.kind === "audio") && (
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Mixer</h2>
-            <Mixer seq={seq} mixer={engine.mixer} onChanged={() => refresh(engine)} />
+            <Mixer seq={seq} mixer={engine.mixer} plugins={engine.plugins} onChanged={() => refresh(engine)} />
           </>
         )}
         {engine?.exporter && (

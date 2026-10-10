@@ -57,6 +57,8 @@ pub fn build(effect: &AudioEffect, sample_rate: u32) -> Box<dyn Processor> {
         AudioEffect::Reverb { room, damping, mix } => {
             Box::new(Reverb::new(sr, *room, *damping, *mix))
         }
+        // Needs the plugin host: see `crate::plugin::build`.
+        AudioEffect::Plugin { .. } => crate::plugin::build(effect, sample_rate, None),
     }
 }
 

@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  PluginsApi,
+  PluginsInfo,
   TitleInfo,
   SnapPoint,
   CodecCapabilities,
@@ -216,6 +218,24 @@ class TauriEffects implements EffectsApi {
   setParam(track: string, clip: string, effect: number, param: ParamName, value: number, keyframe: boolean) {
     return invoke<void>("set_param", { track, clip, effect, param, value, keyframe });
   }
+  addPluginEffect(track: string, clip: string, path: string, index: number) {
+    return invoke<void>("add_plugin_effect", { track, clip, path, index });
+  }
+  setPluginParam(track: string, clip: string, effect: number, name: string, value: number, keyframe: boolean) {
+    return invoke<void>("set_plugin_param", { track, clip, effect, name, value, keyframe });
+  }
+}
+
+class TauriPlugins implements PluginsApi {
+  scan() {
+    return invoke<PluginsInfo>("scan_plugins");
+  }
+  list() {
+    return invoke<PluginsInfo>("plugins");
+  }
+  lastError() {
+    return invoke<string | null>("plugin_error");
+  }
 }
 
 class TauriMixer implements MixerApi {
@@ -230,6 +250,12 @@ class TauriMixer implements MixerApi {
   }
   removeInsert(track: string, index: number) {
     return invoke<void>("remove_insert", { track, index });
+  }
+  addPluginInsert(track: string, path: string, index: number) {
+    return invoke<void>("add_plugin_insert", { track, path, index });
+  }
+  setInsertParam(track: string, insert: number, name: string, value: number) {
+    return invoke<void>("set_insert_param", { track, insert, name, value });
   }
 }
 
@@ -351,6 +377,7 @@ export class TauriEngine implements Engine {
   effects = new TauriEffects();
   mixer = new TauriMixer();
   exporter = new TauriExport();
+  plugins = new TauriPlugins();
 
   version() {
     return invoke<string>("version");

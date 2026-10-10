@@ -121,6 +121,23 @@ pub enum Node {
         input: NodeId,
         mask: PolyMask,
     },
+    /// A third-party filter (FX-15): the image is read back, handed to the
+    /// [`FrameProvider`] (which runs the plugin host) and uploaded again.
+    Plugin {
+        input: NodeId,
+        op: PluginOp,
+    },
+}
+
+/// What to run an OpenFX filter with.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PluginOp {
+    pub path: String,
+    pub index: u32,
+    pub params: Vec<(String, f64)>,
+    /// Clip-local time in frames, and the frame rate.
+    pub frame: f64,
+    pub fps: f64,
 }
 
 impl Node {
@@ -133,6 +150,7 @@ impl Node {
             | Node::Grade { input, .. }
             | Node::Mask { input, .. }
             | Node::PolyMask { input, .. }
+            | Node::Plugin { input, .. }
             | Node::ChromaKey { input, .. } => vec![*input],
             Node::Blend { bottom, top, .. } => vec![*bottom, *top],
             Node::Dissolve { a, b, .. } => vec![*a, *b],
@@ -243,6 +261,16 @@ impl Graph {
                 Node::Mask { input, mask } => backend.mask(&get(&images, *input), mask),
                 Node::ChromaKey { input, key } => backend.chroma_key(&get(&images, *input), key),
                 Node::PolyMask { input, mask } => backend.poly_mask(&get(&images, *input), mask),
+                Node::Plugin { input, op } => {
+                    let img = get(&images, *input);
+                    let (w, h) = backend.size(&img);
+                    let mut px = backend.download(&img);
+                    match frames.plugin(op, w, h, &mut px) {
+                        Ok(true) => backend.upload(w, h, &px),
+                        // Not run (no host, or it failed): the layer passes through.
+                        Ok(false) | Err(_) => img,
+                    }
+                }
             };
             images[i] = Some(img);
         }

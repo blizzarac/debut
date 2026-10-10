@@ -1,0 +1,21 @@
+[package]
+name = "debut-plugin-host"
+description = "Plugin-host helper process: runs OpenFX image filters and CLAP audio effects for the app, so a crashing plugin takes down only this process"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-platform.workspace = true
+serde_json.workspace = true
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+debut-core.workspace = true
+debut-platform-native.workspace = true
+debut-engine.workspace = true
+debut-project.workspace = true
+debut-audio.workspace = true

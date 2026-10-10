@@ -1,0 +1,3 @@
+# A helper process: it owns its pipes and loads plugin libraries.
+disallowed-methods = []
+disallowed-types = []

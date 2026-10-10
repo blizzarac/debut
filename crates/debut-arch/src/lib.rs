@@ -25,8 +25,9 @@ pub enum Layer {
     Engine,
     /// `debut-platform-native` / `-web`: implementations of the platform traits.
     PlatformImpl,
-    /// Standalone services (the collaboration server): may use the model,
-    /// commands and domain crates, and own threads and sockets.
+    /// Standalone services (the collaboration server, the plugin-host
+    /// helper): may use the model, commands and domain crates, and own
+    /// threads, sockets and processes.
     Service,
     /// `apps/desktop` / `apps/web`: translate IPC or JS calls to the engine.
     Shell,
@@ -52,7 +53,7 @@ pub fn layer_of(name: &str) -> Option<Layer> {
         | "debut-export" | "debut-collab" => Layer::Domain,
         "debut-engine" => Layer::Engine,
         "debut-platform-native" | "debut-platform-web" => Layer::PlatformImpl,
-        "debut-collab-server" => Layer::Service,
+        "debut-collab-server" | "debut-plugin-host" => Layer::Service,
         "debut-desktop" | "debut-web" => Layer::Shell,
         "debut-arch" => Layer::Tooling,
         _ => return None,

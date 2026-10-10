@@ -8,3 +8,4 @@ repository.workspace = true
 
 [dependencies]
 debut-core.workspace = true
+serde.workspace = true

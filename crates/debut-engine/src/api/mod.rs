@@ -33,6 +33,7 @@ mod media;
 mod mixer;
 mod multicam;
 mod playback;
+mod plugins;
 mod proxies;
 mod shortcuts;
 mod snapshots;
@@ -53,7 +54,7 @@ pub use self::snapshots::{ClipChangeDto, SnapshotDiffDto, SnapshotDto};
 pub use self::targeting::TargetingDto;
 use self::waveforms::WaveformCache;
 pub use self::{
-    captions::*, effects::*, export::*, markers::*, media::*, multicam::*, playback::*,
+    captions::*, effects::*, export::*, markers::*, media::*, multicam::*, playback::*, plugins::*,
     timeline::*, titles::*,
 };
 
@@ -81,6 +82,8 @@ pub struct Session {
     patches: std::collections::HashMap<SequenceId, self::targeting::Patch>,
     /// Shared editing session, when joined (COL).
     collab: Option<self::collab::Collab>,
+    /// The last plugin scan (FX-15, AUD-09).
+    plugin_scan: Option<debut_platform::plugin_host::ScanResult>,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -141,6 +144,7 @@ impl Session {
             linked_selection: true,
             patches: Default::default(),
             collab: None,
+            plugin_scan: None,
             player: None,
             audio_out: None,
             backend: AnyBackend::detect(),
@@ -396,6 +400,7 @@ impl Session {
         if self.player.is_none() {
             let (mut player, sink) = Player::new(seq.clone());
             player.frames.set_platform(Arc::clone(&self.platform));
+            player.samples.set_plugins(self.platform.plugins());
             let mut out: Box<dyn AudioOut> = self.platform.open_audio_out();
             out.start(Box::new(sink)).map_err(|e| e.to_string())?;
             self.audio_out = Some(out);

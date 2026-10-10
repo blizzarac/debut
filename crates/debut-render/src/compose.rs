@@ -4,7 +4,7 @@
 
 use crate::backend::{BlendMode, Transform2D};
 use crate::color::{ColorTransform, Grade};
-use crate::graph::{Graph, Image8, ImageRef, LutRef, Node, NodeId};
+use crate::graph::{Graph, Image8, ImageRef, LutRef, Node, NodeId, PluginOp};
 use crate::lut::Lut3d;
 use crate::nodes::{ChromaKey, Mask, MaskShape, PolyMask};
 use debut_core::color::ColorSpace;
@@ -68,6 +68,7 @@ fn compose_into(
 ) -> NodeId {
     let (w, h) = (canvas.0.max(1), canvas.1.max(1));
     let px_scale = w as f32 / seq.width.max(1) as f32;
+    let fps = seq.frame_rate.0.as_f64();
     let mut acc: NodeId = g.add(Node::Solid {
         w,
         h,
@@ -78,13 +79,14 @@ fn compose_into(
             continue;
         };
         let (node, opacity) = match layer {
-            Layer::Single(clip) => match clip_layer(g, clip, t, (w, h), px_scale, info, depth) {
+            Layer::Single(clip) => match clip_layer(g, clip, t, (w, h), px_scale, fps, info, depth)
+            {
                 Some(l) => l,
                 None => continue,
             },
             Layer::Transition { from, to, progress } => {
-                let a = clip_layer(g, from, t, (w, h), px_scale, info, depth);
-                let b = clip_layer(g, to, t, (w, h), px_scale, info, depth);
+                let a = clip_layer(g, from, t, (w, h), px_scale, fps, info, depth);
+                let b = clip_layer(g, to, t, (w, h), px_scale, fps, info, depth);
                 match (a, b) {
                     (Some((na, oa)), Some((nb, ob))) => {
                         let node = g.add(Node::Dissolve {
@@ -159,12 +161,14 @@ pub fn caption_margin(height: u32) -> f32 {
 /// One clip's node chain at sequence time `t` (which may lie in its transition
 /// handle, outside `[timeline_in, timeline_out)`): source, input transform, fit +
 /// user transform, then its effect stack. Returns the node and the blend opacity.
+#[allow(clippy::too_many_arguments)]
 fn clip_layer(
     g: &mut Graph,
     clip: &Clip,
     t: Rational,
     canvas: (u32, u32),
     px_scale: f32,
+    fps: f64,
     info: &dyn SourceInfo,
     depth: usize,
 ) -> Option<(NodeId, f32)> {
@@ -320,6 +324,18 @@ fn clip_layer(
                     spill: v(Param::Spill).clamp(0.0, 1.0),
                 };
                 node = g.add(Node::ChromaKey { input: node, key });
+            }
+            Effect::Plugin(p) => {
+                node = g.add(Node::Plugin {
+                    input: node,
+                    op: PluginOp {
+                        path: p.path.clone(),
+                        index: p.index,
+                        params: p.values_at(local),
+                        frame: (local.as_f64() * fps).round(),
+                        fps,
+                    },
+                });
             }
             Effect::Transform(_) => {}
         }

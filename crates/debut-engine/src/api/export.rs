@@ -202,6 +202,7 @@ impl Session {
                         let mut frames = crate::FrameSource::new(4);
                         frames.set_platform(Arc::clone(&platform));
                         let mut samples = crate::SampleCache::new(48_000);
+                        samples.set_plugins(platform.plugins());
                         frames.set_sequences(&sequences);
                         samples.set_sequences(&sequences);
                         for (mid, path) in &media {

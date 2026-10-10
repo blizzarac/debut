@@ -63,6 +63,22 @@ pub enum AudioEffect {
         damping: f32,
         mix: f32,
     },
+    /// A CLAP audio effect, run by the plugin host (AUD-09).
+    Plugin {
+        path: String,
+        index: u32,
+        id: String,
+        name: String,
+        params: Vec<AudioPluginParam>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AudioPluginParam {
+    pub name: String,
+    pub min: f64,
+    pub max: f64,
+    pub value: f64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

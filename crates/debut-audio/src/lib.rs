@@ -11,6 +11,7 @@ pub mod sync; // MED-11 audio alignment for multicam
 pub mod ducking; // AUD-08 sidechain auto-ducking
 pub mod effects; // AUD-05 EQ, compressor, limiter, de-esser, gate, reverb
 pub mod loudness; // AUD-06 BS.1770 LUFS / true peak, normalization gain
+pub mod plugin; // AUD-09 CLAP inserts through the plugin host
 pub mod waveform; // AUD-04 multi-resolution peak cache
 
 pub use clock::Clock;

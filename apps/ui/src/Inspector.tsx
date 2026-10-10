@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import type { EffectInfo, EffectsApi, MediaApi, ParamName, TextAlign, TitleInfo } from "./engine";
+import type { EffectInfo, EffectsApi, MediaApi, ParamName, PluginsApi, TextAlign, TitleInfo } from "./engine";
+import { PluginParams, PluginPicker } from "./Plugins";
 import type { Selection } from "./Timeline";
 
 const RANGES: Record<ParamName, [number, number, number]> = {
@@ -25,8 +26,9 @@ const RANGES: Record<ParamName, [number, number, number]> = {
 
 /** Effect stack of the selected clip. Sliders set constants, or keyframes at
  * the playhead when the key toggle is on (FX-01). */
-export function Inspector({ effects, selected, position, refreshKey, onChanged }: { effects: EffectsApi; selected: Selection; position: number; refreshKey?: number; onChanged: () => void }) {
+export function Inspector({ effects, plugins, selected, position, refreshKey, onChanged }: { effects: EffectsApi; plugins?: PluginsApi; selected: Selection; position: number; refreshKey?: number; onChanged: () => void }) {
   const [trackNote, setTrackNote] = useState("");
+  const [pluginError, setPluginError] = useState<string | null>(null);
   const [stack, setStack] = useState<EffectInfo[]>([]);
   const [keyframe, setKeyframe] = useState(false);
 
@@ -39,6 +41,12 @@ export function Inspector({ effects, selected, position, refreshKey, onChanged }
     reload();
   }, [reload, position, refreshKey]);
 
+  const hasPlugin = stack.some((f) => f.kind === "plugin");
+  useEffect(() => {
+    if (!plugins || !hasPlugin) return setPluginError(null);
+    plugins.lastError().then(setPluginError).catch(() => {});
+  }, [plugins, hasPlugin, position, refreshKey, stack]);
+
   if (!selected) return <p style={{ fontSize: 12, color: "#999" }}>Select a clip to edit its effects.</p>;
 
   const act = (p: Promise<void>) => p.then(reload).then(onChanged).catch((e) => console.warn("effect rejected", e));
@@ -50,6 +58,9 @@ export function Inspector({ effects, selected, position, refreshKey, onChanged }
         <button onClick={() => act(effects.addEffect(selected.track, selected.clip, "grade"))}>+ Grade</button>
         <button onClick={() => act(effects.addEffect(selected.track, selected.clip, "mask"))}>+ Mask</button>
         <button onClick={() => act(effects.addEffect(selected.track, selected.clip, "key"))} title="Chroma key">+ Key</button>
+        {plugins && effects.addPluginEffect && (
+          <PluginPicker api={plugins} kind="openfx" label="+ Plugin" onPick={(path, index) => act(effects.addPluginEffect!(selected.track, selected.clip, path, index))} />
+        )}
         <label style={{ marginLeft: "auto" }} title="Changes add a keyframe at the playhead">
           <input type="checkbox" checked={keyframe} onChange={(e) => setKeyframe(e.target.checked)} /> key
         </label>
@@ -57,7 +68,7 @@ export function Inspector({ effects, selected, position, refreshKey, onChanged }
       {stack.map((fx) => (
         <div key={fx.index} style={{ border: "1px solid #e5e5e5", borderRadius: 4, padding: 8, marginBottom: 8 }}>
           <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-            <strong>{fx.kind}</strong>
+            <strong title={fx.options.plugin?.id}>{fx.options.plugin?.name ?? fx.kind}</strong>
             <button onClick={() => act(effects.removeEffect(selected.track, selected.clip, fx.index))} title="Remove">
               ×
             </button>
@@ -152,6 +163,12 @@ export function Inspector({ effects, selected, position, refreshKey, onChanged }
                 }}
               />
             </label>
+          )}
+          {fx.kind === "plugin" && fx.options.plugin && (
+            <>
+              <PluginParams params={fx.options.plugin.params} onSet={(name, value) => act(effects.setPluginParam!(selected.track, selected.clip, fx.index, name, value, keyframe))} />
+              {pluginError && <p style={{ color: "#b91c1c", margin: "4px 0 0" }}>Plugin failed, showing the clip without it: {pluginError}</p>}
+            </>
           )}
           {fx.params.map((p) => {
             const [min, max, step] = RANGES[p.name];

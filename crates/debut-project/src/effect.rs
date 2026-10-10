@@ -18,6 +18,68 @@ pub enum Effect {
     Mask(MaskFx),
     /// Chroma key (FX-05).
     ChromaKey(KeyFx),
+    /// A third-party OpenFX filter, run by the plugin host (FX-15).
+    Plugin(PluginFx),
+}
+
+/// An OpenFX filter: which binary and plugin, and its numeric parameters as
+/// curves (keyframable like any other).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PluginFx {
+    pub path: String,
+    pub index: u32,
+    /// The plugin's identifier and display name, kept for when the binary
+    /// is missing on another machine.
+    pub id: String,
+    pub name: String,
+    pub params: Vec<PluginParam>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PluginParam {
+    pub name: String,
+    pub label: String,
+    pub min: f64,
+    pub max: f64,
+    pub value: Curve,
+}
+
+impl PluginFx {
+    /// Every parameter's value at clip-local `t`.
+    pub fn values_at(&self, t: Rational) -> Vec<(String, f64)> {
+        self.params
+            .iter()
+            .map(|p| (p.name.clone(), p.value.eval(t)))
+            .collect()
+    }
+
+    /// Set a parameter at a keyframe or as a constant; false if there is none by that name.
+    pub fn set(&mut self, name: &str, at: Option<Rational>, value: f64) -> bool {
+        match self.params.iter_mut().find(|p| p.name == name) {
+            Some(p) => {
+                set_curve(&mut p.value, at, value);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// `value` at a keyframe `at` (adding one), or as a constant. A constant that
+/// gets its first key starts interpolating from its held value.
+fn set_curve(c: &mut Curve, at: Option<Rational>, value: f64) {
+    match at {
+        Some(t) => {
+            if let [k] = c.keys() {
+                if k.interp == Interp::Hold {
+                    let (kt, kv) = (k.t, k.value);
+                    c.set(kt, kv, Interp::Linear);
+                }
+            }
+            c.set(t, value, Interp::Linear)
+        }
+        None => *c = Curve::constant(value),
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -197,6 +259,7 @@ impl Effect {
             Effect::Lut { .. } => "lut",
             Effect::Mask(_) => "mask",
             Effect::ChromaKey(_) => "key",
+            Effect::Plugin(_) => "plugin",
         }
     }
 
@@ -274,6 +337,7 @@ impl Effect {
                 Param::Feather,
             ],
             Effect::ChromaKey(_) => &[Param::Tolerance, Param::Softness, Param::Spill],
+            Effect::Plugin(_) => &[],
         }
     }
 
@@ -286,19 +350,7 @@ impl Effect {
     pub fn set(&mut self, p: Param, at: Option<Rational>, value: f64) -> bool {
         match self.curve_mut(p) {
             Some(c) => {
-                match at {
-                    Some(t) => {
-                        // A constant becomes animated: its single held key starts interpolating.
-                        if let [k] = c.keys() {
-                            if k.interp == Interp::Hold {
-                                let (kt, kv) = (k.t, k.value);
-                                c.set(kt, kv, Interp::Linear);
-                            }
-                        }
-                        c.set(t, value, Interp::Linear)
-                    }
-                    None => *c = Curve::constant(value),
-                }
+                set_curve(c, at, value);
                 true
             }
             None => false,

@@ -820,6 +820,7 @@ name = "debut-platform"
 version = "0.1.0"
 dependencies = [
  "debut-core",
+ "serde",
 ]
 
 [[package]]
@@ -830,6 +831,7 @@ dependencies = [
  "debut-core",
  "debut-platform",
  "ffmpeg-next",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 
@@ -840,6 +842,20 @@ dependencies = [
  "debut-core",
  "debut-platform",
  "thiserror 2.0.21",
+]
+
+[[package]]
+name = "debut-plugin-host"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "debut-audio",
+ "debut-core",
+ "debut-engine",
+ "debut-platform",
+ "debut-platform-native",
+ "debut-project",
+ "serde_json",
 ]
 
 [[package]]

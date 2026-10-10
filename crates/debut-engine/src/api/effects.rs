@@ -48,6 +48,9 @@ pub struct EffectOptions {
     /// so the viewer can draw the outline where it renders.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub planar_now: Option<[f64; 9]>,
+    /// Read only: a plugin effect's identity and parameters at the playhead (FX-15).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginDto>,
 }
 
 pub(crate) fn effect_options(e: &Effect) -> EffectOptions {
@@ -61,6 +64,7 @@ pub(crate) fn effect_options(e: &Effect) -> EffectOptions {
             smooth: None,
             planar_keys: Some(m.planar.len()),
             planar_now: None,
+            plugin: None,
         },
         Effect::ChromaKey(k) => EffectOptions {
             color: Some(k.color),
@@ -90,8 +94,10 @@ impl Session {
                 kind: e.kind().to_string(),
                 options: {
                     let mut o = effect_options(e);
-                    if let Effect::Mask(m) = e {
-                        o.planar_now = m.planar_at(local);
+                    match e {
+                        Effect::Mask(m) => o.planar_now = m.planar_at(local),
+                        Effect::Plugin(p) => o.plugin = Some(plugin_fx_dto(p, local)),
+                        _ => {}
                     }
                     o
                 },

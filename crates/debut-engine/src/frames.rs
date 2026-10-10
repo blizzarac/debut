@@ -39,6 +39,8 @@ pub struct FrameSource {
     platform: Option<Arc<dyn debut_platform::Platform>>,
     /// Parsed fonts by family (`None`: the platform had none).
     fonts: Mutex<HashMap<String, Option<debut_graphics::Font>>>,
+    /// The last error a plugin effect reported; the layer rendered without it.
+    plugin_error: Option<String>,
 }
 
 impl FrameSource {
@@ -50,6 +52,7 @@ impl FrameSource {
             sequences: HashMap::new(),
             platform: None,
             fonts: Mutex::new(HashMap::new()),
+            plugin_error: None,
         }
     }
 
@@ -151,6 +154,10 @@ pub fn offline_frame() -> Vec<u8> {
 }
 
 impl FrameSource {
+    pub fn plugin_error(&self) -> Option<String> {
+        self.plugin_error.clone()
+    }
+
     /// Drop a media's decoder and cache (before relinking it).
     pub fn remove(&mut self, media: MediaId) {
         self.sources.remove(&media);
@@ -162,6 +169,40 @@ impl FrameSource {
 }
 
 impl FrameProvider for FrameSource {
+    fn plugin(
+        &mut self,
+        op: &debut_render::PluginOp,
+        w: u32,
+        h: u32,
+        px: &mut [debut_render::Rgba],
+    ) -> Result<bool> {
+        let Some(host) = self.platform.as_ref().and_then(|p| p.plugins()) else {
+            return Ok(false);
+        };
+        let job = debut_platform::plugin_host::VideoJob {
+            plugin: debut_platform::PluginRef {
+                kind: debut_platform::PluginKind::OpenFx,
+                path: op.path.clone(),
+                index: op.index,
+            },
+            width: w,
+            height: h,
+            frame: op.frame,
+            fps: op.fps,
+            params: op.params.clone(),
+        };
+        match host.process_video(&job, px.as_flattened_mut()) {
+            Ok(()) => {
+                self.plugin_error = None;
+                Ok(true)
+            }
+            Err(e) => {
+                self.plugin_error = Some(e.to_string());
+                Err(e)
+            }
+        }
+    }
+
     fn frame(&mut self, media: MediaId, t: Rational) -> Result<(u32, u32, Vec<u8>)> {
         let Some(src) = self.sources.get_mut(&media) else {
             return Ok((OFFLINE_SIZE.0, OFFLINE_SIZE.1, offline_frame()));

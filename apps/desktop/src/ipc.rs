@@ -174,6 +174,66 @@ pub fn remove_insert(state: State<'_, Shared>, track: String, index: usize) -> R
 }
 
 #[tauri::command]
+pub fn scan_plugins(state: State<'_, Shared>) -> Result<PluginsDto, String> {
+    lock(&state).scan_plugins()
+}
+
+#[tauri::command]
+pub fn plugins(state: State<'_, Shared>) -> PluginsDto {
+    lock(&state).plugins()
+}
+
+#[tauri::command]
+pub fn add_plugin_effect(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    path: String,
+    index: u32,
+) -> Result<(), String> {
+    lock(&state).add_plugin_effect(&track, &clip, &path, index)
+}
+
+#[tauri::command]
+pub fn set_plugin_param(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    effect: usize,
+    name: String,
+    value: f64,
+    keyframe: bool,
+) -> Result<(), String> {
+    lock(&state).set_plugin_param(&track, &clip, effect, &name, value, keyframe)
+}
+
+#[tauri::command]
+pub fn add_plugin_insert(
+    state: State<'_, Shared>,
+    track: String,
+    path: String,
+    index: u32,
+) -> Result<(), String> {
+    lock(&state).add_plugin_insert(&track, &path, index)
+}
+
+#[tauri::command]
+pub fn set_insert_param(
+    state: State<'_, Shared>,
+    track: String,
+    insert: usize,
+    name: String,
+    value: f64,
+) -> Result<(), String> {
+    lock(&state).set_insert_param(&track, insert, &name, value)
+}
+
+#[tauri::command]
+pub fn plugin_error(state: State<'_, Shared>) -> Option<String> {
+    lock(&state).plugin_error()
+}
+
+#[tauri::command]
 pub fn set_track_duck(
     state: State<'_, Shared>,
     track: String,

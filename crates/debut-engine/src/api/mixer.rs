@@ -13,6 +13,7 @@ pub(crate) fn insert_name(e: &AudioEffect) -> String {
         AudioEffect::Gate { .. } => "Gate".into(),
         AudioEffect::DeEsser { .. } => "De-esser".into(),
         AudioEffect::Reverb { .. } => "Reverb".into(),
+        AudioEffect::Plugin { name, .. } => name.clone(),
     }
 }
 

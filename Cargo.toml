@@ -13,6 +13,7 @@ members = [
     "crates/debut-export",
     "crates/debut-collab",
     "crates/debut-collab-server",
+    "crates/debut-plugin-host",
     "crates/debut-engine",
     "crates/debut-platform-native",
     "crates/debut-platform-web",

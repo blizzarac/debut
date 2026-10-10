@@ -71,6 +71,18 @@ pub trait FrameProvider {
     /// Frame of `media` at source time `t` as display-encoded, straight-alpha
     /// RGBA8 (what decoders produce); the graph's input transform linearizes it.
     fn frame(&mut self, media: MediaId, t: Rational) -> Result<(u32, u32, Vec<u8>)>;
+
+    /// Run a third-party filter over `px` (`w x h` premultiplied RGBA, top
+    /// row first) in place; `Ok(false)` when there is nothing to run it with.
+    fn plugin(
+        &mut self,
+        _op: &crate::graph::PluginOp,
+        _w: u32,
+        _h: u32,
+        _px: &mut [Rgba],
+    ) -> Result<bool> {
+        Ok(false)
+    }
 }
 
 /// Straight RGBA8 -> premultiplied f32 (same encoding), for CPU paths.

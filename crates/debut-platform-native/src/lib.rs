@@ -6,7 +6,7 @@ pub mod display; // native window, SDI/HDMI output (PB-09) — pending
 pub mod file_store; // native FS
 pub mod fonts; // system font discovery
 pub mod net; // TCP line connections (collaboration)
-pub mod plugin_host; // OpenFX, VST3, AU, out-of-process (NFR-07) — pending
+pub mod plugin_host; // OpenFX and CLAP, out of process (NFR-07)
 pub mod threads; // native pool
 
 use debut_platform::{
@@ -23,6 +23,8 @@ pub struct NativePlatform {
     origin: Instant,
     /// Font bytes by requested family (`None`: nothing found).
     fonts: Mutex<HashMap<String, Option<Arc<[u8]>>>>,
+    /// The plugin-host helper, when one ships next to the app (FX-15).
+    plugins: Option<Arc<plugin_host::NativePluginHost>>,
 }
 
 impl NativePlatform {
@@ -32,6 +34,15 @@ impl NativePlatform {
             store: Arc::new(file_store::NativeFileStore::new("/")),
             origin: Instant::now(),
             fonts: Mutex::new(HashMap::new()),
+            plugins: plugin_host::NativePluginHost::from_environment().map(Arc::new),
+        }
+    }
+
+    /// With a given plugin host (tests point it at their own helper and plugins).
+    pub fn with_plugins(host: plugin_host::NativePluginHost) -> Self {
+        Self {
+            plugins: Some(Arc::new(host)),
+            ..Self::new()
         }
     }
 }
@@ -48,7 +59,7 @@ impl Platform for NativePlatform {
             hardware_decode: false,
             hardware_encode: false,
             camera_raw: false,
-            native_plugins: false,
+            native_plugins: self.plugins.is_some(),
             reference_monitor: false,
             max_resolution: (8192, 8192),
         }
@@ -95,6 +106,12 @@ impl Platform for NativePlatform {
             .spawn(job)
             .map(|_| ())
             .map_err(|e| debut_core::Error::Other(format!("spawn {name}: {e}")))
+    }
+
+    fn plugins(&self) -> Option<Arc<dyn debut_platform::PluginHost>> {
+        self.plugins
+            .clone()
+            .map(|p| p as Arc<dyn debut_platform::PluginHost>)
     }
 
     fn connect(&self, addr: &str) -> debut_core::Result<Box<dyn debut_platform::Connection>> {

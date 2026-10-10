@@ -25,15 +25,22 @@ pub struct SampleCache {
     /// Keep this many engine frames behind the read point.
     keep_back: usize,
     sequences: HashMap<SequenceId, Arc<debut_project::Sequence>>,
+    /// Where CLAP track inserts run (AUD-09).
+    plugins: Option<Arc<dyn debut_platform::PluginHost>>,
 }
 
 impl SampleCache {
+    pub fn set_plugins(&mut self, host: Option<Arc<dyn debut_platform::PluginHost>>) {
+        self.plugins = host;
+    }
+
     pub fn new(rate: u32) -> Self {
         Self {
             rate,
             sources: HashMap::new(),
             keep_back: rate as usize / 4,
             sequences: HashMap::new(),
+            plugins: None,
         }
     }
 
@@ -98,6 +105,10 @@ fn resample(input: &[f32], channels: usize, from: u32, to: u32) -> Vec<f32> {
 }
 
 impl SampleSource for SampleCache {
+    fn plugins(&self) -> Option<Arc<dyn debut_platform::PluginHost>> {
+        self.plugins.clone()
+    }
+
     fn sequence(&self, id: SequenceId) -> Option<Arc<debut_project::Sequence>> {
         self.sequences.get(&id).cloned()
     }

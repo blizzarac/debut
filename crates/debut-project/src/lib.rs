@@ -16,10 +16,12 @@ pub mod sequence;
 pub mod snapshot;
 pub mod title;
 
-pub use audio_fx::{AudioEffect, Duck, EqBand, EqKind};
+pub use audio_fx::{AudioEffect, AudioPluginParam, Duck, EqBand, EqKind};
 pub use bin::{Bin, BinKind, SmartRule};
 pub use caption::{Caption, CaptionPosition, CaptionSettings};
-pub use effect::{Effect, GradeFx, KeyFx, MaskFx, MaskShape, Param, PlanarKey, TransformFx};
+pub use effect::{
+    Effect, GradeFx, KeyFx, MaskFx, MaskShape, Param, PlanarKey, PluginFx, PluginParam, TransformFx,
+};
 pub use marker::{marker_list, Marker};
 pub use retime::SpeedKey;
 pub use sequence::{

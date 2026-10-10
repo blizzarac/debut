@@ -22,7 +22,7 @@ pub use codec::{
 pub use display::Display;
 pub use file_store::FileStore;
 pub use net::Connection;
-pub use plugin_host::PluginHost;
+pub use plugin_host::{PluginHost, PluginInfo, PluginKind, PluginRef};
 pub use threads::Threads;
 
 /// What this target can do. Drives feature flags in the UI (PLT-05).
@@ -79,6 +79,11 @@ pub trait Platform: Send + Sync + 'static {
     /// Bytes of a TrueType/OpenType font for `family` (or a font file path), or
     /// of a fallback face; `None` when the platform has no usable font (GFX-01).
     fn font(&self, family: &str) -> Option<std::sync::Arc<[u8]>>;
+
+    /// The out-of-process plugin host (FX-15, AUD-09), where the target has one.
+    fn plugins(&self) -> Option<std::sync::Arc<dyn PluginHost>> {
+        None
+    }
 
     /// Open a line connection to `addr` ("host:port"), for collaboration.
     fn connect(&self, addr: &str) -> debut_core::Result<Box<dyn Connection>> {

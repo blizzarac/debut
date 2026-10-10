@@ -148,6 +148,8 @@ export interface TrackInfo {
   clips: ClipInfo[];
   mix: TrackMix;
   inserts: string[];
+  /** Each insert's parameters: a plugin's, empty for built-ins. */
+  insert_params?: PluginParam[][];
   /** Auto-ducking under another audio track, if set. */
   duck: Duck | null;
 }
@@ -166,6 +168,44 @@ export interface MixerApi {
   setTrackDuck?(track: string, duck: Duck | null): Promise<void>;
   addInsert(track: string, kind: InsertKind): Promise<void>;
   removeInsert(track: string, index: number): Promise<void>;
+  /** A scanned CLAP effect as an insert (desktop only). */
+  addPluginInsert?(track: string, path: string, index: number): Promise<void>;
+  setInsertParam?(track: string, insert: number, name: string, value: number): Promise<void>;
+}
+
+/** A third-party plugin: an OpenFX filter or a CLAP effect (FX-15, AUD-09). */
+export interface PluginInfo {
+  kind: "openfx" | "clap";
+  path: string;
+  index: number;
+  id: string;
+  name: string;
+  params: PluginParam[];
+}
+
+export interface PluginParam {
+  name: string;
+  label: string;
+  min: number;
+  max: number;
+  value: number;
+  animated: boolean;
+}
+
+export interface PluginsInfo {
+  available: boolean;
+  plugins: PluginInfo[];
+  /** Binaries that could not be used: [path, why]. */
+  problems: [string, string][];
+}
+
+export interface PluginsApi {
+  /** Load every plugin on the search path (in the helper process) and list them. */
+  scan(): Promise<PluginsInfo>;
+  /** The last scan's result. */
+  list(): Promise<PluginsInfo>;
+  /** The last error a plugin effect reported while rendering. */
+  lastError(): Promise<string | null>;
 }
 
 export interface ExportPreset {
@@ -271,7 +311,7 @@ export type ParamName =
   | "softness"
   | "spill";
 
-export type EffectKind = "transform" | "grade" | "lut" | "mask" | "key";
+export type EffectKind = "transform" | "grade" | "lut" | "mask" | "key" | "plugin";
 
 /** Non-animated knobs: mask shape/invert, key colour (straight sRGB bytes). */
 export interface EffectOptions {
@@ -288,6 +328,8 @@ export interface EffectOptions {
   planar_keys?: number;
   /** Read only: the planar homography at the playhead (row-major 3x3). */
   planar_now?: number[];
+  /** Read only: a plugin effect's identity and parameters at the playhead. */
+  plugin?: PluginInfo;
 }
 
 export interface ParamInfo {
@@ -316,6 +358,9 @@ export interface EffectsApi {
   clearPlanar?(track: string, clip: string, effect: number): Promise<void>;
   /** Set as a constant, or keyframe at the playhead when `keyframe` is true. */
   setParam(track: string, clip: string, effect: number, param: ParamName, value: number, keyframe: boolean): Promise<void>;
+  /** Add a scanned OpenFX filter (desktop only). */
+  addPluginEffect?(track: string, clip: string, path: string, index: number): Promise<void>;
+  setPluginParam?(track: string, clip: string, effect: number, name: string, value: number, keyframe: boolean): Promise<void>;
 }
 
 export interface MarkerInfo {
@@ -602,6 +647,7 @@ export interface Engine extends ProjectApi {
   markers?: MarkersApi;
   snapshots?: SnapshotsApi;
   captions?: CaptionsApi;
+  plugins?: PluginsApi;
 }
 
 export type Target = "desktop" | "browser";

@@ -119,6 +119,8 @@ pub struct TrackDto {
     pub clips: Vec<ClipDto>,
     pub mix: TrackMix,
     pub inserts: Vec<String>,
+    /// Each insert's parameters: a plugin's (AUD-09), empty for built-ins.
+    pub insert_params: Vec<Vec<PluginParamDto>>,
     /// Auto-ducking under another track (AUD-08).
     pub duck: Option<DuckDto>,
 }
@@ -150,6 +152,7 @@ pub(crate) fn sequence_dto(seq: &Sequence) -> SequenceDto {
                 kind: format!("{:?}", t.kind).to_lowercase(),
                 mix: t.mix,
                 inserts: t.audio_effects.iter().map(insert_name).collect(),
+                insert_params: t.audio_effects.iter().map(insert_params).collect(),
                 duck: t.duck.map(DuckDto::from),
                 clips: t
                     .clips
