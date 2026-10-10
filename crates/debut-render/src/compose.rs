@@ -265,10 +265,27 @@ fn clip_layer(
                 let feather = v(Param::Feather) * px_scale;
                 match m.shape {
                     debut_project::MaskShape::Polygon => {
+                        // A planar track carries the outline (offset by
+                        // mask_x / mask_y) along the surface (FX-06).
+                        let planar = m.planar_at(local);
+                        let (mx, my) = (v(Param::MaskX), v(Param::MaskY));
+                        let place = |p: &[f32; 2]| -> [f32; 2] {
+                            let (x, y) = match &planar {
+                                Some(hm) => {
+                                    let q = crate::planar::apply(
+                                        hm,
+                                        [(mx + p[0]) as f64, (my + p[1]) as f64],
+                                    );
+                                    (q[0] as f32, q[1] as f32)
+                                }
+                                None => (mx + p[0], my + p[1]),
+                            };
+                            [w as f32 * 0.5 + x * px_scale, h as f32 * 0.5 + y * px_scale]
+                        };
                         let mask = PolyMask {
                             points: crate::nodes::flatten_outline(&m.points, &m.handles)
                                 .iter()
-                                .map(|p| [center[0] + p[0] * px_scale, center[1] + p[1] * px_scale])
+                                .map(place)
                                 .collect(),
                             feather,
                             invert: m.invert,

@@ -284,6 +284,10 @@ export interface EffectOptions {
   handles?: [number, number, number, number][];
   /** Setting only: true makes a smooth curve through the points, false makes corners. */
   smooth?: boolean;
+  /** Read only: frames keyed by a planar track. */
+  planar_keys?: number;
+  /** Read only: the planar homography at the playhead (row-major 3x3). */
+  planar_now?: number[];
 }
 
 export interface ParamInfo {
@@ -307,6 +311,9 @@ export interface EffectsApi {
   setOptions(track: string, clip: string, effect: number, options: EffectOptions): Promise<void>;
   /** Track the picture under a mask from the playhead for `seconds`, keyframing its position. */
   trackMask?(track: string, clip: string, effect: number, seconds: number): Promise<{ keys: number; weakest_match: number }>;
+  /** Track the surface under a mask through perspective changes; the outline follows it. */
+  trackPlanar?(track: string, clip: string, effect: number, seconds: number): Promise<{ keys: number; weakest_match: number }>;
+  clearPlanar?(track: string, clip: string, effect: number): Promise<void>;
   /** Set as a constant, or keyframe at the playhead when `keyframe` is true. */
   setParam(track: string, clip: string, effect: number, param: ParamName, value: number, keyframe: boolean): Promise<void>;
 }

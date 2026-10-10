@@ -44,6 +44,13 @@ export function MaskOverlay({
     const r = svg.current!.getBoundingClientRect();
     return [((e.clientX - r.left) / r.width) * width, ((e.clientY - r.top) / r.height) * height];
   };
+  // A screen point back into the outline's own (untracked) space.
+  const unwarp = (fx: EffectInfo, p: Pt): Pt => {
+    const hm = fx.options.planar_now;
+    if (!hm) return p;
+    const q = warp(inverse(hm), [p[0] - width / 2, p[1] - height / 2]);
+    return [q[0] + width / 2, q[1] + height / 2];
+  };
   const commit = (fx: EffectInfo, pts: Pt[]) =>
     effects
       .setOptions(selected.track, selected.clip, fx.index, { points: pts.map(([x, y]) => [Math.round(x * 10) / 10, Math.round(y * 10) / 10] as Pt) })
@@ -60,7 +67,7 @@ export function MaskOverlay({
         if (!drag) return;
         const fx = masks.find((m) => m.index === drag.fx)!;
         const [ox, oy] = origin(fx, width, height);
-        const [x, y] = toSeq(e);
+        const [x, y] = unwarp(fx, toSeq(e));
         const pts = drag.pts.slice();
         pts[drag.i] = [x - ox, y - oy];
         setDrag({ ...drag, pts });
@@ -76,8 +83,14 @@ export function MaskOverlay({
       {masks.map((fx) => {
         const [ox, oy] = origin(fx, width, height);
         const pts: Pt[] = drag?.fx === fx.index ? drag.pts : ((fx.options.points ?? []) as Pt[]);
-        const smooth = (fx.options.handles ?? []).length > 0 && !drag;
-        const abs = pts.map(([x, y]) => [x + ox, y + oy] as Pt);
+        const smooth = (fx.options.handles ?? []).length > 0 && !drag && !fx.options.planar_now;
+        // On screen: through the planar track, if any (FX-06).
+        const hm = fx.options.planar_now;
+        const [cx0, cy0] = [width / 2, height / 2];
+        const abs = pts.map(([x, y]) => {
+          const q = warp(hm, [x + ox - cx0, y + oy - cy0]);
+          return [q[0] + cx0, q[1] + cy0] as Pt;
+        });
         const r = Math.max(width, height) / 160;
         return (
           <g key={fx.index}>
@@ -90,8 +103,8 @@ export function MaskOverlay({
               style={{ cursor: "copy" }}
               onDoubleClick={(e) => {
                 // Insert after the nearest edge's first point.
-                const [x, y] = toSeq(e);
-                const at = nearestEdge(abs, [x, y]);
+                const at = nearestEdge(abs, toSeq(e));
+                const [x, y] = unwarp(fx, toSeq(e));
                 const next = pts.slice();
                 next.splice(at + 1, 0, [x - ox, y - oy]);
                 commit(fx, next);
@@ -124,6 +137,22 @@ export function MaskOverlay({
       })}
     </svg>
   );
+}
+
+type H = number[];
+
+/** Map a frame-centre point through a planar homography. */
+function warp(h: H | undefined, p: Pt): Pt {
+  if (!h) return p;
+  const w = h[6] * p[0] + h[7] * p[1] + h[8] || 1e-9;
+  return [(h[0] * p[0] + h[1] * p[1] + h[2]) / w, (h[3] * p[0] + h[4] * p[1] + h[5]) / w];
+}
+
+/** Inverse of a 3x3 homography. */
+function inverse(h: H): H {
+  const [a, b, c, d, e, f, g, i, k] = h;
+  const det = a * (e * k - f * i) - b * (d * k - f * g) + c * (d * i - e * g) || 1e-12;
+  return [(e * k - f * i) / det, (c * i - b * k) / det, (b * f - c * e) / det, (f * g - d * k) / det, (a * k - c * g) / det, (c * d - a * f) / det, (d * i - e * g) / det, (b * g - a * i) / det, (a * e - b * d) / det];
 }
 
 /** Where a mask's points are measured from: the frame centre moved by mask_x / mask_y. */

@@ -81,6 +81,8 @@ pub fn run() {
             ipc::remove_effect,
             ipc::set_effect_options,
             ipc::track_mask,
+            ipc::track_planar,
+            ipc::clear_planar,
             ipc::set_param,
             ipc::set_track_mix,
             ipc::add_insert,

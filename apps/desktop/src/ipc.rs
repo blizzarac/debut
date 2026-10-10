@@ -104,6 +104,27 @@ pub fn track_mask(
 }
 
 #[tauri::command]
+pub fn track_planar(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    effect: usize,
+    seconds: f64,
+) -> Result<TrackResultDto, String> {
+    lock(&state).track_planar(&track, &clip, effect, seconds)
+}
+
+#[tauri::command]
+pub fn clear_planar(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    effect: usize,
+) -> Result<(), String> {
+    lock(&state).clear_planar(&track, &clip, effect)
+}
+
+#[tauri::command]
 pub fn set_effect_options(
     state: State<'_, Shared>,
     track: String,

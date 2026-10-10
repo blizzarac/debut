@@ -41,6 +41,13 @@ pub struct EffectOptions {
     /// the points, false makes every point a corner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub smooth: Option<bool>,
+    /// Read only: frames keyed by a planar track (FX-06).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planar_keys: Option<usize>,
+    /// Read only: the planar-track homography at the playhead (row-major),
+    /// so the viewer can draw the outline where it renders.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub planar_now: Option<[f64; 9]>,
 }
 
 pub(crate) fn effect_options(e: &Effect) -> EffectOptions {
@@ -52,6 +59,8 @@ pub(crate) fn effect_options(e: &Effect) -> EffectOptions {
             points: Some(m.points.clone()),
             handles: Some(m.handles.clone()),
             smooth: None,
+            planar_keys: Some(m.planar.len()),
+            planar_now: None,
         },
         Effect::ChromaKey(k) => EffectOptions {
             color: Some(k.color),
@@ -79,7 +88,13 @@ impl Session {
             .map(|(index, e)| EffectDto {
                 index,
                 kind: e.kind().to_string(),
-                options: effect_options(e),
+                options: {
+                    let mut o = effect_options(e);
+                    if let Effect::Mask(m) = e {
+                        o.planar_now = m.planar_at(local);
+                    }
+                    o
+                },
                 params: e
                     .params()
                     .iter()
@@ -110,6 +125,153 @@ impl Session {
             clip: clip_id,
             effect,
             index: None,
+        })
+    }
+
+    /// Planar-track the surface under a mask (FX-06) from the playhead for
+    /// `seconds`: points inside it are followed and a perspective transform
+    /// is keyed per frame, so the outline sticks to the surface as it moves
+    /// and tilts. A rectangle or ellipse mask becomes a four-corner polygon.
+    pub fn track_planar(
+        &mut self,
+        track: &str,
+        clip: &str,
+        effect: usize,
+        seconds: f64,
+    ) -> Result<TrackResultDto, String> {
+        use debut_render::planar::{self, Homography};
+        let (target, clip_id, c) = self.clip_ref(track, clip)?;
+        let (seq_w, seq_h, fr) = {
+            let s = self.first_sequence()?;
+            (s.width as f32, s.height as f32, s.frame_rate)
+        };
+        let Some(Effect::Mask(mask)) = c.effects.get(effect) else {
+            return Err("not a mask effect".into());
+        };
+        let mut m = mask.clone();
+        let start = fr.snap(self.playhead()).max(c.timeline_in);
+        let end = (start + frames_of(seconds, fr)).min(c.timeline_out());
+        if end <= start {
+            return Err("nothing to track: move the playhead inside the clip".into());
+        }
+        let local0 = start - c.timeline_in;
+        if m.shape != MaskShape::Polygon {
+            let (hw, hh) = (
+                m.width.eval(local0) as f32 * 0.5,
+                m.height.eval(local0) as f32 * 0.5,
+            );
+            m.shape = MaskShape::Polygon;
+            m.points = vec![[-hw, -hh], [hw, -hh], [hw, hh], [-hw, hh]];
+            m.handles.clear();
+        }
+        let (media, _) = c.media_at(start).ok_or("only media clips can be tracked")?;
+        let (sw, sh) = self
+            .probed
+            .get(&media)
+            .map(|p| (p.0 as f32, p.1 as f32))
+            .ok_or("media not probed")?;
+        // Sequence (from the frame centre) <-> source pixels, through the fit
+        // compose uses.
+        let fit = (seq_w / sw).min(seq_h / sh);
+        let s_to_src: Homography = [
+            1.0 / fit as f64,
+            0.0,
+            sw as f64 * 0.5,
+            0.0,
+            1.0 / fit as f64,
+            sh as f64 * 0.5,
+            0.0,
+            0.0,
+            1.0,
+        ];
+        let src_to_s = planar::invert(&s_to_src).ok_or("bad frame size")?;
+        let (mx, my) = (m.x.eval(local0) as f32, m.y.eval(local0) as f32);
+        // The outline where it is drawn now (a previous track included).
+        let current = m.planar_at(local0).unwrap_or(planar::IDENTITY);
+        let region: Vec<[f32; 2]> = debut_render::flatten_outline(&m.points, &m.handles)
+            .iter()
+            .map(|p| {
+                let q = planar::apply(&current, [(mx + p[0]) as f64, (my + p[1]) as f64]);
+                let q = planar::apply(&s_to_src, q);
+                [q[0] as f32, q[1] as f32]
+            })
+            .collect();
+
+        if self.player.is_none() {
+            self.sync_player()?;
+        }
+        let player = self.player.as_mut().ok_or("no player")?;
+        use debut_render::FrameProvider;
+        let mut t = start;
+        let (w, h, px) = player
+            .frames
+            .frame(media, c.source_at(t))
+            .map_err(|e| e.to_string())?;
+        let mut tracker = debut_render::PlanarTracker::new(&px, w, h, &region)
+            .ok_or("not enough texture inside the mask to track")?;
+        // Keys outside the tracked span stay; the span is replaced.
+        let mut keys: Vec<debut_project::PlanarKey> = m
+            .planar
+            .iter()
+            .filter(|k| k.at < local0 || k.at >= end - c.timeline_in)
+            .copied()
+            .collect();
+        keys.push(debut_project::PlanarKey {
+            at: local0,
+            h: current,
+        });
+        let (mut count, mut weakest) = (1usize, 1.0f32);
+        loop {
+            t += fr.frame_duration();
+            if t >= end {
+                break;
+            }
+            let (w, h, px) = player
+                .frames
+                .frame(media, c.source_at(t))
+                .map_err(|e| e.to_string())?;
+            let Some((h_src, agree)) = tracker.step(&px, w, h) else {
+                break;
+            };
+            weakest = weakest.min(agree);
+            // Reference sequence space -> source -> tracked -> sequence, on
+            // top of where the outline already was.
+            let step = [src_to_s, h_src, s_to_src]
+                .iter()
+                .fold(planar::IDENTITY, |acc, m| mul3(&acc, m));
+            keys.push(debut_project::PlanarKey {
+                at: t - c.timeline_in,
+                h: mul3(&step, &current),
+            });
+            count += 1;
+        }
+        keys.sort_by_key(|k| k.at);
+        m.planar = keys;
+        self.exec(Command::ReplaceEffect {
+            target,
+            clip: clip_id,
+            index: effect,
+            effect: Effect::Mask(m),
+        })?;
+        Ok(TrackResultDto {
+            keys: count,
+            weakest_match: weakest,
+        })
+    }
+
+    /// Forget a mask's planar track.
+    pub fn clear_planar(&mut self, track: &str, clip: &str, effect: usize) -> Result<(), String> {
+        let (target, clip_id, c) = self.clip_ref(track, clip)?;
+        let Some(Effect::Mask(mask)) = c.effects.get(effect) else {
+            return Err("not a mask effect".into());
+        };
+        let mut m = mask.clone();
+        m.planar.clear();
+        self.exec(Command::ReplaceEffect {
+            target,
+            clip: clip_id,
+            index: effect,
+            effect: Effect::Mask(m),
         })
     }
 
@@ -334,4 +496,15 @@ impl Session {
             value,
         })
     }
+}
+
+/// 3x3 product `a · b`.
+fn mul3(a: &[f64; 9], b: &[f64; 9]) -> [f64; 9] {
+    let mut out = [0.0; 9];
+    for r in 0..3 {
+        for c in 0..3 {
+            out[r * 3 + c] = (0..3).map(|k| a[r * 3 + k] * b[k * 3 + c]).sum();
+        }
+    }
+    out
 }

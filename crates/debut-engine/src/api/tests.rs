@@ -1720,6 +1720,78 @@ fn collaborators_share_edits_presence_and_locks() {
     }
 }
 
+/// Planar tracking a panning texture: the mask follows it (FX-06).
+#[test]
+fn planar_track_follows_a_panning_surface() {
+    let dir = std::env::temp_dir().join(format!("debut-planar-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let _guard = TempDir(dir.clone());
+    let mut s = native();
+    let id = s.ids.fresh();
+    s.start(
+        Project::new(id, "p"),
+        dir.join("p.debut").to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    let m = s
+        .import_media(format!(
+            "{}/../debut-platform-native/tests/fixtures/pan_texture_160x120.mp4",
+            env!("CARGO_MANIFEST_DIR")
+        ))
+        .unwrap();
+    let seq = s.ensure_sequence().unwrap();
+    assert_eq!((seq.width, seq.height), (160, 120));
+    let v = seq.tracks[0].id.clone();
+    s.add_clip(&v, &m.id, 0.0).unwrap();
+    let clip = sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[0]
+        .id
+        .clone();
+    s.add_effect(&v, &clip, "mask").unwrap();
+    // A 60x40 rectangle in the middle of the frame.
+    s.set_param(&v, &clip, 0, Param::MaskWidth, 60.0, false)
+        .unwrap();
+    s.set_param(&v, &clip, 0, Param::MaskHeight, 40.0, false)
+        .unwrap();
+    let r = s.track_planar(&v, &clip, 0, 1.0).unwrap();
+    assert_eq!(r.keys, 25, "one key per frame for a second");
+    assert!(r.weakest_match > 0.6, "{}", r.weakest_match);
+    let fx = s.clip_effects(&v, &clip).unwrap();
+    assert_eq!(
+        fx[0].options.shape,
+        Some(MaskShape::Polygon),
+        "rectangle became a polygon"
+    );
+    // The window pans 25 px/s right and 10 px/s down, so the surface moves
+    // left and up: after 24 frames about (-24, -9.6) px.
+    let project = s.project().unwrap();
+    let Effect::Mask(mask) = &project.sequences[0].tracks[0].clips[0].effects[0] else {
+        panic!("mask")
+    };
+    let h = mask.planar_at(Rational::new(24, 25)).unwrap();
+    assert!(
+        (h[2] + 24.0).abs() < 1.5 && (h[5] + 9.6).abs() < 1.5,
+        "{h:?}"
+    );
+    // And the rendered mask moved with it: the lit area shifts left.
+    let lit_x = |s: &mut Session, t: f64| {
+        s.transport(TransportAction::Seek { t }).unwrap();
+        let (w, _, px) = s.frame_pixels().unwrap();
+        let (mut sum, mut n) = (0usize, 0usize);
+        for (i, p) in px.chunks(4).enumerate() {
+            if p[3] > 0 && (p[0] as u32 + p[1] as u32 + p[2] as u32) > 0 {
+                sum += i % w as usize;
+                n += 1;
+            }
+        }
+        sum as f64 / n.max(1) as f64
+    };
+    s.set_preview_quality(PreviewQuality::Full);
+    let (x0, x1) = (lit_x(&mut s, 0.0), lit_x(&mut s, 0.96));
+    assert!((x0 - x1 - 24.0).abs() < 3.0, "lit centre {x0} -> {x1}");
+    s.clear_planar(&v, &clip, 0).unwrap();
+    assert!(lit_x(&mut s, 0.96) > x0 - 2.0, "cleared");
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

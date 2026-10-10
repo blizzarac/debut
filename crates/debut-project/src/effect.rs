@@ -48,6 +48,40 @@ pub struct MaskFx {
     /// missing or zero makes a corner (FX-04).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub handles: Vec<[f32; 4]>,
+    /// Planar track (FX-06): per-frame homographies, in clip-local time,
+    /// mapping the polygon as drawn (sequence pixels from the frame centre)
+    /// to where the tracked surface is. Held before the first and after the
+    /// last key, blended between keys.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub planar: Vec<PlanarKey>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PlanarKey {
+    pub at: Rational,
+    pub h: [f64; 9],
+}
+
+impl MaskFx {
+    /// The planar-track homography at clip-local `t`, if the mask has one.
+    pub fn planar_at(&self, t: Rational) -> Option<[f64; 9]> {
+        let keys = &self.planar;
+        let first = keys.first()?;
+        if t <= first.at {
+            return Some(first.h);
+        }
+        let i = keys.partition_point(|k| k.at <= t);
+        if i >= keys.len() {
+            return Some(keys[keys.len() - 1].h);
+        }
+        let (a, b) = (keys[i - 1], keys[i]);
+        let f = ((t - a.at).as_f64() / (b.at - a.at).as_f64()).clamp(0.0, 1.0);
+        let mut h = [0.0; 9];
+        for (j, v) in h.iter_mut().enumerate() {
+            *v = a.h[j] + (b.h[j] - a.h[j]) * f;
+        }
+        Some(h)
+    }
 }
 
 impl Default for MaskFx {
@@ -62,6 +96,7 @@ impl Default for MaskFx {
             feather: Curve::constant(20.0),
             points: Vec::new(),
             handles: Vec::new(),
+            planar: Vec::new(),
         }
     }
 }

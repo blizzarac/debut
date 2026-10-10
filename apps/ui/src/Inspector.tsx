@@ -88,6 +88,29 @@ export function Inspector({ effects, selected, position, refreshKey, onChanged }
                   Track 5 s
                 </button>
               )}
+              {effects.trackPlanar && (
+                <button
+                  title="Track the surface under the mask for 5 s, perspective included; the outline sticks to it (a rectangle becomes a polygon)"
+                  onClick={() => {
+                    setTrackNote("tracking plane…");
+                    effects
+                      .trackPlanar!(selected.track, selected.clip, fx.index, 5)
+                      .then((r) => {
+                        setTrackNote(`${r.keys} frames, ${Math.round(r.weakest_match * 100)}% points agreeing at worst`);
+                        onChanged();
+                        reload();
+                      })
+                      .catch((e) => setTrackNote(String(e)));
+                  }}
+                >
+                  Track plane
+                </button>
+              )}
+              {!!fx.options.planar_keys && effects.clearPlanar && (
+                <button title="Forget the planar track" onClick={() => act(effects.clearPlanar!(selected.track, selected.clip, fx.index))}>
+                  clear plane
+                </button>
+              )}
               {trackNote && <span style={{ color: "#666" }}>{trackNote}</span>}
             </div>
           )}

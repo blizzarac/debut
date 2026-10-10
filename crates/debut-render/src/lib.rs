@@ -20,6 +20,7 @@ pub mod lut;
 
 pub mod nodes; // FX-04 masks, FX-05 chroma key
 pub mod ofx; // FX-15 OpenFX bridge over PluginHost (pending)
+pub mod planar; // FX-06 planar (homography) tracker
 pub mod scopes; // PB-08 waveform, vectorscope, histogram
 pub mod tracking; // FX-06 point tracker
 
@@ -98,5 +99,6 @@ pub use nodes::{
     flatten_outline, smooth_handles, ChromaKey, Mask, MaskShape, PolyMask, POLY_MAX_EDIT_POINTS,
     POLY_MAX_POINTS,
 };
+pub use planar::{Homography, PlanarTracker};
 pub use scopes::Scopes;
 pub use tracking::Tracker;
