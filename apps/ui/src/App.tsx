@@ -174,9 +174,14 @@ export default function App() {
     await refresh(engine);
   }
 
-  async function addToTimeline(m: MediaInfo) {
+  async function addToTimeline(m: MediaInfo, overwrite = false) {
     if (!engine?.media || !seq) return;
     const at = tick?.position ?? 0;
+    if (engine.media.insertMedia) {
+      // Onto the patched source tracks (TL-05).
+      await engine.media.insertMedia(m.id, at, overwrite).catch((err) => setStatus(`add failed: ${err}`));
+      return refresh(engine);
+    }
     for (const track of seq.tracks) {
       if (track.kind === "video" || (track.kind === "audio" && m.has_audio)) {
         await engine.media.addClip(track.id, m.id, at).catch((err) => setStatus(`add failed: ${err}`));
@@ -216,8 +221,8 @@ export default function App() {
   }
 
   return (
-    <main style={{ fontFamily: "system-ui", padding: 16, display: "grid", gridTemplateColumns: "300px 1fr", gap: 16, height: "100vh", boxSizing: "border-box", overflow: "hidden" }}>
-      <aside style={{ display: "flex", flexDirection: "column", gap: 8, overflowY: "auto", minHeight: 0, paddingRight: 4 }}>
+    <main style={{ fontFamily: "system-ui", padding: 16, display: "grid", gridTemplateColumns: "314px 1fr", gap: 16, height: "100vh", boxSizing: "border-box", overflow: "hidden" }}>
+      <aside style={{ display: "flex", flexDirection: "column", gap: 8, overflowY: "auto", minHeight: 0, paddingRight: 14, scrollbarGutter: "stable" }}>
         <h1 style={{ margin: 0, fontSize: 20 }}>debut</h1>
         <p style={{ color: "#666", fontSize: 12, margin: 0 }}>
           engine {version} · {detectTarget()} · {status}

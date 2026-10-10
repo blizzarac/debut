@@ -35,6 +35,7 @@ mod playback;
 mod proxies;
 mod shortcuts;
 mod snapshots;
+mod targeting;
 mod timeline;
 mod titles;
 mod waveforms;
@@ -47,6 +48,7 @@ pub use self::shortcuts::{
     BindingDto, ChordDto, KeyOverrideDto, KeymapDto, ShortcutActionDto, ShortcutsDto,
 };
 pub use self::snapshots::{ClipChangeDto, SnapshotDiffDto, SnapshotDto};
+pub use self::targeting::TargetingDto;
 use self::waveforms::WaveformCache;
 pub use self::{
     captions::*, effects::*, export::*, markers::*, media::*, multicam::*, playback::*,
@@ -73,6 +75,8 @@ pub struct Session {
     use_proxies: bool,
     /// Edits follow a clip's linked partners on other tracks (TL-05).
     linked_selection: bool,
+    /// Source patching and track targeting per sequence (TL-05).
+    patches: std::collections::HashMap<SequenceId, self::targeting::Patch>,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -131,6 +135,7 @@ impl Session {
             proxies: Default::default(),
             use_proxies: false,
             linked_selection: true,
+            patches: Default::default(),
             player: None,
             audio_out: None,
             backend: AnyBackend::detect(),

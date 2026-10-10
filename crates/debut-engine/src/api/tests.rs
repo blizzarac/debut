@@ -1524,6 +1524,69 @@ fn snapshots_compare_and_restore() {
     assert!(s.compare_snapshot(&first).is_err());
 }
 
+/// Source patching and track targeting (TL-05).
+#[test]
+fn patching_and_targeting() {
+    let Fx { mut s, v, a, m, .. } = fixture("patching_and_targeting");
+    let add = |s: &mut Session, kind: TrackKind| {
+        let t = Track::new(s.ids.fresh(), kind);
+        let id = t.id;
+        let seq_id = s.first_sequence().unwrap().id;
+        s.exec(Command::AddTrack {
+            sequence: seq_id,
+            track: t,
+            index: None,
+        })
+        .unwrap();
+        id_str(id.0)
+    };
+    let v2 = add(&mut s, TrackKind::Video);
+    let t = s.targeting().unwrap();
+    assert_eq!(
+        (t.video_source.as_deref(), t.audio_source.as_deref()),
+        (Some(v.as_str()), Some(a.as_str()))
+    );
+    assert_eq!(t.targeted.len(), 3);
+    let spans = |s: &Session| {
+        sequence_dto(s.first_sequence().unwrap())
+            .tracks
+            .iter()
+            .map(|t| {
+                t.clips
+                    .iter()
+                    .map(|c| (c.timeline_in, c.duration))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    // Picture to V2, sound off: one clip lands on V2 only.
+    s.set_source_patch("video", Some(v2.clone())).unwrap();
+    s.set_source_patch("audio", None).unwrap();
+    s.insert_media(&m.id, 3.0, false).unwrap();
+    assert_eq!(
+        spans(&s),
+        vec![vec![(0.4, 2.0)], vec![(0.4, 2.0)], vec![(3.0, 2.0)]]
+    );
+    assert!(
+        s.set_source_patch("video", Some(a.clone())).is_err(),
+        "kind mismatch"
+    );
+    // Back to V1 + A1 and overwrite at 1.0: both tracks are cut at 1.0.
+    s.set_source_patch("video", Some(v.clone())).unwrap();
+    s.set_source_patch("audio", Some(a.clone())).unwrap();
+    s.insert_media(&m.id, 1.0, true).unwrap();
+    assert_eq!(spans(&s)[0], vec![(0.4, 0.6), (1.0, 2.0)]);
+    assert_eq!(spans(&s)[1], vec![(0.4, 0.6), (1.0, 2.0)]);
+    s.undo().unwrap();
+    assert_eq!(spans(&s)[0], vec![(0.4, 2.0)], "one undo step");
+    // Blade with A1 out of targeting: V1 is cut, A1 is not.
+    s.set_track_targeted(&a, false).unwrap();
+    s.blade_targeted(1.6).unwrap();
+    assert_eq!(spans(&s)[0], vec![(0.4, 1.2), (1.6, 0.8)]);
+    assert_eq!(spans(&s)[1], vec![(0.4, 2.0)]);
+    assert!(!s.targeting().unwrap().targeted.contains(&a));
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

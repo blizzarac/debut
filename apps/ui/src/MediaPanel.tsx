@@ -17,7 +17,7 @@ export function MediaPanel({
   list: MediaInfo[];
   bins: BinInfo[];
   onChanged: () => void;
-  onInsert: (m: MediaInfo) => void;
+  onInsert: (m: MediaInfo, overwrite?: boolean) => void;
   onMulticam: (ids: string[], by: SyncBy) => void;
   onStatus: (s: string) => void;
 }) {
@@ -181,7 +181,7 @@ export function MediaPanel({
             ) : (
               <span />
             )}
-            <button onClick={() => onInsert(m)} title="Insert at playhead">
+            <button onClick={(e) => onInsert(m, e.shiftKey)} title="Insert at the playhead on the patched tracks (Shift: overwrite)">
               +
             </button>
             {relink?.id === m.id && (

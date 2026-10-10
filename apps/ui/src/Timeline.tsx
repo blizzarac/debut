@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useShortcut } from "./shortcuts";
-import type { ClipInfo, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, TitleTemplate, TrackInfo } from "./engine";
+import type { ClipInfo, Targeting, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, TitleTemplate, TrackInfo } from "./engine";
 
 const TRACK_H = 44;
 const RULER_H = 22;
@@ -57,6 +57,21 @@ export function Timeline({
     // Re-read after edits so templates saved in the Inspector show up.
     media.titleTemplates().then(setTemplates).catch(() => {});
   }, [media, seq]);
+  // Source patching and track targeting (TL-05).
+  const [targeting, setTargeting] = useState<Targeting | null>(null);
+  const loadTargeting = () => media.targeting?.().then(setTargeting).catch(() => setTargeting(null));
+  useEffect(() => {
+    loadTargeting();
+  }, [media, seq]); // eslint-disable-line react-hooks/exhaustive-deps
+  const bladeAtPlayhead = () => {
+    // A selected clip: its track (and linked partners); otherwise every targeted track.
+    if (!selected && media.bladeTargeted) {
+      media.bladeTargeted(toFrame(position)).then(onEdited).catch(() => {});
+      return;
+    }
+    const t = selected ? seq.tracks.find((t) => t.id === selected.track) : seq.tracks[0];
+    if (t) run({ kind: "blade", track: t.id, at: toFrame(position) });
+  };
   const setSelected = onSelect;
   const [drag, setDrag] = useState<Drag | null>(null);
   const [snapOn, setSnapOn] = useState(true);
@@ -124,10 +139,7 @@ export function Timeline({
   };
 
   const selectedClip = selected && seq.tracks.find((t) => t.id === selected.track)?.clips.find((c) => c.id === selected.clip);
-  useShortcut("blade", () => {
-    const t = selected ? seq.tracks.find((t) => t.id === selected.track) : seq.tracks[0];
-    if (t) run({ kind: "blade", track: t.id, at: toFrame(position) });
-  });
+  useShortcut("blade", bladeAtPlayhead);
   useShortcut("ripple_delete", () => {
     if (selectedClip) run({ kind: "extract", track: selected!.track, start: selectedClip.timeline_in, end: selectedClip.timeline_in + selectedClip.duration });
   });
@@ -138,12 +150,7 @@ export function Timeline({
   return (
     <div>
       <div style={{ display: "flex", gap: 6, alignItems: "center", padding: "6px 0" }}>
-        <button
-          onClick={() => {
-            const t = selected ? seq.tracks.find((t) => t.id === selected.track) : seq.tracks[0];
-            if (t) run({ kind: "blade", track: t.id, at: toFrame(position) });
-          }}
-        >
+        <button onClick={bladeAtPlayhead} title="Blade the selected clip, or every targeted track (T) when nothing is selected">
           Blade at playhead
         </button>
         <button
@@ -263,6 +270,31 @@ export function Timeline({
                   {track.kind === "video" ? "V" : "A"}
                   {seq.tracks.filter((t) => t.kind === track.kind).indexOf(track) + 1}
                 </text>
+                {targeting && (
+                  <>
+                    {(() => {
+                      const kind = track.kind === "audio" ? "audio" : "video";
+                      const patched = (kind === "video" ? targeting.video_source : targeting.audio_source) === track.id;
+                      const targeted = targeting.targeted.includes(track.id);
+                      const chip = (x: number, label: string, on: boolean, color: string, title: string, act: () => Promise<void> | undefined) => (
+                        <g style={{ cursor: "pointer" }} onMouseDown={(e) => { e.stopPropagation(); act()?.then(loadTargeting).catch(() => {}); }}>
+                          <title>{title}</title>
+                          <rect x={x} y={y + TRACK_H / 2 - 7} width={13} height={14} rx={2} fill={on ? color : "#fff"} stroke={color} />
+                          <text x={x + 6.5} y={y + TRACK_H / 2 + 4} fontSize={9} textAnchor="middle" fill={on ? "#fff" : color}>
+                            {label}
+                          </text>
+                        </g>
+                      );
+                      return (
+                        <>
+                          {track.kind !== "adjustment" &&
+                            chip(30, "S", patched, "#ea580c", patched ? "Inserted media goes here; click to switch off" : "Send inserted media here", () => media.setSourcePatch?.(kind, patched ? null : track.id))}
+                          {chip(46, "T", targeted, "#2563eb", targeted ? "Targeted: playhead edits act here" : "Not targeted", () => media.setTrackTargeted?.(track.id, !targeted))}
+                        </>
+                      );
+                    })()}
+                  </>
+                )}
                 <rect x={HEADER_W} y={y} width={width - HEADER_W} height={TRACK_H} fill={track.kind === "video" ? "#fafafa" : "#f4f8f4"} stroke="#e0e0e0" onMouseDown={() => setSelected(null)} />
                 {track.clips.map((clip) => {
                   const dragging = drag && (drag.clip.id === clip.id || (linkedOn && partners(drag.clip, clip))) ? drag : null;

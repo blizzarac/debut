@@ -406,10 +406,25 @@ export interface ProxyStatus {
   path: string | null;
 }
 
+export interface Targeting {
+  video_source: string | null;
+  audio_source: string | null;
+  targeted: string[];
+}
+
 export interface MediaApi {
   importMedia(path: string): Promise<MediaInfo>;
   /** Every media in the project (also after opening a file). */
   mediaList(): Promise<MediaInfo[]>;
+  /** Source patching and track targeting of the active sequence. */
+  targeting?(): Promise<Targeting>;
+  /** Send inserted media's picture/sound to `track`, or nowhere (null). */
+  setSourcePatch?(kind: "video" | "audio", track: string | null): Promise<void>;
+  setTrackTargeted?(track: string, on: boolean): Promise<void>;
+  /** Put media on the patched tracks at `at`: insert (pushes later clips) or overwrite. */
+  insertMedia?(media: string, at: number, overwrite: boolean): Promise<void>;
+  /** Blade every targeted track at `at`. */
+  bladeTargeted?(at: number): Promise<void>;
   /** Whether edits follow a clip's linked partners (same source and span) on other tracks. */
   linkedSelection?(): Promise<boolean>;
   setLinkedSelection?(on: boolean): Promise<void>;

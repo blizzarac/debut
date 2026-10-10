@@ -29,6 +29,7 @@ import type {
   SnapshotInfo,
   SnapshotsApi,
   SyncBy,
+  Targeting,
   ExportPreset,
   ExportStatus,
   FileStatus,
@@ -56,6 +57,21 @@ class TauriMedia implements MediaApi {
   }
   mediaList() {
     return invoke<MediaInfo[]>("media_list");
+  }
+  targeting() {
+    return invoke<Targeting>("targeting");
+  }
+  setSourcePatch(kind: "video" | "audio", track: string | null) {
+    return invoke<void>("set_source_patch", { kind, track });
+  }
+  setTrackTargeted(track: string, on: boolean) {
+    return invoke<void>("set_track_targeted", { track, on });
+  }
+  insertMedia(media: string, at: number, overwrite: boolean) {
+    return invoke<void>("insert_media", { media, at, overwrite });
+  }
+  bladeTargeted(at: number) {
+    return invoke<void>("blade_targeted", { at });
   }
   linkedSelection() {
     return invoke<boolean>("linked_selection");

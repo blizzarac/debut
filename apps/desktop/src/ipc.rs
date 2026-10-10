@@ -573,6 +573,40 @@ pub fn resolve_keymap(
 }
 
 #[tauri::command]
+pub fn targeting(state: State<'_, Shared>) -> Result<TargetingDto, String> {
+    lock(&state).targeting()
+}
+
+#[tauri::command]
+pub fn set_source_patch(
+    state: State<'_, Shared>,
+    kind: String,
+    track: Option<String>,
+) -> Result<(), String> {
+    lock(&state).set_source_patch(&kind, track)
+}
+
+#[tauri::command]
+pub fn set_track_targeted(state: State<'_, Shared>, track: String, on: bool) -> Result<(), String> {
+    lock(&state).set_track_targeted(&track, on)
+}
+
+#[tauri::command]
+pub fn insert_media(
+    state: State<'_, Shared>,
+    media: String,
+    at: f64,
+    overwrite: Option<bool>,
+) -> Result<(), String> {
+    lock(&state).insert_media(&media, at, overwrite.unwrap_or(false))
+}
+
+#[tauri::command]
+pub fn blade_targeted(state: State<'_, Shared>, at: f64) -> Result<(), String> {
+    lock(&state).blade_targeted(at)
+}
+
+#[tauri::command]
 pub fn linked_selection(state: State<'_, Shared>) -> bool {
     lock(&state).linked_selection()
 }
