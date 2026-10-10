@@ -7,6 +7,8 @@ import type {
   PluginsApi,
   PluginsInfo,
   TitleInfo,
+  ScriptApi,
+  ScriptOutput,
   ShapeInfo,
   SnapPoint,
   CodecCapabilities,
@@ -393,6 +395,15 @@ class TauriAi implements AiApi {
   }
 }
 
+class TauriScript implements ScriptApi {
+  run(source: string) {
+    return invoke<ScriptOutput>("run_script", { source });
+  }
+  api() {
+    return invoke<[string, string][]>("script_api");
+  }
+}
+
 class TauriCaptions implements CaptionsApi {
   search(query: string) {
     return invoke<{ id: string; start: number; text: string }[]>("search_captions", { query });
@@ -435,6 +446,7 @@ export class TauriEngine implements Engine {
   exporter = new TauriExport();
   plugins = new TauriPlugins();
   ai = new TauriAi();
+  script = new TauriScript();
 
   version() {
     return invoke<string>("version");

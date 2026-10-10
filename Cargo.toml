@@ -15,6 +15,7 @@ members = [
     "crates/debut-collab-server",
     "crates/debut-plugin-host",
     "crates/debut-engine",
+    "crates/debut-scripting",
     "crates/debut-platform-native",
     "crates/debut-platform-web",
     "crates/debut-arch",
@@ -43,6 +44,7 @@ debut-export = { path = "crates/debut-export" }
 debut-collab = { path = "crates/debut-collab" }
 debut-collab-server = { path = "crates/debut-collab-server" }
 debut-engine = { path = "crates/debut-engine" }
+debut-scripting = { path = "crates/debut-scripting" }
 debut-platform-native = { path = "crates/debut-platform-native" }
 debut-platform-web = { path = "crates/debut-platform-web" }
 
@@ -51,6 +53,8 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 serde_json = "1"
 fontdue = "0.9"
+# Embedded scripting (NFR-11); no_time keeps it free of Instant (wasm32).
+rhai = { version = "1.26", default-features = false, features = ["std", "serde", "no_time", "metadata"] }
 
 # Planned, enabled per crate as work starts:
 wgpu = "27"

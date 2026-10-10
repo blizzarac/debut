@@ -79,6 +79,25 @@ impl History {
         self.undone.clear();
     }
 
+    /// Fold every step done after the first `mark` into one, so a single
+    /// undo reverts them all (a script run, NFR-11). The project is not
+    /// touched. Returns how many steps were folded.
+    pub fn squash_since(&mut self, mark: usize) -> usize {
+        if self.done.len() <= mark + 1 {
+            return self.done.len().saturating_sub(mark);
+        }
+        let tail: Vec<Entry> = self.done.drain(mark..).collect();
+        let n = tail.len();
+        let (forward, mut inverse): (Vec<Command>, Vec<Command>) =
+            tail.into_iter().map(|e| (e.forward, e.inverse)).unzip();
+        inverse.reverse();
+        self.done.push(Entry {
+            forward: Command::Group(forward),
+            inverse: Command::Group(inverse),
+        });
+        n
+    }
+
     pub fn can_redo(&self) -> bool {
         !self.undone.is_empty()
     }
@@ -190,5 +209,47 @@ mod tests {
             )
             .unwrap();
         assert!(!history.can_redo());
+    }
+
+    #[test]
+    fn squash_folds_steps_into_one_undo() {
+        let mut ids = IdGen::new(7);
+        let mut seq = Sequence::new(ids.fresh(), "s", FrameRate::FPS_25, 64, 36);
+        let track = Track::new(ids.fresh(), TrackKind::Video);
+        let target = Target {
+            sequence: seq.id,
+            track: track.id,
+        };
+        seq.tracks.push(track);
+        let mut project = Project::new(ids.fresh(), "p");
+        project.sequences.push(seq);
+        let before = project.clone();
+        let mut journal = MemoryJournal::default();
+        let mut h = History::default();
+        let mark = h.len();
+        for n in 0..3 {
+            let clip = Clip::new(
+                ids.fresh(),
+                ClipSource::Media(ids.fresh()),
+                Rational::from_int(n * 2),
+                Rational::from_int(1),
+                Rational::ZERO,
+            );
+            h.execute(
+                &mut project,
+                Command::overwrite(target, clip, &mut ids),
+                &mut journal,
+            )
+            .unwrap();
+        }
+        assert_eq!(h.squash_since(mark), 3);
+        assert_eq!(h.len(), 1);
+        let after = project.clone();
+        assert!(h.undo(&mut project, &mut journal).unwrap());
+        assert_eq!(project, before);
+        assert!(h.redo(&mut project, &mut journal).unwrap());
+        assert_eq!(project, after);
+        // Nothing or one step: left as is.
+        assert_eq!(h.squash_since(h.len()), 0);
     }
 }

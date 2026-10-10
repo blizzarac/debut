@@ -11,6 +11,7 @@ import { MaskOverlay } from "./MaskOverlay";
 import { Snapshots } from "./Snapshots";
 import { Mixer } from "./Mixer";
 import { Scopes } from "./Scopes";
+import { ScriptPanel } from "./ScriptPanel";
 import { Timeline, type Selection } from "./Timeline";
 import { Transport } from "./Transport";
 import { Viewer } from "./Viewer";
@@ -415,6 +416,12 @@ export default function App() {
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Export</h2>
             <ExportPanel exporter={engine.exporter} />
+          </>
+        )}
+        {engine?.script && (
+          <>
+            <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Script</h2>
+            <ScriptPanel script={engine.script} onRan={() => refresh(engine)} />
           </>
         )}
       </aside>

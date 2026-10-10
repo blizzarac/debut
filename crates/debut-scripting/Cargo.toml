@@ -1,0 +1,18 @@
+[package]
+name = "debut-scripting"
+description = "Scripting API (NFR-11): Rhai scripts driving the engine's Session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+debut-engine.workspace = true
+debut-project.workspace = true
+rhai.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+debut-core.workspace = true
+debut-platform-native.workspace = true

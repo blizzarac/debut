@@ -453,6 +453,23 @@ export interface AiStatus {
   backend: string | null;
 }
 
+/** What a script run produced (NFR-11). */
+export interface ScriptOutput {
+  log: string[];
+  /** The last expression's value, unless it is (). */
+  value: string | null;
+  /** Why it stopped; its edits were undone. */
+  error: string | null;
+  /** Edits made, as one undo step. */
+  edits: number;
+}
+
+export interface ScriptApi {
+  run(source: string): Promise<ScriptOutput>;
+  /** [signature, description] of each function scripts can call. */
+  api(): Promise<[string, string][]>;
+}
+
 export interface AiApi {
   status(): Promise<AiStatus>;
   setEnabled(on: boolean): Promise<AiStatus>;
@@ -732,6 +749,7 @@ export interface Engine extends ProjectApi {
   captions?: CaptionsApi;
   plugins?: PluginsApi;
   ai?: AiApi;
+  script?: ScriptApi;
 }
 
 export type Target = "desktop" | "browser";

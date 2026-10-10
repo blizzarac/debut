@@ -78,6 +78,8 @@ pub fn run() {
             ipc::switch_angle,
             ipc::set_title,
             ipc::add_shape,
+            ipc::run_script,
+            ipc::script_api,
             ipc::set_shape,
             ipc::edit,
             ipc::clip_effects,

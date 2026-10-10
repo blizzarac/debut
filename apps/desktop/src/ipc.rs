@@ -610,6 +610,18 @@ pub fn set_title(
     lock(&state).set_title(&track, &clip, title)
 }
 
+/// Run a script against the session (NFR-11); its edits are one undo step.
+#[tauri::command]
+pub fn run_script(state: State<'_, Shared>, source: String) -> debut_scripting::ScriptOutput {
+    debut_scripting::run(&mut lock(&state), &source)
+}
+
+/// The functions scripts can call, with a line of help each.
+#[tauri::command]
+pub fn script_api() -> Vec<(&'static str, &'static str)> {
+    debut_scripting::API.to_vec()
+}
+
 #[tauri::command]
 pub fn add_shape(state: State<'_, Shared>, at: f64, shape: Shape) -> Result<String, String> {
     lock(&state).add_shape(at, shape)

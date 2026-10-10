@@ -161,6 +161,16 @@ impl Workspace {
         Ok(())
     }
 
+    /// Steps in the undo history: a mark for `squash_since`.
+    pub fn undo_mark(&self) -> usize {
+        self.history.len()
+    }
+
+    /// Make everything done since `mark` one undo step.
+    pub fn squash_since(&mut self, mark: usize) -> usize {
+        self.history.squash_since(mark)
+    }
+
     pub fn undo(&mut self) -> Result<bool> {
         let r = self.history.undo(&mut self.project, &mut self.journal)?;
         self.dirty |= r;

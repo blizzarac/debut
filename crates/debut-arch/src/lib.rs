@@ -23,6 +23,9 @@ pub enum Layer {
     Domain,
     /// `debut-engine`: the command surface the shells use.
     Engine,
+    /// `debut-scripting`: scripts driving the engine's command surface
+    /// (NFR-11). Engine-side: no OS calls of its own.
+    Scripting,
     /// `debut-platform-native` / `-web`: implementations of the platform traits.
     PlatformImpl,
     /// Standalone services (the collaboration server, the plugin-host
@@ -37,7 +40,7 @@ pub enum Layer {
 
 impl Layer {
     fn engine_side(self) -> bool {
-        self <= Layer::Engine
+        self <= Layer::Scripting
     }
 }
 
@@ -52,6 +55,7 @@ pub fn layer_of(name: &str) -> Option<Layer> {
         "debut-media" | "debut-timeline" | "debut-audio" | "debut-render" | "debut-graphics"
         | "debut-export" | "debut-collab" => Layer::Domain,
         "debut-engine" => Layer::Engine,
+        "debut-scripting" => Layer::Scripting,
         "debut-platform-native" | "debut-platform-web" => Layer::PlatformImpl,
         "debut-collab-server" | "debut-plugin-host" => Layer::Service,
         "debut-desktop" | "debut-web" => Layer::Shell,
@@ -81,6 +85,7 @@ const PLACED_EXTERNALS: &[(&str, &[&str])] = &[
     ("wgpu", &["debut-render"]),
     ("pollster", &["debut-render"]),
     ("fontdue", &["debut-graphics"]),
+    ("rhai", &["debut-scripting"]),
 ];
 
 /// The only external crates the foundation (`debut-core`, `debut-platform`)
@@ -91,6 +96,7 @@ const FOUNDATION_EXTERNALS: &[&str] = &["serde", "serde_json", "thiserror"];
 /// and the plain data types it exchanges with the UI.
 const SHELL_WORKSPACE_DEPS: &[&str] = &[
     "debut-engine",
+    "debut-scripting",
     "debut-core",
     "debut-project",
     "debut-command",

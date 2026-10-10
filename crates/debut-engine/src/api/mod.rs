@@ -255,6 +255,18 @@ impl Session {
             .ok_or_else(|| "no project open".to_string())
     }
 
+    /// Steps in the undo history so far; pass it to `group_undo_since` to
+    /// turn a run of edits into one undo step (scripts, NFR-11).
+    pub fn undo_mark(&self) -> usize {
+        self.workspace.as_ref().map_or(0, |w| w.undo_mark())
+    }
+
+    /// Make every edit since `mark` a single undo step; returns how many
+    /// edits it holds.
+    pub fn group_undo_since(&mut self, mark: usize) -> usize {
+        self.workspace.as_mut().map_or(0, |w| w.squash_since(mark))
+    }
+
     pub(crate) fn workspace_mut(&mut self) -> Result<&mut Workspace, String> {
         self.workspace
             .as_mut()
