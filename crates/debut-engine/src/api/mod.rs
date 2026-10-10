@@ -82,6 +82,9 @@ pub struct Session {
     patches: std::collections::HashMap<SequenceId, self::targeting::Patch>,
     /// Shared editing session, when joined (COL).
     collab: Option<self::collab::Collab>,
+    /// The program monitor window, when open (PB-05).
+    program: Option<debut_render::SurfaceViewer>,
+    program_error: Option<String>,
     /// The last plugin scan (FX-15, AUD-09).
     plugin_scan: Option<debut_platform::plugin_host::ScanResult>,
     player: Option<Player>,
@@ -145,6 +148,8 @@ impl Session {
             patches: Default::default(),
             collab: None,
             plugin_scan: None,
+            program: None,
+            program_error: None,
             player: None,
             audio_out: None,
             backend: AnyBackend::detect(),

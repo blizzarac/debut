@@ -14,6 +14,13 @@ pub enum TransportAction {
 }
 
 #[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct ProgramWindowDto {
+    pub open: bool,
+    pub size: Option<(u32, u32)>,
+    pub error: Option<String>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct HwDecodeDto {
     /// A hardware device opens on this machine (it may still turn streams down).
     pub available: bool,
@@ -96,6 +103,75 @@ impl Session {
             dropped,
             preview_divisor: p.preview_divisor(),
         })
+    }
+
+    /// Show the program on a native window (a full-screen monitor on a second
+    /// display, PB-05/PB-09): frames are rendered at the window's size and
+    /// presented from the GPU, never read back. Needs the GPU backend.
+    pub fn open_program_window(
+        &mut self,
+        window: impl debut_render::WindowSource,
+        width: u32,
+        height: u32,
+    ) -> Result<(), String> {
+        let debut_render::AnyBackend::Gpu(gpu) = &self.backend else {
+            return Err("the program monitor needs a GPU".into());
+        };
+        let viewer = gpu.create_viewer(window, width, height)?;
+        self.program = Some(viewer);
+        self.program_error = None;
+        self.present_program()
+    }
+
+    pub fn resize_program_window(&mut self, width: u32, height: u32) -> Result<(), String> {
+        let (Some(viewer), debut_render::AnyBackend::Gpu(gpu)) =
+            (self.program.as_mut(), &self.backend)
+        else {
+            return Ok(());
+        };
+        gpu.resize_viewer(viewer, width, height);
+        self.present_program()
+    }
+
+    pub fn close_program_window(&mut self) {
+        self.program = None;
+    }
+
+    /// Program window state: open, its size, and the last presenting error.
+    pub fn program_window(&self) -> ProgramWindowDto {
+        ProgramWindowDto {
+            open: self.program.is_some(),
+            size: self.program.as_ref().map(|v| v.size()),
+            error: self.program_error.clone(),
+        }
+    }
+
+    /// Render the current frame for the program window and present it.
+    pub fn present_program(&mut self) -> Result<(), String> {
+        let Session {
+            player,
+            backend,
+            program,
+            ..
+        } = self;
+        let (Some(p), Some(viewer)) = (player.as_mut(), program.as_mut()) else {
+            return Ok(());
+        };
+        // The sequence fitted into the window, never above its own size.
+        let (sw, sh) = p.sequence_size();
+        let (ww, wh) = viewer.size();
+        let s = (ww as f64 / sw.max(1) as f64)
+            .min(wh as f64 / sh.max(1) as f64)
+            .min(1.0);
+        let canvas = (
+            ((sw as f64 * s).round() as u32).max(1),
+            ((sh as f64 * s).round() as u32).max(1),
+        );
+        let graph = p.graph_at_size(canvas);
+        backend
+            .present(&graph, &mut p.frames, viewer, debut_render::Transfer::Srgb)
+            .map_err(|e| e.to_string())?;
+        Ok(())
     }
 
     /// Decode video on the GPU where a device takes it (NFR-09); the
@@ -213,6 +289,12 @@ impl Session {
             .render_rgba8(&graph, &mut p.frames, debut_render::Transfer::Srgb)
             .map_err(|e| e.to_string())?;
         let cost = self.platform.now().saturating_sub(started);
+        if self.program.is_some() {
+            // Shown on the program monitor too; a failure there doesn't stop the viewer.
+            if let Err(e) = self.present_program() {
+                self.program_error = Some(e);
+            }
+        }
         // Exponential moving average so one slow frame doesn't flip the mode.
         self.frame_cost = Some(match self.frame_cost {
             Some(prev) => prev.mul_f32(0.7) + cost.mul_f32(0.3),

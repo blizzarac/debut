@@ -16,7 +16,7 @@ const COMMON: &str = include_str!("../../../shaders/common.wgsl");
 const TRANSFORM: &str = include_str!("../../../shaders/transform.wgsl");
 const BLEND: &str = include_str!("../../../shaders/blend.wgsl");
 const DISSOLVE: &str = include_str!("../../../shaders/dissolve.wgsl");
-const COLOR: &str = include_str!("../../../shaders/color.wgsl");
+pub(crate) const COLOR: &str = include_str!("../../../shaders/color.wgsl");
 const COLOR_TRANSFORM: &str = include_str!("../../../shaders/color_transform.wgsl");
 const LUT3D: &str = include_str!("../../../shaders/lut3d.wgsl");
 const GRADE: &str = include_str!("../../../shaders/grade.wgsl");
@@ -24,13 +24,13 @@ const MASK: &str = include_str!("../../../shaders/mask.wgsl");
 const POLYMASK: &str = include_str!("../../../shaders/polymask.wgsl");
 const KEY: &str = include_str!("../../../shaders/key.wgsl");
 const PREMULTIPLY: &str = include_str!("../../../shaders/premultiply.wgsl");
-const OUTPUT: &str = include_str!("../../../shaders/output.wgsl");
+pub(crate) const OUTPUT: &str = include_str!("../../../shaders/output.wgsl");
 
 #[derive(Clone)]
 pub struct GpuImage {
-    texture: Arc<wgpu::Texture>,
-    w: u32,
-    h: u32,
+    pub(crate) texture: Arc<wgpu::Texture>,
+    pub(crate) w: u32,
+    pub(crate) h: u32,
     /// An 8-bit upload still holding straight alpha; every op that reads it
     /// premultiplies on the way in (the colour transform does so for free).
     straight: bool,
@@ -111,15 +111,18 @@ struct KeyParams {
     knobs: [f32; 4],
 }
 
-struct Pass {
+pub(crate) struct Pass {
     pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     target: wgpu::TextureFormat,
 }
 
 pub struct GpuBackend {
-    device: wgpu::Device,
-    queue: wgpu::Queue,
+    /// Kept for presenting to window surfaces (`surface.rs`).
+    pub(crate) instance: wgpu::Instance,
+    pub(crate) adapter: wgpu::Adapter,
+    pub(crate) device: wgpu::Device,
+    pub(crate) queue: wgpu::Queue,
     transform: Pass,
     blend: Pass,
     dissolve: Pass,
@@ -246,6 +249,8 @@ impl GpuBackend {
             wgpu::TextureFormat::Rgba8Unorm,
         );
         Some(Self {
+            instance,
+            adapter,
             device,
             queue,
             transform,
@@ -286,7 +291,7 @@ impl GpuBackend {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn pass_to(
+    pub(crate) fn pass_to(
         device: &wgpu::Device,
         name: &str,
         prelude: &str,
@@ -431,6 +436,26 @@ impl GpuBackend {
         label: &str,
     ) -> GpuImage {
         let out = self.texture_with(w, h, pass.target, label);
+        let out_view = out.create_view(&wgpu::TextureViewDescriptor::default());
+        self.draw(pass, uniforms, inputs, extra, &out_view, label);
+        GpuImage {
+            texture: Arc::new(out),
+            w,
+            h,
+            straight: false,
+        }
+    }
+
+    /// Run `pass` over `inputs` into `out_view` (one full-screen triangle).
+    pub(crate) fn draw(
+        &self,
+        pass: &Pass,
+        uniforms: &[u8],
+        inputs: &[&GpuImage],
+        extra: Option<&wgpu::TextureView>,
+        out_view: &wgpu::TextureView,
+        label: &str,
+    ) {
         let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some(label),
             size: uniforms.len() as u64,
@@ -466,7 +491,6 @@ impl GpuBackend {
             layout: &pass.layout,
             entries: &entries,
         });
-        let out_view = out.create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some(label) });
@@ -474,7 +498,7 @@ impl GpuBackend {
             let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some(label),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &out_view,
+                    view: out_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -491,19 +515,13 @@ impl GpuBackend {
             rp.draw(0..3, 0..1);
         }
         self.queue.submit(Some(encoder.finish()));
-        GpuImage {
-            texture: Arc::new(out),
-            w,
-            h,
-            straight: false,
-        }
     }
 }
 
 impl GpuBackend {
     /// Premultiply a straight 8-bit upload into the float format; other images
     /// pass through untouched.
-    fn premultiplied(&self, img: &GpuImage) -> GpuImage {
+    pub(crate) fn premultiplied(&self, img: &GpuImage) -> GpuImage {
         if img.straight {
             self.run(
                 &self.premultiply,

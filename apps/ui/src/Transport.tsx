@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useShortcut } from "./shortcuts";
-import type { HwDecodeStatus, PlayerApi, PreviewQuality, Tick } from "./engine";
+import type { HwDecodeStatus, PlayerApi, PreviewQuality, ProgramWindow, Tick } from "./engine";
 
 export function timecode(t: number, fps: number): string {
   const total = Math.max(0, Math.round(t * fps));
@@ -13,6 +13,20 @@ export function timecode(t: number, fps: number): string {
 export function Transport({ player, tick, fps, onMarker, onAngle }: { player: PlayerApi; tick: Tick | null; fps: number; onMarker?: () => void; onAngle?: (angle: number) => void }) {
   const [quality, setQuality] = useState<PreviewQuality>("auto");
   const [hw, setHw] = useState<HwDecodeStatus | null>(null);
+  const [program, setProgram] = useState<ProgramWindow | null>(null);
+  const [programNote, setProgramNote] = useState("");
+  const [screens, setScreens] = useState<{ index: number; name: string }[]>([]);
+  const [screen, setScreen] = useState<number | null>(null);
+  useEffect(() => {
+    player.monitors?.().then(setScreens).catch(() => {});
+    player.programWindow?.().then(setProgram).catch(() => {});
+  }, [player]);
+  // The window can be closed from its own title bar.
+  useEffect(() => {
+    if (!program?.open || !player.programWindow) return;
+    const id = setInterval(() => player.programWindow!().then(setProgram).catch(() => {}), 1000);
+    return () => clearInterval(id);
+  }, [player, program?.open]);
   const refreshHw = () => player.hardwareDecodeStatus?.().then(setHw).catch(() => {});
   useEffect(() => {
     refreshHw();
@@ -51,6 +65,40 @@ export function Transport({ player, tick, fps, onMarker, onAngle }: { player: Pl
       <code style={{ marginLeft: 12, fontSize: 16 }}>{timecode(tick?.position ?? 0, fps)}</code>
       {tick && tick.dropped > 0 && <span style={{ color: "#c33", fontSize: 12 }}>{tick.dropped} dropped</span>}
       <span style={{ flex: 1 }} />
+      {player.openProgramWindow && (
+        <span style={{ fontSize: 12, display: "inline-flex", gap: 4, alignItems: "center" }} title={program?.error ?? programNote ?? ""}>
+          {screens.length > 1 && !program?.open && (
+            <select value={screen ?? ""} onChange={(e) => setScreen(e.target.value === "" ? null : Number(e.target.value))} title="Display for the program window">
+              <option value="">last display</option>
+              {screens.map((s) => (
+                <option key={s.index} value={s.index}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            title="Show the program in its own window, straight from the GPU (put it on a second display, full screen)"
+            onClick={() =>
+              (program?.open
+                ? player.closeProgramWindow!().then(() => setProgram({ open: false, size: null, error: null }))
+                : player.openProgramWindow!(screen, false).then((p) => {
+                    setProgram(p);
+                    setProgramNote("");
+                  })
+              ).catch((e) => setProgramNote(String(e)))
+            }
+          >
+            {program?.open ? "Close program" : "Program"}
+          </button>
+          {program?.open && player.programFullscreen && (
+            <label>
+              <input type="checkbox" onChange={(e) => player.programFullscreen!(e.target.checked).catch((err) => setProgramNote(String(err)))} /> full screen
+            </label>
+          )}
+          {(program?.error || programNote) && <span style={{ color: "#c33" }}>{program?.error ?? programNote}</span>}
+        </span>
+      )}
       {hw?.available && player.setHardwareDecode && (
         <label
           style={{ fontSize: 12, color: hw.enabled && hw.media.some((m) => m.mode === "fallback") ? "#b45309" : undefined }}

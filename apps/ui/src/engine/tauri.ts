@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   HwDecodeStatus,
+  ProgramWindow,
   PluginsApi,
   PluginsInfo,
   TitleInfo,
@@ -190,6 +191,21 @@ class TauriPlayer implements PlayerApi {
   }
   hardwareDecodeStatus() {
     return invoke<HwDecodeStatus>("hardware_decode_status");
+  }
+  monitors() {
+    return invoke<{ index: number; name: string; width: number; height: number }[]>("monitors");
+  }
+  openProgramWindow(monitor: number | null, fullscreen: boolean) {
+    return invoke<ProgramWindow>("open_program_window", { monitor, fullscreen });
+  }
+  closeProgramWindow() {
+    return invoke<void>("close_program_window");
+  }
+  programFullscreen(on: boolean) {
+    return invoke<void>("program_fullscreen", { on });
+  }
+  programWindow() {
+    return invoke<ProgramWindow>("program_window");
   }
   async scopes(): Promise<ScopesData> {
     const buf = await invoke<ArrayBuffer>("scopes");

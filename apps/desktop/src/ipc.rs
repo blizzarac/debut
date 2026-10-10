@@ -5,7 +5,7 @@
 use debut_engine::api::*;
 use debut_project::{CaptionSettings, Param, Title, TrackMix};
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{Manager, State};
 
 pub type Shared = Mutex<Session>;
 
@@ -766,4 +766,127 @@ pub fn collab_poll(
 #[tauri::command]
 pub fn collab_lock(state: State<'_, Shared>, track: String, on: bool) -> Result<(), String> {
     lock(&state).collab_lock(&track, on)
+}
+
+// ---- program monitor (PB-05, PB-09) ----
+
+/// The program monitor's native window, while open.
+static PROGRAM: Mutex<Option<tauri::Window>> = Mutex::new(None);
+
+#[derive(serde::Serialize)]
+pub struct MonitorDto {
+    pub index: usize,
+    pub name: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[tauri::command]
+pub fn monitors(app: tauri::AppHandle) -> Vec<MonitorDto> {
+    app.available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(index, m)| MonitorDto {
+            index,
+            name: m
+                .name()
+                .cloned()
+                .unwrap_or_else(|| format!("Display {}", index + 1)),
+            width: m.size().width,
+            height: m.size().height,
+        })
+        .collect()
+}
+
+/// Open a window that shows the program straight from the GPU, on display
+/// `monitor` (default: the last one, usually the second screen), optionally
+/// full screen. It follows playback and closes with its window button.
+#[tauri::command]
+pub async fn open_program_window(
+    app: tauri::AppHandle,
+    monitor: Option<usize>,
+    fullscreen: bool,
+) -> Result<ProgramWindowDto, String> {
+    close_program(&app);
+    let monitors = app.available_monitors().unwrap_or_default();
+    let target = monitor
+        .and_then(|i| monitors.get(i))
+        .or(monitors.last())
+        .cloned();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let handle = app.clone();
+    // Windows and surfaces are made on the main thread (macOS requires it).
+    app.run_on_main_thread(move || {
+        let result = (|| -> Result<(), String> {
+            let mut builder = tauri::window::WindowBuilder::new(&handle, "program")
+                .title("debut — program")
+                .inner_size(960.0, 540.0)
+                .resizable(true);
+            if let Some(m) = &target {
+                let p = m.position();
+                let scale = m.scale_factor();
+                builder = builder.position(p.x as f64 / scale + 40.0, p.y as f64 / scale + 40.0);
+            }
+            let window = builder.build().map_err(|e| e.to_string())?;
+            if fullscreen {
+                let _ = window.set_fullscreen(true);
+            }
+            let size = window.inner_size().map_err(|e| e.to_string())?;
+            let state = handle.state::<Shared>();
+            lock(&state).open_program_window(window.clone(), size.width, size.height)?;
+            let events = handle.clone();
+            window.on_window_event(move |event| match event {
+                tauri::WindowEvent::Resized(size) => {
+                    let state = events.state::<Shared>();
+                    let _ = lock(&state).resize_program_window(size.width, size.height);
+                }
+                // The window system may have painted over the picture.
+                tauri::WindowEvent::Focused(_) | tauri::WindowEvent::Moved(_) => {
+                    let state = events.state::<Shared>();
+                    let _ = lock(&state).present_program();
+                }
+                tauri::WindowEvent::Destroyed => {
+                    let state = events.state::<Shared>();
+                    lock(&state).close_program_window();
+                    PROGRAM.lock().unwrap_or_else(|e| e.into_inner()).take();
+                }
+                _ => {}
+            });
+            *PROGRAM.lock().unwrap_or_else(|e| e.into_inner()) = Some(window);
+            Ok(())
+        })();
+        let _ = tx.send(result);
+    })
+    .map_err(|e| e.to_string())?;
+    rx.recv().map_err(|e| e.to_string())??;
+    let state = app.state::<Shared>();
+    let status = lock(&state).program_window();
+    Ok(status)
+}
+
+fn close_program(app: &tauri::AppHandle) {
+    if let Some(w) = PROGRAM.lock().unwrap_or_else(|e| e.into_inner()).take() {
+        let _ = w.destroy();
+    }
+    let state = app.state::<Shared>();
+    lock(&state).close_program_window();
+}
+
+#[tauri::command]
+pub fn close_program_window(app: tauri::AppHandle) {
+    close_program(&app);
+}
+
+#[tauri::command]
+pub fn program_fullscreen(on: bool) -> Result<(), String> {
+    match PROGRAM.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+        Some(w) => w.set_fullscreen(on).map_err(|e| e.to_string()),
+        None => Err("the program window is not open".into()),
+    }
+}
+
+#[tauri::command]
+pub fn program_window(state: State<'_, Shared>) -> ProgramWindowDto {
+    lock(&state).program_window()
 }

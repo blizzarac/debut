@@ -157,6 +157,19 @@ impl Player {
 
     /// The graph for the current frame regardless of whether it changed (e.g. after
     /// an edit while paused).
+    /// The current frame composed at `canvas` (a program window's size).
+    pub fn graph_at_size(&self, canvas: (u32, u32)) -> Graph {
+        let t = self
+            .transport
+            .frame_rate()
+            .frame_to_time(self.transport.current_frame());
+        compose_at(&self.sequence, t, &self.frames, canvas)
+    }
+
+    pub fn sequence_size(&self) -> (u32, u32) {
+        (self.sequence.width, self.sequence.height)
+    }
+
     pub fn current_graph(&self) -> Graph {
         let t = self
             .transport

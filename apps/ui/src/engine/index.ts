@@ -559,6 +559,18 @@ export interface PlayerApi {
   /** Decode video on the GPU where a device takes it (desktop). */
   setHardwareDecode?(on: boolean): Promise<void>;
   hardwareDecodeStatus?(): Promise<HwDecodeStatus>;
+  /** A native window showing the program straight from the GPU (desktop). */
+  monitors?(): Promise<{ index: number; name: string; width: number; height: number }[]>;
+  openProgramWindow?(monitor: number | null, fullscreen: boolean): Promise<ProgramWindow>;
+  closeProgramWindow?(): Promise<void>;
+  programFullscreen?(on: boolean): Promise<void>;
+  programWindow?(): Promise<ProgramWindow>;
+}
+
+export interface ProgramWindow {
+  open: boolean;
+  size: [number, number] | null;
+  error: string | null;
 }
 
 export interface HwDecodeStatus {

@@ -751,6 +751,7 @@ dependencies = [
  "debut-engine",
  "debut-platform-native",
  "debut-project",
+ "serde",
  "tauri",
  "tauri-build",
 ]

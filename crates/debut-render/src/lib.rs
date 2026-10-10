@@ -21,12 +21,14 @@ pub mod lut;
 pub mod nodes; // FX-04 masks, FX-05 chroma key
 pub mod planar; // FX-06 planar (homography) tracker
 pub mod scopes; // PB-08 waveform, vectorscope, histogram
+pub mod surface; // PB-05 present to a window surface, no read-back
 pub mod tracking; // FX-06 point tracker
 
 pub use backend::{encode_rgba8, Backend, BlendMode, FrameProvider, Rgba, Transform2D};
 pub use cache::RenderCache;
 pub use cpu::CpuBackend;
 pub use gpu::GpuBackend;
+pub use surface::{SurfaceViewer, WindowSource};
 
 /// Whichever backend the machine has: the GPU one when an adapter exists, else
 /// the CPU reference. Lets callers that only need pixels out stay generic-free.
@@ -45,6 +47,26 @@ impl AnyBackend {
 
     pub fn is_gpu(&self) -> bool {
         matches!(self, AnyBackend::Gpu(_))
+    }
+
+    /// Render `graph` into a window surface (GPU only: `Ok(false)` on the
+    /// CPU backend, which has nothing to present with).
+    pub fn present(
+        &mut self,
+        graph: &Graph,
+        frames: &mut dyn FrameProvider,
+        viewer: &mut SurfaceViewer,
+        transfer: Transfer,
+    ) -> debut_core::Result<bool> {
+        match self {
+            AnyBackend::Cpu(_) => Ok(false),
+            AnyBackend::Gpu(b) => {
+                let img = graph.render(b.as_mut(), frames)?;
+                b.present(&img, viewer, transfer)
+                    .map_err(debut_core::Error::Other)?;
+                Ok(true)
+            }
+        }
     }
 
     /// Render `graph` and read it back as straight, `transfer`-encoded RGBA8:
