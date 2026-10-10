@@ -25,7 +25,7 @@ const RANGES: Record<ParamName, [number, number, number]> = {
 
 /** Effect stack of the selected clip. Sliders set constants, or keyframes at
  * the playhead when the key toggle is on (FX-01). */
-export function Inspector({ effects, selected, position, onChanged }: { effects: EffectsApi; selected: Selection; position: number; onChanged: () => void }) {
+export function Inspector({ effects, selected, position, refreshKey, onChanged }: { effects: EffectsApi; selected: Selection; position: number; refreshKey?: number; onChanged: () => void }) {
   const [trackNote, setTrackNote] = useState("");
   const [stack, setStack] = useState<EffectInfo[]>([]);
   const [keyframe, setKeyframe] = useState(false);
@@ -37,7 +37,7 @@ export function Inspector({ effects, selected, position, onChanged }: { effects:
 
   useEffect(() => {
     reload();
-  }, [reload, position]);
+  }, [reload, position, refreshKey]);
 
   if (!selected) return <p style={{ fontSize: 12, color: "#999" }}>Select a clip to edit its effects.</p>;
 

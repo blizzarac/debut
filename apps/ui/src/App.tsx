@@ -6,6 +6,7 @@ import { MediaPanel } from "./MediaPanel";
 import { ExportPanel } from "./ExportPanel";
 import { Inspector, TitleEditor } from "./Inspector";
 import { Markers } from "./Markers";
+import { MaskOverlay } from "./MaskOverlay";
 import { Snapshots } from "./Snapshots";
 import { Mixer } from "./Mixer";
 import { Scopes } from "./Scopes";
@@ -254,7 +255,7 @@ export default function App() {
             {engine.media && selectedTitle && (
               <TitleEditor media={engine.media} selected={selected} title={selectedTitle} onChanged={() => refresh(engine)} />
             )}
-            <Inspector effects={engine.effects} selected={selected} position={Math.round((tick?.position ?? 0) * 25) / 25} onChanged={() => refresh(engine)} />
+            <Inspector effects={engine.effects} selected={selected} position={Math.round((tick?.position ?? 0) * 25) / 25} refreshKey={refreshKey} onChanged={() => refresh(engine)} />
           </>
         )}
         {engine?.markers && engine.player && (
@@ -291,7 +292,16 @@ export default function App() {
       <section style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0, overflowY: "auto" }}>
         {engine?.player ? (
           <>
-            <Viewer player={engine.player} onTick={onTick} refreshKey={refreshKey} />
+            <Viewer
+              player={engine.player}
+              onTick={onTick}
+              refreshKey={refreshKey}
+              overlay={
+                engine.effects && seq ? (
+                  <MaskOverlay effects={engine.effects} selected={selected} width={seq.width} height={seq.height} position={Math.round((tick?.position ?? 0) * 25) / 25} refreshKey={refreshKey} onChanged={() => refresh(engine)} />
+                ) : null
+              }
+            />
             <Transport player={engine.player} tick={tick} fps={fps} onMarker={addMarkerAtPlayhead} onAngle={switchAngle} />
             <Scopes player={engine.player} frameKey={(tick?.frame ?? 0) * 1000 + refreshKey} />
           </>

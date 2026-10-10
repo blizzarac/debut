@@ -226,6 +226,10 @@ impl Session {
         index: usize,
         opts: EffectOptions,
     ) -> Result<(), String> {
+        let (seq_w, seq_h) = {
+            let seq = self.first_sequence()?;
+            (seq.width, seq.height)
+        };
         let (target, clip_id, c) = self.clip_ref(track, clip)?;
         let mut effect = c.effects.get(index).cloned().ok_or("no such effect")?;
         match &mut effect {
@@ -270,9 +274,12 @@ impl Session {
                 // Switching to a polygon with no vertices yet: start from a
                 // diamond the size of the rectangle, so something is visible.
                 if m.shape == MaskShape::Polygon && m.points.len() < 3 {
+                    // ... but never larger than half the frame, so its points
+                    // can be grabbed in the viewer.
+                    let (sw, sh) = (seq_w as f32 * 0.25, seq_h as f32 * 0.25);
                     let (hw, hh) = (
-                        m.width.eval(Rational::ZERO) as f32 * 0.5,
-                        m.height.eval(Rational::ZERO) as f32 * 0.5,
+                        (m.width.eval(Rational::ZERO) as f32 * 0.5).min(sw),
+                        (m.height.eval(Rational::ZERO) as f32 * 0.5).min(sh),
                     );
                     m.points = vec![[0.0, -hh], [hw, 0.0], [0.0, hh], [-hw, 0.0]];
                 }

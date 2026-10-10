@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { PlayerApi, Tick } from "./engine";
 
-/** Program monitor: pulls a tick per animation frame and blits changed frames. */
-export function Viewer({ player, onTick, refreshKey }: { player: PlayerApi; onTick: (t: Tick) => void; refreshKey: number }) {
+/** Program monitor: pulls a tick per animation frame and blits changed frames.
+ * `overlay` is drawn over the picture, sized to it (mask handles). */
+export function Viewer({ player, onTick, refreshKey, overlay }: { player: PlayerApi; onTick: (t: Tick) => void; refreshKey: number; overlay?: ReactNode }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [size, setSize] = useState<[number, number]>([0, 0]);
   const force = useRef(0);
@@ -51,11 +52,14 @@ export function Viewer({ player, onTick, refreshKey }: { player: PlayerApi; onTi
 
   return (
     <div style={{ background: "#111", display: "flex", alignItems: "center", justifyContent: "center", aspectRatio: "16 / 9", maxHeight: "48vh" }}>
-      <canvas
-        ref={canvas}
-        style={{ maxWidth: "100%", maxHeight: "100%", imageRendering: size[0] < 400 ? "pixelated" : "auto" }}
-        title={`${size[0]}×${size[1]}`}
-      />
+      <div style={{ position: "relative", display: "inline-block", maxWidth: "100%", lineHeight: 0 }}>
+        <canvas
+          ref={canvas}
+          style={{ maxWidth: "100%", maxHeight: "48vh", imageRendering: size[0] < 400 ? "pixelated" : "auto" }}
+          title={`${size[0]}×${size[1]}`}
+        />
+        {overlay}
+      </div>
     </div>
   );
 }
