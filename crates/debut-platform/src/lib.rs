@@ -16,8 +16,8 @@ pub mod threads;
 
 pub use audio_out::AudioOut;
 pub use codec::{
-    AudioBlock, AudioEncodeSettings, AudioInfo, Decoder, EncodeSettings, Encoder, HwEncoder,
-    SourceTags, VideoFrame, VideoInfo,
+    AudioBlock, AudioEncodeSettings, AudioInfo, DecodePath, Decoder, EncodeSettings, Encoder,
+    HwEncoder, SourceTags, VideoFrame, VideoInfo,
 };
 pub use display::Display;
 pub use file_store::FileStore;
@@ -66,6 +66,14 @@ pub trait Platform: Send + Sync + 'static {
     /// Hardware decoders the codec layer carries.
     fn hardware_decoders(&self) -> Vec<String> {
         Vec::new()
+    }
+
+    /// Decode video on the GPU where a device takes the stream (NFR-09);
+    /// applies to decoders opened afterwards. Off by default.
+    fn set_hardware_decode(&self, _on: bool) {}
+
+    fn hardware_decode(&self) -> bool {
+        false
     }
 
     /// Monotonic time since an arbitrary origin, for autosave intervals and

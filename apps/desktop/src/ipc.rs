@@ -617,6 +617,16 @@ pub fn set_preview_quality(state: State<'_, Shared>, quality: PreviewQuality) {
 }
 
 #[tauri::command]
+pub fn set_hardware_decode(state: State<'_, Shared>, on: bool) -> Result<(), String> {
+    lock(&state).set_hardware_decode(on)
+}
+
+#[tauri::command]
+pub fn hardware_decode_status(state: State<'_, Shared>) -> HwDecodeDto {
+    lock(&state).hardware_decode_status()
+}
+
+#[tauri::command]
 pub fn scopes(state: State<'_, Shared>) -> Result<tauri::ipc::Response, String> {
     Ok(tauri::ipc::Response::new(lock(&state).scopes()?))
 }

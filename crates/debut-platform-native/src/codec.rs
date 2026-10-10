@@ -1,9 +1,11 @@
-//! FFmpeg-backed decoder (MED-01, MED-03, MED-04). Software decode for now; hardware
-//! paths (VideoToolbox, NVDEC, QSV, AMF — NFR-09) slot in as `hwaccel` on the same
-//! codec context.
+//! FFmpeg-backed decoder (MED-01, MED-03, MED-04), in software or through a
+//! hardware device (`hwdecode`, NFR-09).
 
+use crate::hwdecode;
 use debut_core::{Error, FrameRate, Rational, Result};
-use debut_platform::codec::{AudioBlock, AudioInfo, Decoder, SourceTags, VideoFrame, VideoInfo};
+use debut_platform::codec::{
+    AudioBlock, AudioInfo, DecodePath, Decoder, SourceTags, VideoFrame, VideoInfo,
+};
 use ffmpeg_next as ff;
 use std::collections::VecDeque;
 use std::path::Path;
@@ -33,8 +35,13 @@ struct VideoStream {
     index: usize,
     time_base: Rational,
     decoder: ff::decoder::Video,
-    scaler: ff::software::scaling::Context,
+    /// To RGBA, for the last frame's (format, width, height): a hardware
+    /// frame arrives as the device's download format, not the stream's.
+    scaler: Option<(ff::format::Pixel, u32, u32, ff::software::scaling::Context)>,
     info: VideoInfo,
+    /// The device the decoder was given, if any (kept alive with it).
+    device: Option<hwdecode::Device>,
+    path: DecodePath,
 }
 
 struct AudioStream {
@@ -63,24 +70,25 @@ unsafe impl Send for FfmpegDecoder {}
 
 impl FfmpegDecoder {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open_with(path, false)
+    }
+
+    /// Open, decoding video on the first hardware device that takes the
+    /// stream when `hardware` is set (else, or failing that, in software).
+    pub fn open_with(path: impl AsRef<Path>, hardware: bool) -> Result<Self> {
         init();
         let input = ff::format::input(&path).map_err(err)?;
 
         let video = match input.streams().best(ff::media::Type::Video) {
             Some(stream) => {
-                let ctx = ff::codec::context::Context::from_parameters(stream.parameters())
+                let mut ctx = ff::codec::context::Context::from_parameters(stream.parameters())
                     .map_err(err)?;
+                let (device, path) = if hardware {
+                    attach_device(&mut ctx)
+                } else {
+                    (None, DecodePath::Software)
+                };
                 let decoder = ctx.decoder().video().map_err(err)?;
-                let scaler = ff::software::scaling::Context::get(
-                    decoder.format(),
-                    decoder.width(),
-                    decoder.height(),
-                    ff::format::Pixel::RGBA,
-                    decoder.width(),
-                    decoder.height(),
-                    ff::software::scaling::Flags::BILINEAR,
-                )
-                .map_err(err)?;
                 // r_frame_rate is the container's nominal rate; fall back to the
                 // measured average for streams that don't declare one.
                 let rate = stream.rate();
@@ -107,8 +115,10 @@ impl FfmpegDecoder {
                     index: stream.index(),
                     time_base: rational(stream.time_base()),
                     decoder,
-                    scaler,
+                    scaler: None,
                     info,
+                    device,
+                    path,
                 })
             }
             None => None,
@@ -170,9 +180,48 @@ impl FfmpegDecoder {
         };
         let mut decoded = ff::frame::Video::empty();
         while v.decoder.receive_frame(&mut decoded).is_ok() {
+            // SAFETY: `decoded` is a frame the decoder just filled.
+            let on_device = unsafe { hwdecode::on_device(decoded.as_ptr()) };
+            if let Some(device) = &v.device {
+                v.path = if on_device {
+                    DecodePath::Hardware(hwdecode::type_name(device))
+                } else {
+                    DecodePath::Fallback {
+                        wanted: device.name.clone(),
+                        reason: format!(
+                            "the {} driver does not decode {}",
+                            device.name, v.info.codec
+                        ),
+                    }
+                };
+            }
+            let mut system = ff::frame::Video::empty();
+            let frame = if on_device {
+                // SAFETY: a hardware frame into an empty system-memory frame.
+                unsafe { hwdecode::download(decoded.as_ptr(), system.as_mut_ptr()) }
+                    .map_err(err)?;
+                &system
+            } else {
+                &decoded
+            };
+            let key = (frame.format(), frame.width(), frame.height());
+            if v.scaler.as_ref().map(|s| (s.0, s.1, s.2)) != Some(key) {
+                let scaler = ff::software::scaling::Context::get(
+                    key.0,
+                    key.1,
+                    key.2,
+                    ff::format::Pixel::RGBA,
+                    key.1,
+                    key.2,
+                    ff::software::scaling::Flags::BILINEAR,
+                )
+                .map_err(err)?;
+                v.scaler = Some((key.0, key.1, key.2, scaler));
+            }
             let mut rgba = ff::frame::Video::empty();
-            v.scaler.run(&decoded, &mut rgba).map_err(err)?;
-            let pts = decoded.pts().or(decoded.timestamp()).unwrap_or(0);
+            let scaler = &mut v.scaler.as_mut().expect("just made").3;
+            scaler.run(frame, &mut rgba).map_err(err)?;
+            let pts = frame.pts().or(frame.timestamp()).unwrap_or(0);
             let (w, h) = (rgba.width(), rgba.height());
             let stride = rgba.stride(0);
             let data = rgba.data(0);
@@ -296,7 +345,42 @@ fn read_tags(input: &ff::format::context::Input) -> SourceTags {
     tags
 }
 
+/// Give the codec context the first candidate device its codec can decode
+/// through; the path reported until the first frame says what was tried.
+fn attach_device(ctx: &mut ff::codec::context::Context) -> (Option<hwdecode::Device>, DecodePath) {
+    let Some(codec) = ff::decoder::find(ctx.id()) else {
+        return (None, DecodePath::Software);
+    };
+    let mut tried = Vec::new();
+    for name in hwdecode::candidates() {
+        match hwdecode::open_device(&name) {
+            // SAFETY: a valid codec, and a context not yet opened.
+            Ok(device) => unsafe {
+                if hwdecode::surface_format(codec.as_ptr(), &device).is_some() {
+                    hwdecode::attach(ctx.as_mut_ptr(), &device);
+                    return (Some(device), DecodePath::Requested(name));
+                }
+                tried.push(format!("{name} cannot decode {}", codec.name()));
+            },
+            Err(e) => tried.push(e),
+        }
+    }
+    (
+        None,
+        DecodePath::Fallback {
+            wanted: "hardware".into(),
+            reason: tried.join("; "),
+        },
+    )
+}
+
 impl Decoder for FfmpegDecoder {
+    fn decode_path(&self) -> DecodePath {
+        self.video
+            .as_ref()
+            .map_or(DecodePath::Software, |v| v.path.clone())
+    }
+
     fn tags(&self) -> SourceTags {
         self.tags.clone()
     }
@@ -785,6 +869,61 @@ mod tests {
         let a = d.audio_info().unwrap();
         assert_eq!(a.sample_rate, 48_000);
         assert_eq!(a.codec, "aac");
+    }
+
+    #[test]
+    fn hardware_decode_matches_software_or_falls_back() {
+        let frames = |mut d: FfmpegDecoder| {
+            let mut out = Vec::new();
+            while let Some(f) = d.next_video().unwrap() {
+                out.push((f.pts, f.rgba8));
+            }
+            (out, d.decode_path())
+        };
+        let (soft, path) = frames(FfmpegDecoder::open(FIXTURE).unwrap());
+        assert_eq!(path, DecodePath::Software);
+        // Vulkan is the one device API a machine without a GPU can open
+        // (Mesa's software driver); it has no video decode queue, so this
+        // exercises the device set-up and libavcodec's fall back to software.
+        // On a machine with a decoding GPU the frames come from hardware.
+        std::env::set_var("DEBUT_HWACCEL", "vulkan");
+        let d = FfmpegDecoder::open_with(FIXTURE, true).unwrap();
+        // Until a frame is decoded only the request is known.
+        assert!(matches!(
+            d.decode_path(),
+            DecodePath::Requested(_) | DecodePath::Fallback { .. }
+        ));
+        let (hard, path) = frames(d);
+        assert_eq!(hard.len(), soft.len());
+        for ((pa, a), (pb, b)) in hard.iter().zip(&soft) {
+            assert_eq!(pa, pb);
+            // A hardware decoder may round chroma differently.
+            let worst = a.iter().zip(b).map(|(x, y)| x.abs_diff(*y)).max().unwrap();
+            assert!(worst <= 8, "frame at {pa:?} differs by {worst}");
+        }
+        match path {
+            DecodePath::Hardware(name) => assert_eq!(name, "vulkan"),
+            DecodePath::Fallback { wanted, reason } => {
+                assert_eq!(
+                    wanted == "vulkan",
+                    reason.contains("does not decode"),
+                    "{reason}"
+                );
+            }
+            other => panic!("after decoding: {other:?}"),
+        }
+        // An API FFmpeg lacks: software, with the reason.
+        std::env::set_var("DEBUT_HWACCEL", "teleport");
+        let (again, path) = frames(FfmpegDecoder::open_with(FIXTURE, true).unwrap());
+        std::env::remove_var("DEBUT_HWACCEL");
+        assert_eq!(again, soft);
+        assert_eq!(
+            path,
+            DecodePath::Fallback {
+                wanted: "hardware".into(),
+                reason: "FFmpeg has no teleport support".into()
+            }
+        );
     }
 
     #[test]

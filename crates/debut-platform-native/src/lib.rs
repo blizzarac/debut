@@ -5,6 +5,7 @@ pub mod codec; // FFmpeg; NVENC / VideoToolbox / Quick Sync / AMF encoders
 pub mod display; // native window, SDI/HDMI output (PB-09) — pending
 pub mod file_store; // native FS
 pub mod fonts; // system font discovery
+pub mod hwdecode; // NFR-09 hardware video decode (VAAPI, NVDEC, Vulkan, VideoToolbox, D3D11VA)
 pub mod net; // TCP line connections (collaboration)
 pub mod plugin_host; // OpenFX and CLAP, out of process (NFR-07)
 pub mod threads; // native pool
@@ -25,6 +26,8 @@ pub struct NativePlatform {
     fonts: Mutex<HashMap<String, Option<Arc<[u8]>>>>,
     /// The plugin-host helper, when one ships next to the app (FX-15).
     plugins: Option<Arc<plugin_host::NativePluginHost>>,
+    /// Decode video on a hardware device (NFR-09).
+    hw_decode: std::sync::atomic::AtomicBool,
 }
 
 impl NativePlatform {
@@ -35,6 +38,7 @@ impl NativePlatform {
             origin: Instant::now(),
             fonts: Mutex::new(HashMap::new()),
             plugins: plugin_host::NativePluginHost::from_environment().map(Arc::new),
+            hw_decode: std::sync::atomic::AtomicBool::new(false),
         }
     }
 
@@ -56,7 +60,7 @@ impl Default for NativePlatform {
 impl Platform for NativePlatform {
     fn capabilities(&self) -> Capabilities {
         Capabilities {
-            hardware_decode: false,
+            hardware_decode: hwdecode::available(),
             hardware_encode: false,
             camera_raw: false,
             native_plugins: self.plugins.is_some(),
@@ -70,7 +74,8 @@ impl Platform for NativePlatform {
     }
 
     fn open_decoder(&self, path: &str) -> debut_core::Result<Box<dyn Decoder>> {
-        Ok(Box::new(codec::FfmpegDecoder::open(path)?))
+        let hw = self.hw_decode.load(std::sync::atomic::Ordering::Relaxed);
+        Ok(Box::new(codec::FfmpegDecoder::open_with(path, hw)?))
     }
 
     fn create_encoder(
@@ -106,6 +111,15 @@ impl Platform for NativePlatform {
             .spawn(job)
             .map(|_| ())
             .map_err(|e| debut_core::Error::Other(format!("spawn {name}: {e}")))
+    }
+
+    fn set_hardware_decode(&self, on: bool) {
+        self.hw_decode
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn hardware_decode(&self) -> bool {
+        self.hw_decode.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     fn plugins(&self) -> Option<Arc<dyn debut_platform::PluginHost>> {

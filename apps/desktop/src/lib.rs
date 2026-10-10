@@ -88,6 +88,8 @@ pub fn run() {
             ipc::add_insert,
             ipc::remove_insert,
             ipc::scan_plugins,
+            ipc::set_hardware_decode,
+            ipc::hardware_decode_status,
             ipc::plugins,
             ipc::add_plugin_effect,
             ipc::set_plugin_param,

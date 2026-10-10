@@ -154,6 +154,14 @@ pub fn offline_frame() -> Vec<u8> {
 }
 
 impl FrameSource {
+    /// How each media's video is being decoded (NFR-09).
+    pub fn decode_paths(&self) -> Vec<(MediaId, debut_platform::DecodePath)> {
+        self.sources
+            .iter()
+            .map(|(id, s)| (*id, s.decoder.decode_path()))
+            .collect()
+    }
+
     pub fn plugin_error(&self) -> Option<String> {
         self.plugin_error.clone()
     }

@@ -13,6 +13,24 @@ pub enum TransportAction {
     Shuttle { forward: bool },
 }
 
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct HwDecodeDto {
+    /// A hardware device opens on this machine (it may still turn streams down).
+    pub available: bool,
+    pub enabled: bool,
+    pub media: Vec<DecodePathDto>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct DecodePathDto {
+    pub media: String,
+    pub name: String,
+    /// "software", "requested" (no frame decoded yet), "hardware" or "fallback".
+    pub mode: String,
+    /// The device API, or why hardware decoding fell back.
+    pub detail: String,
+}
+
 #[derive(Serialize)]
 pub struct TickDto {
     pub frame: i64,
@@ -78,6 +96,71 @@ impl Session {
             dropped,
             preview_divisor: p.preview_divisor(),
         })
+    }
+
+    /// Decode video on the GPU where a device takes it (NFR-09); the
+    /// player's decoders reopen with the new setting.
+    pub fn set_hardware_decode(&mut self, on: bool) -> Result<(), String> {
+        if self.platform.hardware_decode() == on {
+            return Ok(());
+        }
+        self.platform.set_hardware_decode(on);
+        let media: Vec<MediaId> = self
+            .project()
+            .map(|p| p.media.iter().map(|m| m.id).collect())
+            .unwrap_or_default();
+        if let Some(p) = &mut self.player {
+            media.iter().for_each(|id| p.forget_media(*id));
+        }
+        self.sync_player()
+    }
+
+    /// Whether hardware decoding is available and on, and how each open
+    /// media's video is actually being decoded.
+    pub fn hardware_decode_status(&self) -> HwDecodeDto {
+        let names: std::collections::HashMap<MediaId, String> = self
+            .project()
+            .map(|p| {
+                p.media
+                    .iter()
+                    .map(|m| {
+                        (
+                            m.id,
+                            m.path.rsplit(['/', '\\']).next().unwrap_or("").to_string(),
+                        )
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let mut media: Vec<DecodePathDto> = self
+            .player
+            .as_ref()
+            .map(|p| p.frames.decode_paths())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(id, path)| {
+                let (mode, detail) = match path {
+                    debut_platform::DecodePath::Software => ("software".to_string(), String::new()),
+                    debut_platform::DecodePath::Requested(api) => ("requested".to_string(), api),
+                    debut_platform::DecodePath::Hardware(api) => ("hardware".to_string(), api),
+                    debut_platform::DecodePath::Fallback { reason, .. } => {
+                        ("fallback".to_string(), reason)
+                    }
+                };
+                DecodePathDto {
+                    media: id_str(id.0),
+                    name: names.get(&id).cloned().unwrap_or_default(),
+                    mode,
+                    detail,
+                }
+            })
+            .collect();
+        media.sort_by(|a, b| a.name.cmp(&b.name));
+        HwDecodeDto {
+            available: self.platform.capabilities().hardware_decode,
+            enabled: self.platform.hardware_decode(),
+            media,
+        }
     }
 
     pub fn set_preview_quality(&mut self, q: PreviewQuality) {

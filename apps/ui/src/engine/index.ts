@@ -556,6 +556,17 @@ export interface PlayerApi {
   framePixels(): Promise<Frame>;
   scopes?(): Promise<ScopesData>;
   setPreviewQuality?(quality: PreviewQuality): Promise<void>;
+  /** Decode video on the GPU where a device takes it (desktop). */
+  setHardwareDecode?(on: boolean): Promise<void>;
+  hardwareDecodeStatus?(): Promise<HwDecodeStatus>;
+}
+
+export interface HwDecodeStatus {
+  /** A hardware device opens on this machine (it may still turn streams down). */
+  available: boolean;
+  enabled: boolean;
+  /** Per open media: "software", "requested" (no frame yet), "hardware" (detail = device API) or "fallback" (detail = why). */
+  media: { media: string; name: string; mode: "software" | "requested" | "hardware" | "fallback"; detail: string }[];
 }
 
 /** A key chord bound to a shortcut action (TL-12). */

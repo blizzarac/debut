@@ -1,5 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  HwDecodeStatus,
   PluginsApi,
   PluginsInfo,
   TitleInfo,
@@ -183,6 +184,12 @@ class TauriPlayer implements PlayerApi {
   }
   setPreviewQuality(quality: PreviewQuality) {
     return invoke<void>("set_preview_quality", { quality });
+  }
+  setHardwareDecode(on: boolean) {
+    return invoke<void>("set_hardware_decode", { on });
+  }
+  hardwareDecodeStatus() {
+    return invoke<HwDecodeStatus>("hardware_decode_status");
   }
   async scopes(): Promise<ScopesData> {
     const buf = await invoke<ArrayBuffer>("scopes");

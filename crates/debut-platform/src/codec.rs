@@ -57,6 +57,26 @@ pub trait Decoder: Send {
     fn tags(&self) -> SourceTags {
         SourceTags::default()
     }
+    /// Where the video frames decoded so far came from (NFR-09).
+    fn decode_path(&self) -> DecodePath {
+        DecodePath::Software
+    }
+}
+
+/// How a decoder is decoding its video.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum DecodePath {
+    /// On the CPU, as asked (or before any frame was decoded).
+    #[default]
+    Software,
+    /// A device of this API was given to the decoder; no frame has shown
+    /// yet whether its driver takes the stream.
+    Requested(String),
+    /// On a hardware decoder through this device API ("vaapi", "videotoolbox").
+    Hardware(String),
+    /// Hardware was asked for, but the device or its driver could not take
+    /// this stream, so it decodes on the CPU.
+    Fallback { wanted: String, reason: String },
 }
 
 /// Tags a camera or recorder leaves in the file: start timecode as written

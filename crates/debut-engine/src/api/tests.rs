@@ -2075,3 +2075,31 @@ fn bench_preview_divisors_on_1080p() {
     }
     std::fs::remove_dir_all(dir).ok();
 }
+
+/// Hardware decoding (NFR-09): off by default; asking for an API FFmpeg
+/// lacks falls back to software, frames unchanged, and says why.
+#[test]
+fn hardware_decode_toggle_reports_the_decode_path() {
+    let Fx { mut s, .. } = fixture("hardware_decode_toggle");
+    s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+    let (_, _, soft) = s.frame_pixels().unwrap();
+    let st = s.hardware_decode_status();
+    assert!(!st.enabled);
+    assert_eq!(st.media.len(), 1);
+    assert_eq!(st.media[0].mode, "software");
+    std::env::set_var("DEBUT_HWACCEL", "teleport");
+    s.set_hardware_decode(true).unwrap();
+    s.transport(TransportAction::Seek { t: 1.0 }).unwrap();
+    let (_, _, hard) = s.frame_pixels().unwrap();
+    std::env::remove_var("DEBUT_HWACCEL");
+    let st = s.hardware_decode_status();
+    assert!(st.enabled);
+    assert_eq!(
+        (st.media[0].mode.as_str(), st.media[0].detail.as_str()),
+        ("fallback", "FFmpeg has no teleport support")
+    );
+    assert_eq!(hard, soft);
+    s.set_hardware_decode(false).unwrap();
+    s.frame_pixels().unwrap();
+    assert_eq!(s.hardware_decode_status().media[0].mode, "software");
+}
