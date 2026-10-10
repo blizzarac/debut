@@ -6,6 +6,7 @@
 //! can't provide a capability, it reports so via [`Capabilities`] and the UI shows
 //! the difference instead of failing at runtime (PLT-05).
 
+pub mod ai;
 pub mod audio_out;
 pub mod codec;
 pub mod display;
@@ -14,6 +15,7 @@ pub mod net;
 pub mod plugin_host;
 pub mod threads;
 
+pub use ai::{Transcriber, TranscriptSegment};
 pub use audio_out::AudioOut;
 pub use codec::{
     AudioBlock, AudioEncodeSettings, AudioInfo, DecodePath, Decoder, EncodeSettings, Encoder,
@@ -87,6 +89,20 @@ pub trait Platform: Send + Sync + 'static {
     /// Bytes of a TrueType/OpenType font for `family` (or a font file path), or
     /// of a fallback face; `None` when the platform has no usable font (GFX-01).
     fn font(&self, family: &str) -> Option<std::sync::Arc<[u8]>>;
+
+    /// The local speech-to-text backend (GFX-04), when one is set up.
+    fn transcriber(&self) -> Option<std::sync::Arc<dyn Transcriber>> {
+        None
+    }
+
+    /// Point transcription at a local engine and model (desktop: the
+    /// whisper.cpp command-line tool and a ggml model file).
+    fn configure_transcriber(&self, engine: &str, model: &str) -> debut_core::Result<()> {
+        let _ = (engine, model);
+        Err(debut_core::Error::Unsupported(
+            "local transcription is not available here".into(),
+        ))
+    }
 
     /// The out-of-process plugin host (FX-15, AUD-09), where the target has one.
     fn plugins(&self) -> Option<std::sync::Arc<dyn PluginHost>> {

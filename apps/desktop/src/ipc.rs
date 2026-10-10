@@ -617,6 +617,42 @@ pub fn set_preview_quality(state: State<'_, Shared>, quality: PreviewQuality) {
 }
 
 #[tauri::command]
+pub fn ai_status(state: State<'_, Shared>) -> AiDto {
+    lock(&state).ai_status()
+}
+
+#[tauri::command]
+pub fn set_ai_enabled(state: State<'_, Shared>, on: bool) -> AiDto {
+    let mut s = lock(&state);
+    s.set_ai_enabled(on);
+    s.ai_status()
+}
+
+#[tauri::command]
+pub fn configure_transcriber(
+    state: State<'_, Shared>,
+    engine: String,
+    model: String,
+) -> Result<AiDto, String> {
+    lock(&state).configure_transcriber(&engine, &model)
+}
+
+#[tauri::command]
+pub fn transcribe_clip(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    language: Option<String>,
+) -> Result<TranscribeDto, String> {
+    lock(&state).transcribe_clip(&track, &clip, language)
+}
+
+#[tauri::command]
+pub fn search_captions(state: State<'_, Shared>, query: String) -> Result<Vec<CaptionHit>, String> {
+    lock(&state).search_captions(&query)
+}
+
+#[tauri::command]
 pub fn set_hardware_decode(state: State<'_, Shared>, on: bool) -> Result<(), String> {
     lock(&state).set_hardware_decode(on)
 }

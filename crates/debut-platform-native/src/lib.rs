@@ -1,5 +1,6 @@
 //! Desktop implementations of the `debut-platform` traits (NFR-08, NFR-09).
 
+pub mod ai; // GFX-04 local transcription via whisper.cpp
 pub mod audio_out; // cpal: CoreAudio / WASAPI / ALSA real-time callback
 pub mod codec; // FFmpeg; NVENC / VideoToolbox / Quick Sync / AMF encoders
 pub mod display; // native window, SDI/HDMI output (PB-09) — pending
@@ -28,6 +29,8 @@ pub struct NativePlatform {
     plugins: Option<Arc<plugin_host::NativePluginHost>>,
     /// Decode video on a hardware device (NFR-09).
     hw_decode: std::sync::atomic::AtomicBool,
+    /// Local speech-to-text (GFX-04), from the environment or the settings.
+    transcriber: Mutex<Option<Arc<ai::WhisperCli>>>,
 }
 
 impl NativePlatform {
@@ -39,6 +42,7 @@ impl NativePlatform {
             fonts: Mutex::new(HashMap::new()),
             plugins: plugin_host::NativePluginHost::from_environment().map(Arc::new),
             hw_decode: std::sync::atomic::AtomicBool::new(false),
+            transcriber: Mutex::new(ai::WhisperCli::from_environment().map(Arc::new)),
         }
     }
 
@@ -111,6 +115,17 @@ impl Platform for NativePlatform {
             .spawn(job)
             .map(|_| ())
             .map_err(|e| debut_core::Error::Other(format!("spawn {name}: {e}")))
+    }
+
+    fn transcriber(&self) -> Option<Arc<dyn debut_platform::Transcriber>> {
+        let t = self.transcriber.lock().unwrap_or_else(|e| e.into_inner());
+        t.clone().map(|t| t as Arc<dyn debut_platform::Transcriber>)
+    }
+
+    fn configure_transcriber(&self, engine: &str, model: &str) -> debut_core::Result<()> {
+        let t = ai::WhisperCli::new(engine, model)?;
+        *self.transcriber.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(t));
+        Ok(())
     }
 
     fn set_hardware_decode(&self, on: bool) {

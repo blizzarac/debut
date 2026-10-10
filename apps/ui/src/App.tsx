@@ -397,7 +397,7 @@ export default function App() {
         {engine?.captions && engine.player && (
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Captions</h2>
-            <Captions captions={engine.captions} list={captionList} fps={fps} position={tick?.position ?? 0} onSeek={(t) => engine.player!.transport({ kind: "seek", t })} onChanged={() => refresh(engine)} />
+            <Captions captions={engine.captions} ai={engine.ai} selected={selected} list={captionList} fps={fps} position={tick?.position ?? 0} onSeek={(t) => engine.player!.transport({ kind: "seek", t })} onChanged={() => refresh(engine)} />
           </>
         )}
         {engine?.mixer && seq && seq.tracks.some((t) => t.kind === "audio") && (

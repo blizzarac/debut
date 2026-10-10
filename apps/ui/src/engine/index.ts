@@ -407,6 +407,25 @@ export interface CaptionsApi {
   /** Read an .srt file into the sequence; returns the cue count. */
   importSrt(path: string): Promise<number>;
   exportSrt(path: string): Promise<number>;
+  /** Captions whose text contains `query`, in time order. */
+  search?(query: string): Promise<{ id: string; start: number; text: string }[]>;
+}
+
+/** On-device AI (GFX-04): off until opted in; models run locally. */
+export interface AiStatus {
+  enabled: boolean;
+  /** A local transcription engine and model are set up. */
+  available: boolean;
+  backend: string | null;
+}
+
+export interface AiApi {
+  status(): Promise<AiStatus>;
+  setEnabled(on: boolean): Promise<AiStatus>;
+  /** The whisper.cpp command-line tool and a ggml model file. */
+  configure(engine: string, model: string): Promise<AiStatus>;
+  /** Transcribe a clip's audio into captions over it (one undo step). */
+  transcribeClip(track: string, clip: string, language: string | null): Promise<{ segments: number; captions_added: number; backend: string }>;
 }
 
 export interface MarkerEdit {
@@ -671,6 +690,7 @@ export interface Engine extends ProjectApi {
   snapshots?: SnapshotsApi;
   captions?: CaptionsApi;
   plugins?: PluginsApi;
+  ai?: AiApi;
 }
 
 export type Target = "desktop" | "browser";

@@ -24,6 +24,7 @@ use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
 
+mod ai;
 mod captions;
 mod collab;
 mod effects;
@@ -54,8 +55,8 @@ pub use self::snapshots::{ClipChangeDto, SnapshotDiffDto, SnapshotDto};
 pub use self::targeting::TargetingDto;
 use self::waveforms::WaveformCache;
 pub use self::{
-    captions::*, effects::*, export::*, markers::*, media::*, multicam::*, playback::*, plugins::*,
-    timeline::*, titles::*,
+    ai::*, captions::*, effects::*, export::*, markers::*, media::*, multicam::*, playback::*,
+    plugins::*, timeline::*, titles::*,
 };
 
 pub struct Session {
@@ -82,6 +83,8 @@ pub struct Session {
     patches: std::collections::HashMap<SequenceId, self::targeting::Patch>,
     /// Shared editing session, when joined (COL).
     collab: Option<self::collab::Collab>,
+    /// AI features opted into (GFX-04); off by default.
+    ai_enabled: bool,
     /// The program monitor window, when open (PB-05).
     program: Option<debut_render::SurfaceViewer>,
     program_error: Option<String>,
@@ -149,6 +152,7 @@ impl Session {
             collab: None,
             plugin_scan: None,
             program: None,
+            ai_enabled: false,
             program_error: None,
             player: None,
             audio_out: None,

@@ -2103,3 +2103,61 @@ fn hardware_decode_toggle_reports_the_decode_path() {
     s.frame_pixels().unwrap();
     assert_eq!(s.hardware_decode_status().media[0].mode, "software");
 }
+
+/// Transcription (GFX-04) through the native whisper.cpp runner, with a
+/// stand-in `whisper-cli` that checks the WAV it gets and answers in the
+/// real tool's JSON: off until opted in, captions placed on the clip and
+/// clipped to it, one undo step, searchable.
+#[cfg(unix)]
+#[test]
+fn transcription_adds_captions_after_opt_in() {
+    use std::os::unix::fs::PermissionsExt;
+    let Fx { mut s, dir, a, .. } = fixture("transcription_adds_captions");
+    let tool = dir.join("whisper-cli");
+    std::fs::write(
+        &tool,
+        r#"#!/bin/sh
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -of) OUT="$2"; shift ;;
+    -f) IN="$2"; shift ;;
+  esac
+  shift
+done
+[ -f "$IN" ] || exit 3
+SIZE=$(wc -c < "$IN" | tr -d ' ')
+printf '{"transcription":[{"offsets":{"from":100,"to":900},"text":" one %s"},{"offsets":{"from":1000,"to":5000},"text":" two"}]}' "$SIZE" > "$OUT.json"
+"#,
+    )
+    .unwrap();
+    std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let model = dir.join("ggml-test.bin");
+    std::fs::write(&model, b"model").unwrap();
+
+    let clip = s.sequence().unwrap().tracks[1].clips[0].id.clone();
+    let st = s
+        .configure_transcriber(&tool.to_string_lossy(), &model.to_string_lossy())
+        .unwrap();
+    assert!(st.available && !st.enabled);
+    assert!(st.backend.unwrap().contains("ggml-test.bin"));
+    let err = s.transcribe_clip(&a, &clip, None).unwrap_err();
+    assert!(err.contains("AI features are off"), "{err}");
+
+    s.set_ai_enabled(true);
+    let r = s.transcribe_clip(&a, &clip, Some("en".into())).unwrap();
+    assert_eq!((r.segments, r.captions_added), (2, 2));
+    let caps = s.captions().unwrap();
+    // The clip sits at 0.4 s; the tool got 2 s of 16 kHz mono 16-bit audio.
+    assert_eq!(caps[0].text, format!("one {}", 44 + 2 * 16_000 * 2));
+    // 0.4 + 0.1 s lands on frame 12.5, rounded to 13.
+    assert_eq!((caps[0].start, caps[0].end), (0.52, 1.32));
+    assert_eq!(
+        (caps[1].start, caps[1].end),
+        (1.4, 2.4),
+        "clipped to the clip's end"
+    );
+    assert_eq!(s.search_captions("TWO").unwrap().len(), 1);
+    assert!(s.search_captions("three").unwrap().is_empty());
+    s.undo().unwrap();
+    assert!(s.captions().unwrap().is_empty(), "one undo step");
+}

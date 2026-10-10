@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AiApi,
+  AiStatus,
   HwDecodeStatus,
   ProgramWindow,
   PluginsApi,
@@ -363,7 +365,25 @@ class TauriMarkers implements MarkersApi {
   }
 }
 
+class TauriAi implements AiApi {
+  status() {
+    return invoke<AiStatus>("ai_status");
+  }
+  setEnabled(on: boolean) {
+    return invoke<AiStatus>("set_ai_enabled", { on });
+  }
+  configure(engine: string, model: string) {
+    return invoke<AiStatus>("configure_transcriber", { engine, model });
+  }
+  transcribeClip(track: string, clip: string, language: string | null) {
+    return invoke<{ segments: number; captions_added: number; backend: string }>("transcribe_clip", { track, clip, language });
+  }
+}
+
 class TauriCaptions implements CaptionsApi {
+  search(query: string) {
+    return invoke<{ id: string; start: number; text: string }[]>("search_captions", { query });
+  }
   list() {
     return invoke<CaptionInfo[]>("captions");
   }
@@ -401,6 +421,7 @@ export class TauriEngine implements Engine {
   mixer = new TauriMixer();
   exporter = new TauriExport();
   plugins = new TauriPlugins();
+  ai = new TauriAi();
 
   version() {
     return invoke<string>("version");
