@@ -1813,6 +1813,12 @@ fn interchange_writes_edl_and_otio() {
     assert!(fcp.contains("<fcpxml version=\"1.10\">") && fcp.contains("<asset-clip "));
     // The probed 2 s fixture length is the asset duration.
     assert!(fcp.contains(r#"duration="2s" hasVideo="1""#), "{fcp}");
+    // AAF: a compound file holding the object model and the cut.
+    let aaf = dir.join("cut.aaf").to_string_lossy().into_owned();
+    s.export_interchange(&aaf, "aaf").unwrap();
+    let aaf = std::fs::read(aaf).unwrap();
+    assert_eq!(&aaf[..8], &[0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1]);
+    assert!(aaf.len() > 100_000, "the meta dictionary alone is large");
     // Back in through FCPXML: a second sequence with the same cut, no new
     // media (the fixture is matched by path), opened in the timeline.
     let before = sequence_dto(s.first_sequence().unwrap());
@@ -1840,8 +1846,8 @@ fn interchange_writes_edl_and_otio() {
     assert!(s
         .import_fcpxml(&dir.join("cut.edl").to_string_lossy())
         .is_err());
-    let bad = dir.join("cut.aaf").to_string_lossy().into_owned();
-    assert!(s.export_interchange(&bad, "aaf").is_err());
+    let bad = dir.join("cut.xyz").to_string_lossy().into_owned();
+    assert!(s.export_interchange(&bad, "xyz").is_err());
 }
 
 /// Timeline and clip markers (TL-10).

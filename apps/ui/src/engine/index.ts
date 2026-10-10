@@ -230,7 +230,7 @@ export interface ExportStatus {
   error: string | null;
 }
 
-export type InterchangeFormat = "edl" | "otio" | "fcpxml";
+export type InterchangeFormat = "edl" | "otio" | "fcpxml" | "aaf";
 
 export interface ExportApi {
   presets(): Promise<ExportPreset[]>;

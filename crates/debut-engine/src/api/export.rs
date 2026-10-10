@@ -394,22 +394,38 @@ impl Session {
 
     /// Write the active sequence for another application (MED-12): `"edl"`
     /// is CMX3600 for the first video and audio track, `"otio"`
-    /// OpenTimelineIO JSON and `"fcpxml"` Final Cut Pro XML for the whole
-    /// sequence.
+    /// OpenTimelineIO JSON, `"fcpxml"` Final Cut Pro XML and `"aaf"` an AAF
+    /// file (Avid, Pro Tools, Resolve) for the whole sequence.
     pub fn export_interchange(&self, path: &str, format: &str) -> Result<(), String> {
         let project = self.project().ok_or("no project open")?;
         let seq = self.first_sequence()?;
-        let text = match format {
-            "edl" => debut_media::interchange::edl(seq, &project.media),
-            "otio" => debut_media::interchange::otio(seq, project),
+        let bytes = match format {
+            "edl" => debut_media::interchange::edl(seq, &project.media).into_bytes(),
+            "otio" => debut_media::interchange::otio(seq, project).into_bytes(),
             "fcpxml" => {
                 let durations = self.probed.iter().map(|(id, p)| (*id, p.2)).collect();
-                debut_media::fcpxml::fcpxml(seq, project, &durations)
+                debut_media::fcpxml::fcpxml(seq, project, &durations).into_bytes()
+            }
+            "aaf" => {
+                // Probed media has a picture; the rest is sound only.
+                let media = self
+                    .probed
+                    .iter()
+                    .map(|(id, &(width, height, duration, has_audio))| {
+                        let info = debut_media::aaf::AafMedia {
+                            width,
+                            height,
+                            duration,
+                            has_video: true,
+                            has_audio,
+                        };
+                        (*id, info)
+                    })
+                    .collect();
+                debut_media::aaf::aaf(seq, project, &media, Default::default())?
             }
             other => return Err(format!("unknown interchange format {other}")),
         };
-        self.store
-            .write(path, text.as_bytes())
-            .map_err(|e| e.to_string())
+        self.store.write(path, &bytes).map_err(|e| e.to_string())
     }
 }

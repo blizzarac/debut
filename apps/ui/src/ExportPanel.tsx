@@ -90,6 +90,9 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
             <button onClick={() => interchange("fcpxml")} disabled={!output} title="Final Cut Pro XML of the whole sequence">
               FCPXML
             </button>
+            <button onClick={() => interchange("aaf")} disabled={!output} title="AAF of the whole sequence, for Avid Media Composer, Pro Tools and Resolve">
+              AAF
+            </button>
           </>
         )}
       </div>
