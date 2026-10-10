@@ -56,7 +56,7 @@ fontdue = "0.9"
 wgpu = "27"
 pollster = "0.4"
 bytemuck = { version = "1", features = ["derive"] }
-ffmpeg-next = "7"
+ffmpeg-next = "9"
 cpal = "0.16"
 wasm-bindgen = "0.2"
 # web-sys = "0.3"        # debut-platform-web: WebCodecs, OPFS, AudioWorklet

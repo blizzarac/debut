@@ -79,6 +79,8 @@ cargo check --workspace                      # native
 wasm-pack build apps/web --target web        # browser (once wasm-bindgen is enabled)
 ```
 
+The native platform links the system FFmpeg through `ffmpeg-next` 9, which builds against FFmpeg 6.1 (Ubuntu 24.04) through FFmpeg 8 (current Homebrew). It finds FFmpeg with pkg-config, or with `FFMPEG_DIR` pointing at an install prefix. The desktop app also needs Tauri's system packages (WebKitGTK on Linux).
+
 ## Suggested order of work
 
 1. ~~`debut-core` time math + tests; `debut-project` schema with round-trip tests (PLT-03).~~ Done.
