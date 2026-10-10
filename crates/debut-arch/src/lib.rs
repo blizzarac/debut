@@ -5,6 +5,8 @@
 //! Dev- and build-dependencies are exempt: tests may pull in a platform
 //! implementation to exercise the engine for real.
 
+pub mod licenses; // NFR-14 dependency licenses and the notices file
+
 use std::collections::BTreeMap;
 
 /// Where a crate sits. Engine-side layers are ordered; a crate may depend only

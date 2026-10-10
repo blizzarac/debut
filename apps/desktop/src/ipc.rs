@@ -18,6 +18,24 @@ pub fn version() -> String {
     env!("CARGO_PKG_VERSION").to_string()
 }
 
+/// The third-party notices shipped with the app (NFR-14).
+const NOTICES: &str = include_str!("../../../THIRD_PARTY_NOTICES.md");
+
+#[derive(serde::Serialize)]
+pub struct AboutInfo {
+    #[serde(flatten)]
+    pub about: AboutDto,
+    pub notices: &'static str,
+}
+
+#[tauri::command]
+pub fn about(state: State<'_, Shared>) -> AboutInfo {
+    AboutInfo {
+        about: lock(&state).about(),
+        notices: NOTICES,
+    }
+}
+
 #[tauri::command]
 pub fn new_project(state: State<'_, Shared>, name: String) -> Result<(), String> {
     lock(&state).new_project(name)

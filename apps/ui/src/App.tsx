@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { captureNextChord, chordLabel, installShortcuts, setKeymap, useShortcut } from "./shortcuts";
 import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type CollabStatus, type Shortcuts, type Chord, type Keymap, type SyncBy, type Tick } from "./engine";
+import { About } from "./About";
 import { Captions } from "./Captions";
 import { MediaPanel } from "./MediaPanel";
 import { ExportPanel } from "./ExportPanel";
@@ -287,6 +288,7 @@ export default function App() {
               </button>
             </>
           )}
+          {engine?.about && <About load={() => engine.about!()} />}
         </div>
         {showKeys && shortcuts && activeMap && (
           <div style={{ fontSize: 11 }}>

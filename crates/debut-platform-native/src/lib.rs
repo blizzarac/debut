@@ -105,6 +105,10 @@ impl Platform for NativePlatform {
         self.store.clone()
     }
 
+    fn codec_license(&self) -> Option<(String, String)> {
+        Some(codec::license())
+    }
+
     fn settings_dir(&self) -> Option<String> {
         self.settings_dir.clone()
     }

@@ -7,6 +7,7 @@ import type {
   PluginsApi,
   PluginsInfo,
   TitleInfo,
+  AboutInfo,
   HostInfo,
   ScriptApi,
   ScriptOutput,
@@ -457,6 +458,9 @@ export class TauriEngine implements Engine {
 
   version() {
     return invoke<string>("version");
+  }
+  about() {
+    return invoke<AboutInfo>("about");
   }
   shortcuts() {
     return invoke<Shortcuts>("shortcuts");

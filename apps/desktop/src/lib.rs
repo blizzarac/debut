@@ -17,6 +17,7 @@ pub fn run() {
         .manage(Mutex::new(Session::new(Arc::new(NativePlatform::new()))))
         .invoke_handler(tauri::generate_handler![
             ipc::version,
+            ipc::about,
             ipc::new_project,
             ipc::open_project,
             ipc::project_json,

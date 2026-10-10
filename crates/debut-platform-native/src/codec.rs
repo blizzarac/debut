@@ -678,6 +678,25 @@ fn set_matrix(scaler: &mut ff::software::scaling::Context, bt2020: bool) {
     }
 }
 
+/// libavcodec's license and configure line (NFR-14).
+pub fn license() -> (String, String) {
+    init();
+    // SAFETY: both return static NUL-terminated strings owned by libavcodec.
+    unsafe {
+        let s = |p: *const std::os::raw::c_char| {
+            if p.is_null() {
+                String::new()
+            } else {
+                std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
+            }
+        };
+        (
+            s(ff::ffi::avcodec_license()),
+            s(ff::ffi::avcodec_configuration()),
+        )
+    }
+}
+
 /// Every frame of this codec is a keyframe.
 fn intra_only(id: ff::codec::Id) -> bool {
     // SAFETY: the descriptor table is static in libavcodec.
@@ -1847,6 +1866,16 @@ mod tests {
             .collect();
         out.sort_by(|a, b| a.0.total_cmp(&b.0));
         out
+    }
+
+    #[test]
+    fn reports_the_ffmpeg_license() {
+        let (license, config) = license();
+        assert!(license.contains("GPL"), "{license}");
+        // A build with --enable-gpl must say GPL, not LGPL.
+        if config.contains("--enable-gpl") {
+            assert!(license.starts_with("GPL"), "{license}");
+        }
     }
 
     #[test]

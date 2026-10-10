@@ -746,7 +746,19 @@ export interface CollabApi {
   lock(track: string, on: boolean): Promise<void>;
 }
 
+/** Version and licensing (NFR-14). */
+export interface AboutInfo {
+  version: string;
+  codec_license: string | null;
+  codec_configuration: string | null;
+  /** The linked FFmpeg is a GPL build. */
+  codec_gpl: boolean;
+  /** THIRD_PARTY_NOTICES.md (Markdown). */
+  notices: string;
+}
+
 export interface Engine extends ProjectApi {
+  about?(): Promise<AboutInfo>;
   collab?: CollabApi;
   /** Keyboard shortcut presets (debut, Premiere Pro, Final Cut Pro, Avid). */
   shortcuts?(): Promise<Shortcuts>;

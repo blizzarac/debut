@@ -135,6 +135,19 @@ fn fr_of(seq: &Sequence) -> FrameRate {
     seq.frame_rate
 }
 
+/// Licensing facts for the About panel (NFR-14).
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct AboutDto {
+    pub version: String,
+    /// The codec library's license as it reports it ("GPL version 2 or
+    /// later", "LGPL version 2.1 or later"), when the platform has one.
+    pub codec_license: Option<String>,
+    pub codec_configuration: Option<String>,
+    /// True when the codec library is a GPL build: a distribution bundling
+    /// it falls under the GPL.
+    pub codec_gpl: bool,
+}
+
 #[derive(Serialize)]
 pub struct FileStatus {
     pub path: Option<String>,
@@ -272,6 +285,19 @@ impl Session {
             .as_mut()
             .map(|w| &mut w.project)
             .ok_or_else(|| "no project open".to_string())
+    }
+
+    /// Version and licensing facts (NFR-14).
+    pub fn about(&self) -> AboutDto {
+        let codec = self.platform.codec_license();
+        AboutDto {
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            codec_gpl: codec
+                .as_ref()
+                .is_some_and(|(l, _)| l.starts_with("GPL") || l.contains(" GPL")),
+            codec_license: codec.as_ref().map(|(l, _)| l.clone()),
+            codec_configuration: codec.map(|(_, c)| c),
+        }
     }
 
     /// Steps in the undo history so far; pass it to `group_undo_since` to

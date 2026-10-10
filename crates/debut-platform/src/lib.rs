@@ -62,6 +62,13 @@ pub trait Platform: Send + Sync + 'static {
         settings: EncodeSettings,
     ) -> debut_core::Result<Box<dyn Encoder>>;
 
+    /// The codec library's license and build configuration (NFR-14), e.g.
+    /// ("LGPL version 2.1 or later", "--enable-shared ..."). Shown in About:
+    /// a GPL build of FFmpeg makes the whole distribution GPL.
+    fn codec_license(&self) -> Option<(String, String)> {
+        None
+    }
+
     /// What a file's video stream allows for packet copying (EXP-05).
     fn stream_copy_info(&self, path: &str) -> debut_core::Result<StreamCopyInfo> {
         Err(debut_core::Error::Unsupported(format!(
