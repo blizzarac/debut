@@ -4,7 +4,7 @@ import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, 
 import { Captions } from "./Captions";
 import { MediaPanel } from "./MediaPanel";
 import { ExportPanel } from "./ExportPanel";
-import { Inspector, TitleEditor } from "./Inspector";
+import { Inspector, ShapeEditor, TitleEditor } from "./Inspector";
 import { Collab } from "./Collab";
 import { Markers } from "./Markers";
 import { MaskOverlay } from "./MaskOverlay";
@@ -214,7 +214,9 @@ export default function App() {
   }
 
   const fps = seq ? seq.frame_rate[0] / seq.frame_rate[1] : 25;
-  const selectedTitle = (selected && seq?.tracks.find((t) => t.id === selected.track)?.clips.find((c) => c.id === selected.clip)?.title) ?? null;
+  const selectedClipInfo = (selected && seq?.tracks.find((t) => t.id === selected.track)?.clips.find((c) => c.id === selected.clip)) || null;
+  const selectedTitle = selectedClipInfo?.title ?? null;
+  const selectedShape = selectedClipInfo?.shape ?? null;
 
   async function save() {
     if (!engine?.saveProject) return;
@@ -360,6 +362,9 @@ export default function App() {
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Inspector</h2>
             {engine.media && selectedTitle && (
               <TitleEditor media={engine.media} selected={selected} title={selectedTitle} onChanged={() => refresh(engine)} />
+            )}
+            {engine.media && selectedShape && (
+              <ShapeEditor media={engine.media} selected={selected} shape={selectedShape} onChanged={() => refresh(engine)} />
             )}
             <Inspector effects={engine.effects} plugins={engine.plugins} selected={selected} position={Math.round((tick?.position ?? 0) * 25) / 25} refreshKey={refreshKey} onChanged={() => refresh(engine)} />
           </>

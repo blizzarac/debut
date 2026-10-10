@@ -80,6 +80,8 @@ pub struct ClipDto {
     pub media: Option<String>,
     /// Text and style when this is a title clip (GFX-01).
     pub title: Option<Title>,
+    /// The shape when this is a shape clip (GFX-03).
+    pub shape: Option<Shape>,
     /// Name of the nested sequence when this is a compound clip (TL-07).
     pub nested: Option<String>,
     /// Multicam clips: number of angles and the active one (MED-11, TL-08).
@@ -165,6 +167,10 @@ pub(crate) fn sequence_dto(seq: &Sequence) -> SequenceDto {
                         },
                         title: match &c.source {
                             ClipSource::Title(t) => Some(t.clone()),
+                            _ => None,
+                        },
+                        shape: match &c.source {
+                            ClipSource::Shape(s) => Some(s.clone()),
                             _ => None,
                         },
                         nested: match &c.source {

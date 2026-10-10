@@ -7,6 +7,7 @@ import type {
   PluginsApi,
   PluginsInfo,
   TitleInfo,
+  ShapeInfo,
   SnapPoint,
   CodecCapabilities,
   MulticamSync,
@@ -165,6 +166,12 @@ class TauriMedia implements MediaApi {
   }
   setTitle(track: string, clip: string, title: TitleInfo) {
     return invoke<void>("set_title", { track, clip, title });
+  }
+  addShape(at: number, shape: ShapeInfo) {
+    return invoke<string>("add_shape", { at, shape });
+  }
+  setShape(track: string, clip: string, shape: ShapeInfo) {
+    return invoke<void>("set_shape", { track, clip, shape });
   }
   addMulticam(at: number, media: string[], by: SyncBy = "start") {
     return invoke<MulticamSync>("add_multicam", { at, media, by });

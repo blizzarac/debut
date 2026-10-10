@@ -9,7 +9,7 @@ use crate::lut::Lut3d;
 use crate::nodes::{ChromaKey, Mask, MaskShape, PolyMask};
 use debut_core::color::ColorSpace;
 use debut_core::{Rational, SequenceId};
-use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, Title, TrackKind};
+use debut_project::{Clip, ClipSource, Effect, Layer, Param, Sequence, Shape, Title, TrackKind};
 use std::sync::Arc;
 
 /// Source frame dimensions are needed to fit a clip onto the canvas; the caller
@@ -27,6 +27,11 @@ pub trait SourceInfo {
     /// Rasterize (or fetch from a cache) a title clip's text (GFX-01) as straight
     /// sRGB RGBA8. `None` leaves the title out of the picture.
     fn title(&self, _title: &Title) -> Option<Arc<Image8>> {
+        None
+    }
+    /// Rasterize (or fetch from a cache) a shape clip (GFX-03) as straight sRGB
+    /// RGBA8. `None` leaves the shape out of the picture.
+    fn shape(&self, _shape: &Shape) -> Option<Arc<Image8>> {
         None
     }
     /// Resolve a nested sequence (TL-07) by id. `None` leaves the clip out.
@@ -185,6 +190,14 @@ fn clip_layer(
         }
         ClipSource::Title(title) => {
             let image = info.title(title)?;
+            let size = (image.width, image.height);
+            let src = g.add(Node::Image {
+                image: ImageRef(image),
+            });
+            (src, ColorSpace::Srgb, size, px_scale)
+        }
+        ClipSource::Shape(shape) => {
+            let image = info.shape(shape)?;
             let size = (image.width, image.height);
             let src = g.add(Node::Image {
                 image: ImageRef(image),

@@ -421,4 +421,6 @@ pub enum ClipSource {
     },
     /// Generated text clip (GFX-01); rendered by the engine's title cache.
     Title(crate::title::Title),
+    /// Generated vector shape (GFX-03); rendered by the engine's graphics cache.
+    Shape(crate::shape::Shape),
 }

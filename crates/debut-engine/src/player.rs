@@ -35,6 +35,9 @@ impl SourceInfo for FrameSource {
     fn title(&self, title: &debut_project::Title) -> Option<Arc<debut_render::Image8>> {
         FrameSource::title(self, title)
     }
+    fn shape(&self, shape: &debut_project::Shape) -> Option<Arc<debut_render::Image8>> {
+        FrameSource::shape(self, shape)
+    }
     fn sequence(&self, id: debut_core::SequenceId) -> Option<Arc<Sequence>> {
         FrameSource::sequence(self, id)
     }

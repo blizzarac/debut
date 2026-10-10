@@ -13,6 +13,7 @@ pub mod media_ref;
 pub mod retime;
 pub mod schema;
 pub mod sequence;
+pub mod shape;
 pub mod snapshot;
 pub mod title;
 
@@ -27,6 +28,7 @@ pub use retime::SpeedKey;
 pub use sequence::{
     Clip, ClipSource, Layer, Sequence, Track, TrackKind, TrackMix, Transition, TransitionKind,
 };
+pub use shape::{Fill, Shape, ShapeKind};
 pub use snapshot::Snapshot;
 pub use title::{SavedTitleTemplate, TextAlign, Title, TitleStyle};
 

@@ -107,11 +107,35 @@ export interface TitleInfo {
   style: TitleStyle;
 }
 
+type Rgba8 = [number, number, number, number];
+
+/** Mirrors the project's `ShapeKind` (GFX-03), flattened into the shape. */
+export type ShapeKind =
+  | { kind: "rectangle"; corner_px: number }
+  | { kind: "ellipse" }
+  | { kind: "polygon"; sides: number }
+  | { kind: "star"; points: number; inner: number }
+  | { kind: "arrow"; head: number; shaft: number }
+  | { kind: "line" };
+
+export type ShapeFill = { kind: "none" } | { kind: "solid"; color: Rgba8 } | { kind: "linear"; from: Rgba8; to: Rgba8; angle_deg: number };
+
+/** A shape clip (GFX-03), authored in sequence pixels; colours are straight sRGB RGBA bytes. */
+export type ShapeInfo = ShapeKind & {
+  width: number;
+  height: number;
+  fill: ShapeFill;
+  stroke_px: number;
+  stroke_color: Rgba8;
+};
+
 export interface ClipInfo {
   id: string;
   media: string | null;
   /** Set when this is a title clip. */
   title: TitleInfo | null;
+  /** Set when this is a shape clip. */
+  shape?: ShapeInfo | null;
   /** Set when this is a compound clip of a nested sequence. */
   nested: string | null;
   /** Multicam clips: angle count and the active angle. */
@@ -546,6 +570,9 @@ export interface MediaApi {
   saveTitleTemplate(track: string, clip: string, name: string): Promise<string>;
   removeTitleTemplate(id: string): Promise<void>;
   setTitle(track: string, clip: string, title: TitleInfo): Promise<void>;
+  /** Adds a 5 s shape at `at` on a free video track, centred; returns the clip id. */
+  addShape?(at: number, shape: ShapeInfo): Promise<string>;
+  setShape?(track: string, clip: string, shape: ShapeInfo): Promise<void>;
   /** Inserts a multicam clip of two or more media at `at` (shortest angle sets the length);
    * with `sync`, angles are aligned to the first by audio. */
   addMulticam(at: number, media: string[], by?: SyncBy): Promise<MulticamSync>;

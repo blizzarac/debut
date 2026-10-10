@@ -77,6 +77,8 @@ pub fn run() {
             ipc::add_multicam,
             ipc::switch_angle,
             ipc::set_title,
+            ipc::add_shape,
+            ipc::set_shape,
             ipc::edit,
             ipc::clip_effects,
             ipc::add_effect,

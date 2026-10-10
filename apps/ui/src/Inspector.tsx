@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import type { EffectInfo, EffectsApi, MediaApi, ParamName, PluginsApi, TextAlign, TitleInfo } from "./engine";
+import type { EffectInfo, EffectsApi, MediaApi, ParamName, PluginsApi, ShapeFill, ShapeInfo, TextAlign, TitleInfo } from "./engine";
 import { PluginParams, PluginPicker } from "./Plugins";
 import type { Selection } from "./Timeline";
 
@@ -279,6 +279,89 @@ export function TitleEditor({ media, selected, title, onChanged }: { media: Medi
           Save as template
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Geometry, fill and outline of the selected shape clip (GFX-03). Edits
+ * apply with Apply so each change is one undoable command; position, scale
+ * and rotation are the clip's Transform like any layer. */
+export function ShapeEditor({ media, selected, shape, onChanged }: { media: MediaApi; selected: Selection; shape: ShapeInfo; onChanged: () => void }) {
+  const [draft, setDraft] = useState<ShapeInfo>(shape);
+  const [error, setError] = useState("");
+  useEffect(() => setDraft(shape), [shape]);
+  if (!selected || !media.setShape) return null;
+  const set = (patch: Partial<ShapeInfo>) => setDraft({ ...draft, ...patch } as ShapeInfo);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(shape);
+  const apply = () =>
+    media.setShape!(selected.track, selected.clip, draft)
+      .then(() => {
+        setError("");
+        onChanged();
+      })
+      .catch((e) => setError(String(e)));
+  const row = { display: "flex", gap: 6, alignItems: "center", fontSize: 12, marginTop: 4, flexWrap: "wrap" } as const;
+  const num = (label: string, value: number, onChange: (v: number) => void, opts: { min?: number; max?: number; step?: number; title?: string } = {}) => (
+    <label title={opts.title}>
+      {label} <input type="number" min={opts.min} max={opts.max} step={opts.step ?? 1} value={value} style={{ width: 56 }} onChange={(e) => onChange(Number(e.target.value))} />
+    </label>
+  );
+  const fill = draft.fill;
+  const setFill = (f: ShapeFill) => set({ fill: f });
+  return (
+    <div style={{ marginBottom: 8 }}>
+      <h3 style={{ fontSize: 12, margin: "8px 0 4px" }}>Shape · {draft.kind}</h3>
+      <div style={row}>
+        {num("w", draft.width, (width) => set({ width }), { min: 1, max: 16384 })}
+        {draft.kind !== "line" && num("h", draft.height, (height) => set({ height }), { min: 1, max: 16384 })}
+        {draft.kind === "rectangle" && num("corner", draft.corner_px, (corner_px) => set({ corner_px } as Partial<ShapeInfo>), { min: 0 })}
+        {draft.kind === "polygon" && num("sides", draft.sides, (sides) => set({ sides } as Partial<ShapeInfo>), { min: 3, max: 64 })}
+        {draft.kind === "star" && (
+          <>
+            {num("points", draft.points, (points) => set({ points } as Partial<ShapeInfo>), { min: 2, max: 64 })}
+            {num("inner", draft.inner, (inner) => set({ inner } as Partial<ShapeInfo>), { min: 0.05, max: 1, step: 0.05, title: "Inner radius as a fraction of the outer" })}
+          </>
+        )}
+        {draft.kind === "arrow" && (
+          <>
+            {num("head", draft.head, (head) => set({ head } as Partial<ShapeInfo>), { min: 0.05, max: 1, step: 0.05, title: "Head length as a fraction of the width" })}
+            {num("shaft", draft.shaft, (shaft) => set({ shaft } as Partial<ShapeInfo>), { min: 0.05, max: 1, step: 0.05, title: "Shaft thickness as a fraction of the height" })}
+          </>
+        )}
+      </div>
+      {draft.kind !== "line" && (
+        <div style={row}>
+          <select
+            value={fill.kind}
+            onChange={(e) => {
+              const base: Rgba = fill.kind === "solid" ? fill.color : fill.kind === "linear" ? fill.from : [255, 255, 255, 255];
+              const k = e.target.value;
+              setFill(k === "none" ? { kind: "none" } : k === "solid" ? { kind: "solid", color: base } : { kind: "linear", from: base, to: [0, 0, 0, 255], angle_deg: 0 });
+            }}
+          >
+            <option value="solid">solid fill</option>
+            <option value="linear">gradient</option>
+            <option value="none">no fill</option>
+          </select>
+          {fill.kind === "solid" && <input type="color" value={hex(fill.color)} onChange={(e) => setFill({ ...fill, color: fromHex(e.target.value, fill.color[3]) })} />}
+          {fill.kind === "linear" && (
+            <>
+              <input type="color" value={hex(fill.from)} onChange={(e) => setFill({ ...fill, from: fromHex(e.target.value, fill.from[3]) })} />
+              <input type="color" value={hex(fill.to)} onChange={(e) => setFill({ ...fill, to: fromHex(e.target.value, fill.to[3]) })} />
+              {num("angle", fill.angle_deg, (angle_deg) => setFill({ ...fill, angle_deg }), { step: 15, title: "0 = left to right, 90 = top to bottom" })}
+            </>
+          )}
+        </div>
+      )}
+      <div style={row}>
+        {num("stroke", draft.stroke_px, (stroke_px) => set({ stroke_px }), { min: 0, max: 1000, step: 0.5 })}
+        <input type="color" value={hex(draft.stroke_color)} onChange={(e) => set({ stroke_color: fromHex(e.target.value, 255) })} />
+      </div>
+      <div style={row}>
+        <button disabled={!dirty} onClick={apply}>Apply</button>
+        <button disabled={!dirty} onClick={() => setDraft(shape)}>Revert</button>
+      </div>
+      {error && <p style={{ color: "#c33", fontSize: 12 }}>{error}</p>}
     </div>
   );
 }

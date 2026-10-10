@@ -312,6 +312,9 @@ fn clip_item(
                 anchors: true,
             })
         }
+        // Final Cut's shapes are Motion generators we cannot reference: the
+        // span stays a gap.
+        ClipSource::Shape(_) => None,
         ClipSource::Sequence(id) => {
             if depth >= MAX_NESTING {
                 return None;

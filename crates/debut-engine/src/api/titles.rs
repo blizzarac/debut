@@ -90,37 +90,10 @@ impl Session {
         text: String,
         template: Option<String>,
     ) -> Result<String, String> {
-        let (seq_id, fr, free_track, above_video, size) = {
+        let size = {
             let seq = self.first_sequence()?;
-            let start = frames_of(at, fr_of(seq));
-            let end = start + Rational::from_int(TITLE_SECONDS);
-            let free = seq
-                .tracks
-                .iter()
-                .rev()
-                .find(|t| {
-                    t.kind == TrackKind::Video
-                        && t.clips
-                            .iter()
-                            .all(|c| c.timeline_out() <= start || c.timeline_in >= end)
-                })
-                .map(|t| t.id);
-            // A new title track goes right above the top video track: later tracks
-            // composite on top, and it stays grouped with the video tracks.
-            let above_video = seq
-                .tracks
-                .iter()
-                .rposition(|t| t.kind == TrackKind::Video)
-                .map_or(seq.tracks.len(), |i| i + 1);
-            (
-                seq.id,
-                seq.frame_rate,
-                free,
-                above_video,
-                (seq.width, seq.height),
-            )
+            (seq.width, seq.height)
         };
-        let start = frames_of(at, fr);
         let duration = Rational::from_int(TITLE_SECONDS);
         let (title, effects) = match template.as_deref() {
             None => (
@@ -151,13 +124,45 @@ impl Session {
                 (built.title, built.effects)
             }
         };
-        let mut clip = Clip::new(
-            self.ids.fresh(),
-            ClipSource::Title(title),
-            start,
-            duration,
-            Rational::ZERO,
-        );
+        self.add_generated(at, ClipSource::Title(title), effects)
+    }
+
+    /// Put a 5 s generated clip (title, shape) at `at` seconds on the topmost
+    /// video track with room for it, adding a video track above the others
+    /// when none has. One undo step; returns the clip id.
+    pub(crate) fn add_generated(
+        &mut self,
+        at: f64,
+        source: ClipSource,
+        effects: Vec<Effect>,
+    ) -> Result<String, String> {
+        let (seq_id, fr, free_track, above_video) = {
+            let seq = self.first_sequence()?;
+            let start = frames_of(at, fr_of(seq));
+            let end = start + Rational::from_int(TITLE_SECONDS);
+            let free = seq
+                .tracks
+                .iter()
+                .rev()
+                .find(|t| {
+                    t.kind == TrackKind::Video
+                        && t.clips
+                            .iter()
+                            .all(|c| c.timeline_out() <= start || c.timeline_in >= end)
+                })
+                .map(|t| t.id);
+            // A new track goes right above the top video track: later tracks
+            // composite on top, and it stays grouped with the video tracks.
+            let above_video = seq
+                .tracks
+                .iter()
+                .rposition(|t| t.kind == TrackKind::Video)
+                .map_or(seq.tracks.len(), |i| i + 1);
+            (seq.id, seq.frame_rate, free, above_video)
+        };
+        let start = frames_of(at, fr);
+        let duration = Rational::from_int(TITLE_SECONDS);
+        let mut clip = Clip::new(self.ids.fresh(), source, start, duration, Rational::ZERO);
         clip.effects = effects;
         let clip_id = clip.id;
         let mut cmds = Vec::new();

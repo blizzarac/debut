@@ -108,6 +108,7 @@ pub fn edl(seq: &Sequence, media: &[MediaRef]) -> String {
             let Some((m, src_in)) = media_of(clip, media, rec_in) else {
                 let what = match &clip.source {
                     ClipSource::Title(t) => format!("TITLE \"{}\"", t.text.replace('\n', " ")),
+                    ClipSource::Shape(s) => format!("SHAPE {}", s.label().to_uppercase()),
                     _ => "NESTED SEQUENCE".into(),
                 };
                 out.push_str(&format!(
@@ -282,6 +283,16 @@ fn item(clip: &Clip, project: &Project, rate: FrameRate, depth: usize) -> Value 
                 "OTIO_SCHEMA": "GeneratorReference.1",
                 "generator_kind": "debut.title",
                 "parameters": { "text": t.text, "font": t.style.font, "size_px": t.style.size_px },
+                "available_range": null,
+                "metadata": {},
+            }),
+        ),
+        ClipSource::Shape(s) => (
+            s.label().to_string(),
+            json!({
+                "OTIO_SCHEMA": "GeneratorReference.1",
+                "generator_kind": "debut.shape",
+                "parameters": serde_json::to_value(s).unwrap_or_default(),
                 "available_range": null,
                 "metadata": {},
             }),

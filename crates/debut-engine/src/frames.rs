@@ -110,6 +110,28 @@ impl FrameSource {
         Some(img)
     }
 
+    /// The raster for `shape` (GFX-03), rendered on first use; it shares the
+    /// title cache.
+    pub fn shape(&self, shape: &debut_project::Shape) -> Option<Arc<debut_render::Image8>> {
+        let hash = shape.hash();
+        let mut cache = self.titles.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(img) = cache.get(&hash) {
+            return Some(Arc::clone(img));
+        }
+        let raster = debut_graphics::render_shape(shape);
+        let img = Arc::new(debut_render::Image8 {
+            hash,
+            width: raster.width,
+            height: raster.height,
+            rgba8: raster.rgba8,
+        });
+        if cache.len() > 64 {
+            cache.clear();
+        }
+        cache.insert(hash, Arc::clone(&img));
+        Some(img)
+    }
+
     pub fn add(&mut self, media: MediaId, mut decoder: Box<dyn Decoder>) -> Result<()> {
         // Video only: otherwise the decoder queues all the audio it passes.
         decoder.select(true, false);

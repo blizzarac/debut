@@ -17,8 +17,8 @@ use debut_project::media_ref::{MediaMetadata, MediaRef};
 use debut_project::{
     schema, AudioEffect, Bin, Caption, CaptionSettings, Clip, ClipSource, Duck, Effect, EqBand,
     EqKind, GradeFx, KeyFx, Marker, MaskFx, MaskShape, Param, Project, SavedTitleTemplate,
-    Sequence, SpeedKey, Title, TitleStyle, Track, TrackKind, TrackMix, TransformFx, Transition,
-    TransitionKind,
+    Sequence, Shape, SpeedKey, Title, TitleStyle, Track, TrackKind, TrackMix, TransformFx,
+    Transition, TransitionKind,
 };
 use debut_render::AnyBackend;
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,7 @@ mod multicam;
 mod playback;
 mod plugins;
 mod proxies;
+mod shapes;
 mod shortcuts;
 mod snapshots;
 mod targeting;

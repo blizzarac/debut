@@ -2376,3 +2376,65 @@ fn hdr_presets_export_hevc() {
     let dec = s.platform.open_decoder(&out).unwrap();
     assert_eq!(dec.video_info().unwrap().codec, "hevc");
 }
+
+/// Shape clips (GFX-03) composite centred over the picture, re-render when
+/// edited and undo in one step.
+#[test]
+fn shape_clips_render_edit_and_undo() {
+    let Fx {
+        mut s, v, clip_id, ..
+    } = fixture("shape_clips");
+    let tracks = sequence_dto(s.first_sequence().unwrap()).tracks.len();
+    let red = Shape {
+        width: 20.0,
+        height: 10.0,
+        fill: debut_project::Fill::Solid {
+            color: [255, 0, 0, 255],
+        },
+        ..Shape::default()
+    };
+    let id = s.add_shape(1.0, red.clone()).unwrap();
+    let seq = sequence_dto(s.first_sequence().unwrap());
+    assert_eq!(seq.tracks.len(), tracks + 1, "on a new track above V1");
+    let track = seq.tracks[1].id.clone();
+    assert_eq!(seq.tracks[1].clips[0].shape.as_ref(), Some(&red));
+    s.transport(TransportAction::Seek { t: 2.0 }).unwrap();
+    let (w, h, px) = s.frame_pixels().unwrap();
+    let at = |px: &[u8], x: u32, y: u32| {
+        let i = ((y * w + x) * 4) as usize;
+        [px[i], px[i + 1], px[i + 2]]
+    };
+    let c = at(&px, w / 2, h / 2);
+    assert!(c[0] > 240 && c[1] < 15 && c[2] < 15, "centre {c:?}");
+    // Outside the 20 x 10 box the picture underneath shows.
+    assert_ne!(at(&px, 2, 2), c);
+
+    let mut blue = red.clone();
+    blue.kind = debut_project::ShapeKind::Ellipse;
+    blue.fill = debut_project::Fill::Solid {
+        color: [0, 0, 255, 255],
+    };
+    s.set_shape(&track, &id, blue.clone()).unwrap();
+    let (_, _, px) = s.frame_pixels().unwrap();
+    let c = at(&px, w / 2, h / 2);
+    assert!(c[2] > 240 && c[0] < 15, "centre {c:?}");
+    assert!(s.set_shape(&v, &clip_id, blue).is_err(), "not a shape clip");
+    assert!(s
+        .add_shape(
+            1.0,
+            Shape {
+                width: 0.0,
+                ..Shape::default()
+            }
+        )
+        .is_err());
+
+    s.undo().unwrap();
+    let seq = sequence_dto(s.first_sequence().unwrap());
+    assert_eq!(seq.tracks[1].clips[0].shape.as_ref(), Some(&red));
+    s.undo().unwrap();
+    assert_eq!(
+        sequence_dto(s.first_sequence().unwrap()).tracks.len(),
+        tracks
+    );
+}

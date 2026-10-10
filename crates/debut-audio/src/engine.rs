@@ -381,7 +381,7 @@ fn render_span_depth(
                     )?;
                     CHANNELS as u16
                 }
-                ClipSource::Title(_) => continue,
+                ClipSource::Title(_) | ClipSource::Shape(_) => continue,
             };
             mix_into(
                 &mut track_buf[off * CHANNELS..(off + n) * CHANNELS],

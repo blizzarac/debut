@@ -3,7 +3,7 @@
 //! offer the same surface.
 
 use debut_engine::api::*;
-use debut_project::{CaptionSettings, Param, Title, TrackMix};
+use debut_project::{CaptionSettings, Param, Shape, Title, TrackMix};
 use std::sync::Mutex;
 use tauri::{Manager, State};
 
@@ -606,6 +606,21 @@ pub fn set_title(
     title: Title,
 ) -> Result<(), String> {
     lock(&state).set_title(&track, &clip, title)
+}
+
+#[tauri::command]
+pub fn add_shape(state: State<'_, Shared>, at: f64, shape: Shape) -> Result<String, String> {
+    lock(&state).add_shape(at, shape)
+}
+
+#[tauri::command]
+pub fn set_shape(
+    state: State<'_, Shared>,
+    track: String,
+    clip: String,
+    shape: Shape,
+) -> Result<(), String> {
+    lock(&state).set_shape(&track, &clip, shape)
 }
 
 #[tauri::command]

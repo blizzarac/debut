@@ -1,7 +1,27 @@
 import { useEffect, useRef, useState } from "react";
 import { useShortcut } from "./shortcuts";
 import { peerColor } from "./Collab";
-import type { ClipInfo, Peer, Targeting, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, TitleTemplate, TrackInfo } from "./engine";
+import type { ClipInfo, Peer, Targeting, EditOp, MarkerInfo, MediaApi, PlayerApi, SequenceInfo, ShapeInfo, ShapeKind, TitleTemplate, TrackInfo } from "./engine";
+
+/** A fresh shape of `kind`, a quarter of the frame across (GFX-03). */
+export function newShape(kind: ShapeKind["kind"], seq: { width: number; height: number }): ShapeInfo {
+  const base = { width: Math.round(seq.width / 4), height: Math.round(seq.height / 4), fill: { kind: "solid" as const, color: [255, 255, 255, 255] as [number, number, number, number] }, stroke_px: 0, stroke_color: [0, 0, 0, 255] as [number, number, number, number] };
+  const square = Math.round(Math.min(seq.width, seq.height) / 4);
+  switch (kind) {
+    case "rectangle":
+      return { ...base, kind, corner_px: 0 };
+    case "ellipse":
+      return { ...base, kind, width: square, height: square };
+    case "polygon":
+      return { ...base, kind, sides: 6, width: square, height: square };
+    case "star":
+      return { ...base, kind, points: 5, inner: 0.45, width: square, height: square };
+    case "arrow":
+      return { ...base, kind, head: 0.35, shaft: 0.4 };
+    case "line":
+      return { ...base, kind, height: 1, stroke_px: 6, stroke_color: [255, 255, 255, 255] };
+  }
+}
 
 const TRACK_H = 44;
 const RULER_H = 22;
@@ -62,6 +82,7 @@ export function Timeline({
   const [pxPerSec, setPxPerSec] = useState(120);
   const [templates, setTemplates] = useState<TitleTemplate[]>([{ id: "title", name: "Title", description: "", saved: false }]);
   const [template, setTemplate] = useState("title");
+  const [shapeKind, setShapeKind] = useState<ShapeKind["kind"]>("rectangle");
   useEffect(() => {
     // Re-read after edits so templates saved in the Inspector show up.
     media.titleTemplates().then(setTemplates).catch(() => {});
@@ -231,6 +252,26 @@ export function Timeline({
             ×
           </button>
         )}
+        {media.addShape && (
+          <>
+            <button
+              title="Add a 5 s shape at the playhead on a free video track, centred"
+              onClick={async () => {
+                const id = await media.addShape!(toFrame(position), newShape(shapeKind, seq)).catch(() => null);
+                if (id) onEdited();
+              }}
+            >
+              + Shape
+            </button>
+            <select value={shapeKind} onChange={(e) => setShapeKind(e.target.value as ShapeKind["kind"])} title="Shape">
+              {(["rectangle", "ellipse", "polygon", "star", "arrow", "line"] as const).map((k) => (
+                <option key={k} value={k}>
+                  {k}
+                </option>
+              ))}
+            </select>
+          </>
+        )}
         <span style={{ flex: 1 }} />
         {media.setLinkedSelection && (
           <button onClick={toggleLinked} title="Edit a clip together with its linked picture/sound on other tracks" style={{ fontWeight: linkedOn ? 600 : 400, background: linkedOn ? "#bfdbfe" : undefined }}>
@@ -334,7 +375,7 @@ export function Timeline({
                   const x = HEADER_W + tin * pxPerSec;
                   const w = Math.max(2, dur * pxPerSec);
                   const sel = selected?.clip === clip.id || (linkedOn && !!selectedClip && partners(selectedClip, clip));
-                  const color = clip.title ? (sel ? "#9333ea" : "#a855f7") : clip.nested ? (sel ? "#b45309" : "#f59e0b") : track.kind === "video" ? (sel ? "#3b82f6" : "#60a5fa") : sel ? "#16a34a" : "#4ade80";
+                  const color = clip.title ? (sel ? "#9333ea" : "#a855f7") : clip.shape ? (sel ? "#db2777" : "#f472b6") : clip.nested ? (sel ? "#b45309" : "#f59e0b") : track.kind === "video" ? (sel ? "#3b82f6" : "#60a5fa") : sel ? "#16a34a" : "#4ade80";
                   const start = (mode: Drag["mode"]) => (e: React.MouseEvent) => {
                     e.stopPropagation();
                     setSelected({ track: track.id, clip: clip.id });
@@ -369,7 +410,7 @@ export function Timeline({
                         />
                       )}
                       <text x={x + EDGE + 2} y={y + TRACK_H / 2 + 4} fontSize={11} fill="#fff" pointerEvents="none">
-                        {clip.title ? `T “${clip.title.text.slice(0, 18)}”` : clip.angles != null ? `MC ${(clip.angle ?? 0) + 1}/${clip.angles}` : clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s{speedLabel(clip)}
+                        {clip.title ? `T “${clip.title.text.slice(0, 18)}”` : clip.shape ? `◆ ${clip.shape.kind}` : clip.angles != null ? `MC ${(clip.angle ?? 0) + 1}/${clip.angles}` : clip.media ? `media ${clip.media.slice(-4)}` : "nested"} · {dur.toFixed(2)}s{speedLabel(clip)}
                       </text>
                     </g>
                   );
