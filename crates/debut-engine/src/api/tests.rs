@@ -1608,6 +1608,33 @@ fn interchange_writes_edl_and_otio() {
     assert!(fcp.contains("<fcpxml version=\"1.10\">") && fcp.contains("<asset-clip "));
     // The probed 2 s fixture length is the asset duration.
     assert!(fcp.contains(r#"duration="2s" hasVideo="1""#), "{fcp}");
+    // Back in through FCPXML: a second sequence with the same cut, no new
+    // media (the fixture is matched by path), opened in the timeline.
+    let before = sequence_dto(s.first_sequence().unwrap());
+    let fcp_path = dir.join("cut.fcpxml").to_string_lossy().into_owned();
+    let mut s = s;
+    let r = s.import_fcpxml(&fcp_path).unwrap();
+    assert_eq!((r.sequences, r.media_added, r.missing.len()), (1, 0, 0));
+    assert_eq!(s.sequences().unwrap().len(), 2);
+    let after = sequence_dto(s.first_sequence().unwrap());
+    assert_eq!(after.id, r.sequence);
+    let spans = |d: &SequenceDto| {
+        d.tracks
+            .iter()
+            .map(|t| {
+                t.clips
+                    .iter()
+                    .map(|c| (c.timeline_in, c.duration, c.source_in))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(spans(&after), spans(&before));
+    s.undo().unwrap();
+    assert_eq!(s.sequences().unwrap().len(), 1, "one undo step");
+    assert!(s
+        .import_fcpxml(&dir.join("cut.edl").to_string_lossy())
+        .is_err());
     let bad = dir.join("cut.aaf").to_string_lossy().into_owned();
     assert!(s.export_interchange(&bad, "aaf").is_err());
 }

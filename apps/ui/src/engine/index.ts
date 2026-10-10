@@ -18,6 +18,8 @@ export interface ProjectApi {
   /** Desktop only: project files on disk with autosave and crash recovery. */
   saveProject?(path: string | null): Promise<FileStatus>;
   openProjectFile?(path: string): Promise<FileStatus>;
+  /** Bring a Final Cut Pro XML file in as new sequences (opens the first). */
+  importFcpxml?(path: string): Promise<XmlImport>;
   fileStatus?(): Promise<FileStatus>;
   /** Apply a `Command` (serde JSON form) through the undo history. */
   execute(commandJson: string): Promise<void>;
@@ -533,6 +535,16 @@ export interface Shortcuts {
   actions: { id: string; label: string }[];
   /** Presets, the default first. */
   keymaps: Keymap[];
+}
+
+export interface XmlImport {
+  sequence: string;
+  name: string;
+  sequences: number;
+  clips: number;
+  media_added: number;
+  missing: string[];
+  skipped: string[];
 }
 
 export interface Engine extends ProjectApi {

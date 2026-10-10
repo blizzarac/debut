@@ -22,6 +22,7 @@ pub fn run() {
             ipc::project_json,
             ipc::save_project,
             ipc::open_project_file,
+            ipc::import_fcpxml,
             ipc::file_status,
             ipc::execute,
             ipc::undo,

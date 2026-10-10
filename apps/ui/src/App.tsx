@@ -207,6 +207,19 @@ export default function App() {
   useShortcut("redo", () => engine?.redo().then(() => refresh(engine)));
   useShortcut("save", () => void save());
 
+  async function importXml() {
+    if (!engine?.importFcpxml || !filePath) return;
+    try {
+      const r = await engine.importFcpxml(filePath);
+      setSelected(null);
+      await refresh(engine);
+      const extra = [r.missing.length ? `${r.missing.length} file(s) offline` : "", r.skipped.length ? `skipped ${[...new Set(r.skipped)].join(", ")}` : ""].filter(Boolean);
+      setStatus(`imported "${r.name}": ${r.clips} clips, ${r.media_added} new media${extra.length ? " · " + extra.join(" · ") : ""}`);
+    } catch (err) {
+      setStatus(`import failed: ${err}`);
+    }
+  }
+
   async function openFile() {
     if (!engine?.openProjectFile || !filePath) return;
     try {
@@ -297,6 +310,11 @@ export default function App() {
               <button onClick={openFile} disabled={!filePath}>
                 Open
               </button>
+              {engine.importFcpxml && (
+                <button onClick={importXml} disabled={!filePath} title="Import a Final Cut Pro XML file (.fcpxml) as new sequences" style={{ whiteSpace: "nowrap" }}>
+                  XML
+                </button>
+              )}
             </div>
             {file?.path && (
               <span style={{ color: "#888" }} title={file.path}>

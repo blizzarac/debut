@@ -29,6 +29,7 @@ import type {
   SnapshotInfo,
   SnapshotsApi,
   SyncBy,
+  XmlImport,
   Targeting,
   ExportPreset,
   ExportStatus,
@@ -344,6 +345,9 @@ export class TauriEngine implements Engine {
   }
   saveProject(path: string | null) {
     return invoke<FileStatus>("save_project", { path });
+  }
+  importFcpxml(path: string) {
+    return invoke<XmlImport>("import_fcpxml", { path });
   }
   openProjectFile(path: string) {
     return invoke<FileStatus>("open_project_file", { path });

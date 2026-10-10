@@ -39,6 +39,11 @@ pub fn save_project(state: State<'_, Shared>, path: Option<String>) -> Result<Fi
 }
 
 #[tauri::command]
+pub fn import_fcpxml(state: State<'_, Shared>, path: String) -> Result<XmlImportDto, String> {
+    lock(&state).import_fcpxml(&path)
+}
+
+#[tauri::command]
 pub fn open_project_file(state: State<'_, Shared>, path: String) -> Result<FileStatus, String> {
     lock(&state).open_project_file(path)
 }

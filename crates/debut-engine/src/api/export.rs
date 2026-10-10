@@ -10,6 +10,22 @@ pub(crate) type ExportSpec = (
     Option<String>,
 );
 
+/// What an FCPXML import brought in.
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct XmlImportDto {
+    /// The sequence now open in the timeline.
+    pub sequence: String,
+    pub name: String,
+    /// Projects imported (compound clips come along as nested sequences).
+    pub sequences: usize,
+    pub clips: usize,
+    pub media_added: usize,
+    /// Media files that could not be opened (offline until relinked).
+    pub missing: Vec<String>,
+    /// Elements not imported (multicam, auditions, …).
+    pub skipped: Vec<String>,
+}
+
 #[derive(Serialize)]
 pub struct PresetDto {
     pub name: String,
@@ -315,6 +331,64 @@ impl Session {
             "resume" => q.resume(JobId(id)),
             _ => q.cancel(JobId(id)),
         }
+    }
+
+    /// Read a Final Cut Pro XML file (MED-12): its projects become sequences
+    /// (compound clips nested ones) and its assets media, matched to the
+    /// project's by path, all in one undo step. The first imported sequence
+    /// opens in the timeline; files that cannot be opened show as offline.
+    pub fn import_fcpxml(&mut self, path: &str) -> Result<XmlImportDto, String> {
+        let bytes = self.store.read(path).map_err(|e| e.to_string())?;
+        let text = String::from_utf8_lossy(&bytes);
+        let existing = self.project().ok_or("no project open")?.media.clone();
+        let imported = debut_media::fcpxml_import::import(&text, &mut self.ids, &existing)
+            .map_err(|e| e.to_string())?;
+        let first = imported.sequences.first().ok_or("nothing to import")?;
+        let report = XmlImportDto {
+            sequence: id_str(first.id.0),
+            name: first.name.clone(),
+            sequences: imported.projects,
+            clips: imported
+                .sequences
+                .iter()
+                .flat_map(|s| &s.tracks)
+                .map(|t| t.clips.len())
+                .sum(),
+            media_added: imported.media.len(),
+            missing: Vec::new(),
+            skipped: imported.skipped.clone(),
+        };
+        let first_id = first.id;
+        let mut cmds: Vec<Command> = imported
+            .media
+            .iter()
+            .cloned()
+            .map(Command::AddMedia)
+            .collect();
+        cmds.extend(imported.sequences.into_iter().map(Command::AddSequence));
+        self.exec(Command::Group(cmds))?;
+        let mut report = report;
+        for m in &imported.media {
+            match self.platform.open_decoder(&m.path) {
+                Ok(dec) => {
+                    if let Some(v) = dec.video_info() {
+                        self.probed.insert(
+                            m.id,
+                            (v.width, v.height, v.duration, dec.audio_info().is_some()),
+                        );
+                    }
+                    self.offline.remove(&m.id);
+                }
+                Err(_) => {
+                    self.offline.insert(m.id);
+                    report.missing.push(m.path.clone());
+                }
+            }
+        }
+        self.active = Some(first_id);
+        self.player = None;
+        self.sync_player()?;
+        Ok(report)
     }
 
     /// Write the active sequence for another application (MED-12): `"edl"`
