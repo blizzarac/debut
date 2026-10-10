@@ -1444,6 +1444,61 @@ fn shortcut_presets() {
     assert!(sc.actions.iter().any(|a| a.id == "toggle_linked"));
 }
 
+/// Snapshots: save, change, compare, restore (TL-14).
+#[test]
+fn snapshots_compare_and_restore() {
+    let Fx {
+        mut s, v, clip_id, ..
+    } = fixture("snapshots_compare_and_restore");
+    let first = s.take_snapshot(String::new()).unwrap();
+    assert_eq!(s.snapshots().unwrap()[0].name, "Version 1");
+    assert!(s.compare_snapshot(&first).unwrap().clips.is_empty());
+    // Blade at 1 s (picture and linked sound) and slow the head down.
+    s.edit(EditOp::Blade {
+        track: v.clone(),
+        at: 1.0,
+    })
+    .unwrap();
+    s.edit(EditOp::Speed {
+        track: v.clone(),
+        clip: clip_id.clone(),
+        speed: 0.5,
+        ripple: true,
+    })
+    .unwrap();
+    let d = s.compare_snapshot(&first).unwrap();
+    let head = d.clips.iter().find(|c| c.clip == clip_id).unwrap();
+    assert_eq!(
+        (head.track.as_str(), head.kinds.clone()),
+        ("V1", vec!["retimed".to_string()])
+    );
+    assert_eq!(
+        d.clips.iter().filter(|c| c.kinds == ["added"]).count(),
+        2,
+        "two tails"
+    );
+    s.take_snapshot("cut".into()).unwrap();
+    // Restore the first version: one undo step, and nothing differs any more.
+    s.restore_snapshot(&first).unwrap();
+    assert!(s.compare_snapshot(&first).unwrap().clips.is_empty());
+    assert_eq!(
+        sequence_dto(s.first_sequence().unwrap()).tracks[0]
+            .clips
+            .len(),
+        1
+    );
+    s.undo().unwrap();
+    assert_eq!(
+        sequence_dto(s.first_sequence().unwrap()).tracks[0]
+            .clips
+            .len(),
+        2
+    );
+    s.remove_snapshot(&first).unwrap();
+    assert_eq!(s.snapshots().unwrap().len(), 1);
+    assert!(s.compare_snapshot(&first).is_err());
+}
+
 /// EDL and OpenTimelineIO export (MED-12).
 #[test]
 fn interchange_writes_edl_and_otio() {

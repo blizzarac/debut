@@ -9,7 +9,7 @@
 //!
 //! Insert and extract are groups built by the constructors at the bottom.
 
-use debut_core::id::{BinId, CaptionId, MarkerId, TemplateId};
+use debut_core::id::{BinId, CaptionId, MarkerId, SnapshotId, TemplateId};
 use debut_core::Curve;
 use debut_core::{ClipId, Error, IdGen, MediaId, Rational, Result, SequenceId, TrackId};
 use debut_project::media_ref::MediaRef;
@@ -17,7 +17,7 @@ use debut_project::{
     AudioEffect, Clip, ClipSource, Duck, Effect, Marker, Param, Project, Sequence, SpeedKey, Track,
     TrackMix, Transition,
 };
-use debut_project::{Bin, Caption, CaptionSettings, SavedTitleTemplate};
+use debut_project::{Bin, Caption, CaptionSettings, SavedTitleTemplate, Snapshot};
 use serde::{Deserialize, Serialize};
 
 /// Where a marker lives: on the sequence, or on one clip (clip-local time).
@@ -229,6 +229,11 @@ pub enum Command {
     RemoveMedia(MediaId),
     AddSequence(Sequence),
     RemoveSequence(SequenceId),
+    /// Replace a sequence's whole content (restoring a snapshot, TL-14); the
+    /// id names which sequence.
+    ReplaceSequence(Sequence),
+    AddSnapshot(Snapshot),
+    RemoveSnapshot(SnapshotId),
     AddTrack {
         sequence: SequenceId,
         track: Track,
@@ -768,6 +773,31 @@ impl Command {
                 project.sequences.remove(i);
                 Ok(())
             }
+            Command::ReplaceSequence(seq) => {
+                let s = project
+                    .sequences
+                    .iter_mut()
+                    .find(|s| s.id == seq.id)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {:?}", seq.id)))?;
+                *s = seq.clone();
+                Ok(())
+            }
+            Command::AddSnapshot(snap) => {
+                if project.snapshots.iter().any(|s| s.id == snap.id) {
+                    return Err(Error::InvalidArgument("snapshot id already exists".into()));
+                }
+                project.snapshots.push(snap.clone());
+                Ok(())
+            }
+            Command::RemoveSnapshot(id) => {
+                let i = project
+                    .snapshots
+                    .iter()
+                    .position(|s| s.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("snapshot {id:?}")))?;
+                project.snapshots.remove(i);
+                Ok(())
+            }
             Command::AddTrack {
                 sequence,
                 track,
@@ -1129,6 +1159,21 @@ impl Command {
                 Ok(Command::AddMedia(m.clone()))
             }
             Command::AddSequence(seq) => Ok(Command::RemoveSequence(seq.id)),
+            Command::ReplaceSequence(seq) => {
+                let s = project
+                    .sequence(seq.id)
+                    .ok_or_else(|| Error::NotFound(format!("sequence {:?}", seq.id)))?;
+                Ok(Command::ReplaceSequence(s.clone()))
+            }
+            Command::AddSnapshot(snap) => Ok(Command::RemoveSnapshot(snap.id)),
+            Command::RemoveSnapshot(id) => {
+                let s = project
+                    .snapshots
+                    .iter()
+                    .find(|s| s.id == *id)
+                    .ok_or_else(|| Error::NotFound(format!("snapshot {id:?}")))?;
+                Ok(Command::AddSnapshot(s.clone()))
+            }
             Command::RemoveSequence(id) => {
                 let s = project
                     .sequence(*id)

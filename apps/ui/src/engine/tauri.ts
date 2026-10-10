@@ -23,6 +23,9 @@ import type {
   InterchangeFormat,
   ProxyStatus,
   Shortcuts,
+  SnapshotDiff,
+  SnapshotInfo,
+  SnapshotsApi,
   SyncBy,
   ExportPreset,
   ExportStatus,
@@ -230,6 +233,24 @@ class TauriExport implements ExportApi {
   }
 }
 
+class TauriSnapshots implements SnapshotsApi {
+  list() {
+    return invoke<SnapshotInfo[]>("snapshots");
+  }
+  take(name: string) {
+    return invoke<string>("take_snapshot", { name });
+  }
+  restore(id: string) {
+    return invoke<void>("restore_snapshot", { id });
+  }
+  remove(id: string) {
+    return invoke<void>("remove_snapshot", { id });
+  }
+  compare(id: string) {
+    return invoke<SnapshotDiff>("compare_snapshot", { id });
+  }
+}
+
 class TauriMarkers implements MarkersApi {
   list() {
     return invoke<MarkerInfo[]>("markers");
@@ -278,6 +299,7 @@ class TauriCaptions implements CaptionsApi {
 export class TauriEngine implements Engine {
   captions = new TauriCaptions();
   markers = new TauriMarkers();
+  snapshots = new TauriSnapshots();
   media = new TauriMedia();
   player = new TauriPlayer();
   effects = new TauriEffects();

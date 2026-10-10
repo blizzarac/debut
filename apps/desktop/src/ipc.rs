@@ -266,6 +266,31 @@ pub fn export_srt(state: State<'_, Shared>, path: String) -> Result<usize, Strin
 }
 
 #[tauri::command]
+pub fn snapshots(state: State<'_, Shared>) -> Result<Vec<SnapshotDto>, String> {
+    lock(&state).snapshots()
+}
+
+#[tauri::command]
+pub fn take_snapshot(state: State<'_, Shared>, name: String) -> Result<String, String> {
+    lock(&state).take_snapshot(name)
+}
+
+#[tauri::command]
+pub fn restore_snapshot(state: State<'_, Shared>, id: String) -> Result<(), String> {
+    lock(&state).restore_snapshot(&id)
+}
+
+#[tauri::command]
+pub fn remove_snapshot(state: State<'_, Shared>, id: String) -> Result<(), String> {
+    lock(&state).remove_snapshot(&id)
+}
+
+#[tauri::command]
+pub fn compare_snapshot(state: State<'_, Shared>, id: String) -> Result<SnapshotDiffDto, String> {
+    lock(&state).compare_snapshot(&id)
+}
+
+#[tauri::command]
 pub fn markers(state: State<'_, Shared>) -> Result<Vec<MarkerDto>, String> {
     lock(&state).markers()
 }

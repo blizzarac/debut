@@ -362,6 +362,33 @@ export interface MarkerEdit {
   at?: number;
 }
 
+/** A saved version of the active sequence (TL-14). */
+export interface SnapshotInfo {
+  id: string;
+  name: string;
+  clips: number;
+  duration: number;
+}
+
+export interface SnapshotDiff {
+  clips: { clip: string; track: string; at: number; kinds: ("added" | "removed" | "moved" | "trimmed" | "retimed" | "changed")[] }[];
+  markers_added: number;
+  markers_removed: number;
+  captions_added: number;
+  captions_removed: number;
+}
+
+export interface SnapshotsApi {
+  list(): Promise<SnapshotInfo[]>;
+  /** Save the active sequence as it is now; an empty name becomes "Version n". */
+  take(name: string): Promise<string>;
+  /** Put the sequence back to a snapshot (undoable). */
+  restore(id: string): Promise<void>;
+  remove(id: string): Promise<void>;
+  /** What changed from the snapshot to now. */
+  compare(id: string): Promise<SnapshotDiff>;
+}
+
 export interface MarkersApi {
   list(): Promise<MarkerInfo[]>;
   add(at: number, note: string, clip: string | null): Promise<string>;
@@ -494,6 +521,7 @@ export interface Engine extends ProjectApi {
   mixer?: MixerApi;
   exporter?: ExportApi;
   markers?: MarkersApi;
+  snapshots?: SnapshotsApi;
   captions?: CaptionsApi;
 }
 

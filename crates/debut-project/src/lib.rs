@@ -13,6 +13,7 @@ pub mod media_ref;
 pub mod retime;
 pub mod schema;
 pub mod sequence;
+pub mod snapshot;
 pub mod title;
 
 pub use audio_fx::{AudioEffect, Duck, EqBand, EqKind};
@@ -24,6 +25,7 @@ pub use retime::SpeedKey;
 pub use sequence::{
     Clip, ClipSource, Layer, Sequence, Track, TrackKind, TrackMix, Transition, TransitionKind,
 };
+pub use snapshot::Snapshot;
 pub use title::{SavedTitleTemplate, TextAlign, Title, TitleStyle};
 
 use debut_core::{ProjectId, SequenceId};
@@ -40,6 +42,9 @@ pub struct Project {
     /// User-saved title templates (GFX-02).
     #[serde(default)]
     pub title_templates: Vec<title::SavedTitleTemplate>,
+    /// Saved versions of sequences (TL-14).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub snapshots: Vec<snapshot::Snapshot>,
 }
 
 impl Project {
@@ -52,6 +57,7 @@ impl Project {
             media: Vec::new(),
             sequences: Vec::new(),
             title_templates: Vec::new(),
+            snapshots: Vec::new(),
         }
     }
 

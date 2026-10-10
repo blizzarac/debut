@@ -6,6 +6,7 @@ import { MediaPanel } from "./MediaPanel";
 import { ExportPanel } from "./ExportPanel";
 import { Inspector, TitleEditor } from "./Inspector";
 import { Markers } from "./Markers";
+import { Snapshots } from "./Snapshots";
 import { Mixer } from "./Mixer";
 import { Scopes } from "./Scopes";
 import { Timeline, type Selection } from "./Timeline";
@@ -260,6 +261,12 @@ export default function App() {
           <>
             <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Markers</h2>
             <Markers markers={engine.markers} list={markerList} fps={fps} onSeek={(t) => engine.player!.transport({ kind: "seek", t })} onChanged={() => refresh(engine)} />
+          </>
+        )}
+        {engine?.snapshots && engine.player && (
+          <>
+            <h2 style={{ fontSize: 13, margin: "12px 0 4px" }}>Versions</h2>
+            <Snapshots api={engine.snapshots} refreshKey={refreshKey} onChanged={() => refresh(engine)} onSeek={(t) => engine.player!.transport({ kind: "seek", t })} />
           </>
         )}
         {engine?.captions && engine.player && (

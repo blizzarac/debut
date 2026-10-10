@@ -9,7 +9,7 @@ pub mod evaluate; // sequence -> frame composition plan (pending; see debut-rend
 pub mod select; // TL-05 linked selection (track targeting and patching pending)
 pub mod shortcuts; // TL-12 keymaps with NLE presets
 pub mod snap; // TL-06 snap targets, gap removal
-pub mod snapshot; // TL-14 versions and compare (pending)
+pub mod snapshot; // TL-14 compare a sequence with a snapshot
 pub mod speed; // TL-09 constant, reverse, freeze, ramps
 
 pub use edit::{three_point, EditMode, EditPoints};
