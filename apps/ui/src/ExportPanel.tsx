@@ -10,6 +10,7 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
   const [normalize, setNormalize] = useState(true);
   const [sidecar, setSidecar] = useState(true);
   const [hardware, setHardware] = useState(true);
+  const [smart, setSmart] = useState(false);
   const [caps, setCaps] = useState<CodecCapabilities | null>(null);
   const [jobs, setJobs] = useState<ExportStatus[]>([]);
   const [error, setError] = useState("");
@@ -38,7 +39,7 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
   async function start() {
     setError("");
     try {
-      await exporter.start(output, preset, normalize ? target : null, sidecar, hardware && hwCount > 0);
+      await exporter.start(output, preset, normalize ? target : null, sidecar, hardware && hwCount > 0, smart);
     } catch (e) {
       setError(String(e));
     }
@@ -77,6 +78,9 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
         </label>
         <label title={hwCount ? `Use ${caps!.hardware_encoders.map((e) => `${e.name} (${e.api})`).join(", ")}; falls back to software if it cannot open` : "No hardware encoder opens on this machine; software H.264 is used"}>
           <input type="checkbox" checked={hardware && hwCount > 0} disabled={hwCount === 0} onChange={(e) => setHardware(e.target.checked)} /> hardware encoder{hwCount ? ` (${hwCount})` : " (none)"}
+        </label>
+        <label title="Copy stretches that show one untouched source frame for frame, in the source's codec, instead of re-encoding them. ProRes/DNx/MJPEG sources mix copied and rendered stretches (.mov); long-GOP sources (H.264) need every stretch copied, cut on keyframes. Otherwise the export renders normally and says why.">
+          <input type="checkbox" checked={smart} onChange={(e) => setSmart(e.target.checked)} /> smart render
         </label>
         <label title="Also write the captions as an .srt next to the movie">
           <input type="checkbox" checked={sidecar} onChange={(e) => setSidecar(e.target.checked)} /> .srt sidecar
@@ -122,6 +126,7 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
             <div style={{ color: "#666" }}>
               {j.frames_done}/{j.frames_total} frames
               {j.loudness_lufs !== null ? ` · ${j.loudness_lufs.toFixed(1)} LUFS · ${j.true_peak_db.toFixed(1)} dBTP` : ""}
+              {j.frames_copied ? ` · ${j.frames_copied} copied` : ""}
               {j.max_cll != null ? ` · MaxCLL ${Math.round(j.max_cll)} · MaxFALL ${Math.round(j.max_fall ?? 0)} nits` : ""}
             </div>
           </li>

@@ -301,8 +301,8 @@ class TauriExport implements ExportApi {
   presets() {
     return invoke<ExportPreset[]>("export_presets");
   }
-  start(output: string, preset: string, normalize: number | null, captionSidecar = false, hardware = false) {
-    return invoke<number>("export_start", { output, preset, normalize, captionSidecar, hardware });
+  start(output: string, preset: string, normalize: number | null, captionSidecar = false, hardware = false, smart = false) {
+    return invoke<number>("export_start", { output, preset, normalize, captionSidecar, hardware, smart });
   }
   interchange(path: string, format: InterchangeFormat) {
     return invoke<void>("export_interchange", { path, format });

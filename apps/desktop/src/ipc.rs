@@ -255,13 +255,15 @@ pub fn export_start(
     normalize: Option<f32>,
     caption_sidecar: Option<bool>,
     hardware: Option<bool>,
+    smart: Option<bool>,
 ) -> Result<u64, String> {
-    lock(&state).export_start(
+    lock(&state).export_start_with(
         output,
         &preset,
         normalize,
         caption_sidecar.unwrap_or(false),
         hardware.unwrap_or(false),
+        smart.unwrap_or(false),
     )
 }
 

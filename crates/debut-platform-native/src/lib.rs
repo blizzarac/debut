@@ -90,6 +90,10 @@ impl Platform for NativePlatform {
         Ok(Box::new(codec::FfmpegEncoder::create(path, settings)?))
     }
 
+    fn stream_copy_info(&self, path: &str) -> debut_core::Result<debut_platform::StreamCopyInfo> {
+        codec::stream_copy_info(path)
+    }
+
     fn open_audio_out(&self) -> Box<dyn AudioOut> {
         match audio_out::CpalAudioOut::default_device() {
             Ok(dev) => Box::new(dev),

@@ -255,6 +255,8 @@ export interface ExportStatus {
   frames_total: number;
   loudness_lufs: number | null;
   true_peak_db: number;
+  /** Frames a smart render copied from a source. */
+  frames_copied?: number;
   /** Measured light levels in nits (HDR exports). */
   max_cll?: number | null;
   max_fall?: number | null;
@@ -266,7 +268,8 @@ export type InterchangeFormat = "edl" | "otio" | "fcpxml" | "aaf";
 export interface ExportApi {
   presets(): Promise<ExportPreset[]>;
   /** Queue an export of the whole sequence; `normalize` is a LUFS target or null. */
-  start(output: string, preset: string, normalize: number | null, captionSidecar?: boolean, hardware?: boolean): Promise<number>;
+  /** `smart` copies untouched stretches from their source, in its codec (EXP-05). */
+  start(output: string, preset: string, normalize: number | null, captionSidecar?: boolean, hardware?: boolean, smart?: boolean): Promise<number>;
   /** Hardware encoders that open on this machine and hardware decoders compiled in. */
   capabilities?(): Promise<CodecCapabilities>;
   /** Write the active sequence as an EDL or OpenTimelineIO file for another application. */

@@ -187,6 +187,7 @@ mod tests {
             sample_rate: 48_000,
             gain_db: 0.0,
             hdr: None,
+            plan: Vec::new(),
         }
     }
 

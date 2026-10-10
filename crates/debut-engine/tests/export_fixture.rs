@@ -57,6 +57,7 @@ fn exports_a_range_with_audio_and_video() {
         sample_rate: 48_000,
         gain_db: 0.0,
         hdr: None,
+        plan: Vec::new(),
     };
     // Two-pass loudness normalization to the web target: measure, set gain, re-measure.
     let (lufs, tp) = measure_loudness(&job, &mut samples).unwrap();
@@ -84,6 +85,7 @@ fn exports_a_range_with_audio_and_video() {
             crf: 20,
             encoder: None,
             hdr: None,
+            smart: None,
             audio: Some(AudioEncodeSettings {
                 channels: 2,
                 sample_rate: 48_000,

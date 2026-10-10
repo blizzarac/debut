@@ -9,6 +9,9 @@ pub(crate) type ExportSpec = (
     Vec<(MediaId, String)>,
     Vec<Sequence>,
     Option<String>,
+    // Smart render: the media whose packets may be copied (no input colour
+    // conversion), when asked for.
+    Option<std::collections::HashSet<MediaId>>,
 );
 
 /// What an FCPXML import brought in.
@@ -45,6 +48,8 @@ pub struct ExportStatusDto {
     pub frames_total: u64,
     pub loudness_lufs: Option<f32>,
     pub true_peak_db: f32,
+    /// Frames copied from a source by a smart render (EXP-05).
+    pub frames_copied: u64,
     /// Measured MaxCLL / MaxFALL in nits (HDR exports).
     pub max_cll: Option<f32>,
     pub max_fall: Option<f32>,
@@ -106,6 +111,23 @@ impl Session {
         caption_sidecar: bool,
         hardware: bool,
     ) -> Result<u64, String> {
+        self.export_start_with(output, preset, normalize, caption_sidecar, hardware, false)
+    }
+
+    /// `export_start`, optionally as a smart render (EXP-05): stretches that
+    /// show one untouched source frame for frame are copied from it, in its
+    /// codec, and the rest is rendered and encoded to match where the codec
+    /// allows. Falls back to a normal render (and says why in the job's
+    /// name) when the sequence or its sources do not allow it.
+    pub fn export_start_with(
+        &mut self,
+        output: String,
+        preset: &str,
+        normalize: Option<f32>,
+        caption_sidecar: bool,
+        hardware: bool,
+        smart: bool,
+    ) -> Result<u64, String> {
         let preset = Preset::all()
             .into_iter()
             .find(|p| p.name == preset)
@@ -144,6 +166,7 @@ impl Session {
             sample_rate: 48_000,
             gain_db: 0.0,
             hdr: preset.hdr,
+            plan: Vec::new(),
         };
         let media: Vec<(MediaId, String)> = self
             .project()
@@ -166,7 +189,23 @@ impl Session {
             .project()
             .map(|p| p.sequences.clone())
             .unwrap_or_default();
-        let spec = (preset, normalize, media, sequences, encoder);
+        let smart = smart.then(|| {
+            self.project()
+                .map(|p| {
+                    p.media
+                        .iter()
+                        .filter(|m| {
+                            matches!(
+                                m.metadata.color_space,
+                                None | Some(debut_core::color::ColorSpace::Rec709)
+                            )
+                        })
+                        .map(|m| m.id)
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        let spec = (preset, normalize, media, sequences, encoder, smart);
         if self
             .export_worker
             .load(std::sync::atomic::Ordering::Acquire)
@@ -208,7 +247,7 @@ impl Session {
                     };
                     let spec = specs.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
                     let result = (|| -> Result<debut_export::Progress, String> {
-                        let (preset, normalize, media, sequences, encoder) =
+                        let (preset, normalize, media, sequences, encoder, smart) =
                             spec.ok_or("missing export spec")?;
                         let mut frames = crate::FrameSource::new(4);
                         frames.set_platform(Arc::clone(&platform));
@@ -238,6 +277,32 @@ impl Session {
                                 job.gain_db = 20.0 * normalize_gain(lufs, target, tp, -1.0).log10();
                             }
                         }
+                        let mut template = None;
+                        if let Some(allowed) = smart {
+                            let note = match smart_setup(
+                                platform.as_ref(),
+                                &job,
+                                &media,
+                                &allowed,
+                                &output,
+                                preset.hdr.is_some(),
+                            ) {
+                                Ok((plan, path)) => {
+                                    let note = format!(
+                                        "smart: {:.0}% copied",
+                                        debut_export::smart::copied_fraction(&plan) * 100.0
+                                    );
+                                    job.plan = plan;
+                                    template = Some(path);
+                                    note
+                                }
+                                Err(why) => format!("smart off: {why}"),
+                            };
+                            queue
+                                .lock()
+                                .unwrap_or_else(|e| e.into_inner())
+                                .rename(id, |n| format!("{n} · {note}"));
+                        }
                         let (w, h) = (job.sequence.width, job.sequence.height);
                         let mut encoder = platform
                             .create_encoder(
@@ -257,6 +322,7 @@ impl Session {
                                         HdrTransfer::Pq => HdrSettings::hdr10(),
                                         HdrTransfer::Hlg => HdrSettings::hlg(),
                                     }),
+                                    smart: template,
                                 },
                             )
                             .map_err(|e| e.to_string())?;
@@ -337,6 +403,7 @@ impl Session {
                 frames_total: e.progress.frames_total,
                 loudness_lufs: e.progress.loudness_lufs,
                 true_peak_db: e.progress.true_peak_db,
+                frames_copied: e.progress.frames_copied,
                 max_cll: e.progress.light.map(|l| l.max_cll),
                 max_fall: e.progress.light.map(|l| l.max_fall),
                 error: e.error.clone(),
@@ -444,4 +511,115 @@ impl Session {
         };
         self.store.write(path, &bytes).map_err(|e| e.to_string())
     }
+}
+
+/// Plan a smart render for `job` (EXP-05): which stretches to copy, and the
+/// source whose codec the output takes. `Err` says why it falls back to a
+/// normal render.
+fn smart_setup(
+    platform: &dyn Platform,
+    job: &ExportJob,
+    media: &[(MediaId, String)],
+    allowed: &std::collections::HashSet<MediaId>,
+    output: &str,
+    hdr: bool,
+) -> Result<(Vec<debut_export::smart::Span>, String), String> {
+    use debut_export::smart::{plan, SourceFacts};
+    if hdr {
+        return Err("HDR output is always rendered".into());
+    }
+    let path_of = |m: MediaId| media.iter().find(|(id, _)| *id == m).map(|(_, p)| p);
+    // Facts for the media on the video tracks only.
+    let mut facts = std::collections::HashMap::new();
+    for track in &job.sequence.tracks {
+        for clip in &track.clips {
+            if let ClipSource::Media(m) = clip.source {
+                if facts.contains_key(&m) || !allowed.contains(&m) {
+                    continue;
+                }
+                let info = path_of(m)
+                    .and_then(|p| platform.open_decoder(p).ok())
+                    .and_then(|d| d.video_info().cloned());
+                facts.insert(
+                    m,
+                    info.map(|v| SourceFacts {
+                        width: v.width,
+                        height: v.height,
+                        frame_rate: v.frame_rate,
+                        variable_frame_rate: v.variable_frame_rate,
+                    }),
+                );
+            }
+        }
+    }
+    let mut spans = plan(&job.sequence, job.range, |m| {
+        facts.get(&m).copied().flatten()
+    });
+    let mut infos = std::collections::HashMap::new();
+    for span in &mut spans {
+        if let Some(copy) = &mut span.copy {
+            let path = path_of(copy.media).cloned().unwrap_or_default();
+            infos
+                .entry(copy.media)
+                .or_insert_with(|| platform.stream_copy_info(&path).ok());
+            copy.path = path;
+        }
+    }
+    // The first copied source sets the output codec; others join it only
+    // with identical stream parameters.
+    let first = spans
+        .iter()
+        .find_map(|s| s.copy.as_ref())
+        .ok_or("nothing in the sequence can be copied")?;
+    let template = infos
+        .get(&first.media)
+        .cloned()
+        .flatten()
+        .ok_or("the source's stream cannot be read for copying")?;
+    let template_path = first.path.clone();
+    for span in &mut spans {
+        let same = span.copy.as_ref().is_some_and(|c| {
+            infos
+                .get(&c.media)
+                .cloned()
+                .flatten()
+                .is_some_and(|i| i.fingerprint == template.fingerprint)
+        });
+        if !same {
+            span.copy = None;
+        }
+    }
+    let ext = output.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    if template.intra_only && !matches!(ext.as_str(), "mov" | "mkv") {
+        return Err(format!(
+            "{} copies into .mov or .mkv, not .{ext}",
+            template.codec
+        ));
+    }
+    if !template.can_match {
+        // Long-GOP: everything must be copied, cut on keyframes.
+        let near = |t: Rational| {
+            template
+                .keyframes
+                .iter()
+                .any(|k| (*k - t).as_f64().abs() < 1e-3)
+        };
+        for span in &spans {
+            let Some((from, to)) = span.source_range() else {
+                return Err(format!(
+                    "{} frames cannot be rendered to match; every stretch must be copied",
+                    template.codec
+                ));
+            };
+            if !near(from) || !(near(to) || to >= template.duration) {
+                return Err(format!(
+                    "{} cuts must fall on keyframes ({:.2}s to {:.2}s does not)",
+                    template.codec,
+                    from.as_f64(),
+                    to.as_f64()
+                ));
+            }
+        }
+    }
+    Ok((spans, template_path))
 }

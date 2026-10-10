@@ -7,7 +7,7 @@ pub mod presets; // EXP-02 YouTube, Vimeo, Instagram, TikTok, broadcast, master
 pub mod queue; // EXP-03 pause/resume/priority/cancel
 
 pub mod hdr; // EXP-06 HDR10 / HLG output: Rec.2020 PQ/HLG frames, light levels
-pub mod smart; // EXP-05 pass-through of unmodified segments (pending)
+pub mod smart; // EXP-05 copy the packets of unmodified stretches
 pub mod upload; // EXP-09 (pending)
 
 pub use job::{export, measure_loudness, Control, ExportJob, Progress};

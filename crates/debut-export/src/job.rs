@@ -22,6 +22,9 @@ pub struct ExportJob {
     pub gain_db: f32,
     /// Write 16-bit Rec.2020 PQ/HLG frames for an HDR encoder (EXP-06).
     pub hdr: Option<HdrTransfer>,
+    /// Smart render (EXP-05): stretches whose packets the encoder copies
+    /// (`crate::smart::plan`, paths filled in). Empty renders everything.
+    pub plan: Vec<crate::smart::Span>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -33,6 +36,8 @@ pub struct Progress {
     pub true_peak_db: f32,
     /// MaxCLL / MaxFALL of the frames written so far (HDR exports only).
     pub light: Option<LightLevels>,
+    /// Frames whose packets were copied rather than rendered (EXP-05).
+    pub frames_copied: u64,
 }
 
 /// Cooperative control shared with the queue / UI (EXP-03): the job checks it
@@ -93,7 +98,10 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
         loudness_lufs: None,
         true_peak_db: f32::NEG_INFINITY,
         light: job.hdr.map(|_| LightLevels::default()),
+        frames_copied: 0,
     };
+    // Smart render: video up to here is already in the file.
+    let mut copied_until = job.range.0;
     let mut bus = Vec::new();
     let mut inserts = Inserts::default();
     inserts.set_plugins(samples.plugins());
@@ -109,32 +117,24 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
             break;
         }
         let t = fr.frame_to_time(n);
-        let graph = compose(&job.sequence, t, frames);
-        let img = graph.render(backend, frames)?;
-        let (w, h) = backend.size(&img);
-        let frame = match job.hdr {
-            Some(transfer) => {
-                let px = backend.download(&img);
-                if let Some(light) = progress.light.as_mut() {
-                    light.add_frame(&px);
-                }
-                VideoFrame {
-                    pts: t,
-                    width: w,
-                    height: h,
-                    rgba16: encode_rgba16(&px, transfer),
-                    ..Default::default()
-                }
+        if t >= copied_until {
+            // At the first frame of a copy stretch, copy all of it at once.
+            if let Some((span, copy)) = job
+                .plan
+                .iter()
+                .find(|s| s.start <= t && t < s.end)
+                .and_then(|s| s.copy.as_ref().map(|c| (s, c)))
+            {
+                let from = copy.source_in + (t - span.start);
+                let to = copy.source_in + (span.end - span.start);
+                let got = encoder.copy_video(&copy.path, from, to)?;
+                progress.frames_copied += got;
+                copied_until = t + fr.frame_duration() * Rational::from_int(got as i64);
             }
-            None => VideoFrame {
-                pts: t,
-                width: w,
-                height: h,
-                rgba8: backend.download_rgba8(&img, debut_render::Transfer::Srgb),
-                ..Default::default()
-            },
-        };
-        encoder.push_video(&frame)?;
+        }
+        if t >= copied_until {
+            render_frame(job, t, backend, frames, encoder, &mut progress)?;
+        }
 
         // Audio up to the end of this frame; exact per-frame counts at any rate.
         let next_cursor = (Rational::from_int(n + 1) * spf
@@ -173,6 +173,43 @@ pub fn export<B: Backend, S: SourceInfo + FrameProvider>(
         on_progress(progress);
     }
     Ok(progress)
+}
+
+/// Render the picture at `t` and hand it to the encoder.
+fn render_frame<B: Backend, S: SourceInfo + FrameProvider>(
+    job: &ExportJob,
+    t: Rational,
+    backend: &mut B,
+    frames: &mut S,
+    encoder: &mut dyn Encoder,
+    progress: &mut Progress,
+) -> Result<()> {
+    let graph = compose(&job.sequence, t, frames);
+    let img = graph.render(backend, frames)?;
+    let (w, h) = backend.size(&img);
+    let frame = match job.hdr {
+        Some(transfer) => {
+            let px = backend.download(&img);
+            if let Some(light) = progress.light.as_mut() {
+                light.add_frame(&px);
+            }
+            VideoFrame {
+                pts: t,
+                width: w,
+                height: h,
+                rgba16: encode_rgba16(&px, transfer),
+                ..Default::default()
+            }
+        }
+        None => VideoFrame {
+            pts: t,
+            width: w,
+            height: h,
+            rgba8: backend.download_rgba8(&img, debut_render::Transfer::Srgb),
+            ..Default::default()
+        },
+    };
+    encoder.push_video(&frame)
 }
 
 /// Loudness of the job's audio alone (no video, no encoder): the first pass of a

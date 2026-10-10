@@ -4,8 +4,8 @@
 use crate::hwdecode;
 use debut_core::{Error, FrameRate, Rational, Result};
 use debut_platform::codec::{
-    AudioBlock, AudioInfo, DecodePath, Decoder, HdrSettings, HdrTransfer, SourceTags, VideoFrame,
-    VideoInfo,
+    AudioBlock, AudioInfo, DecodePath, Decoder, HdrSettings, HdrTransfer, SourceTags,
+    StreamCopyInfo, VideoFrame, VideoInfo,
 };
 use ffmpeg_next as ff;
 use std::collections::VecDeque;
@@ -678,12 +678,165 @@ fn set_matrix(scaler: &mut ff::software::scaling::Context, bt2020: bool) {
     }
 }
 
+/// Every frame of this codec is a keyframe.
+fn intra_only(id: ff::codec::Id) -> bool {
+    // SAFETY: the descriptor table is static in libavcodec.
+    unsafe {
+        let d = ff::ffi::avcodec_descriptor_get(id.into());
+        !d.is_null() && (*d).props as i64 & ff::ffi::AV_CODEC_PROP_INTRA_ONLY as i64 != 0
+    }
+}
+
+/// Keep DTS strictly increasing (and PTS not before DTS) across cuts between
+/// copied and encoded packets.
+fn monotonic(packet: &mut ff::Packet, last: &mut Option<i64>) {
+    if let Some(dts) = packet.dts() {
+        let dts = match *last {
+            Some(l) if dts <= l => l + 1,
+            _ => dts,
+        };
+        packet.set_dts(Some(dts));
+        if packet.pts().is_some_and(|p| p < dts) {
+            packet.set_pts(Some(dts));
+        }
+        *last = Some(dts);
+    }
+}
+
+/// What `path`'s video stream allows for smart render (EXP-05).
+pub fn stream_copy_info(path: &str) -> Result<StreamCopyInfo> {
+    use std::hash::{Hash, Hasher};
+    init();
+    let mut input = ff::format::input(&path).map_err(err)?;
+    let stream = input
+        .streams()
+        .best(ff::media::Type::Video)
+        .ok_or_else(|| Error::InvalidArgument(format!("{path} has no video")))?;
+    let (index, tb) = (stream.index(), stream.time_base());
+    let tb = Rational::new(tb.numerator() as i64, tb.denominator() as i64);
+    let duration = if stream.duration() > 0 {
+        tb * Rational::from_int(stream.duration())
+    } else {
+        Rational::new(input.duration().max(0), ff::ffi::AV_TIME_BASE as i64)
+    };
+    let par = stream.parameters();
+    let id = par.id();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    // SAFETY: plain reads of the codec parameters and their extradata.
+    unsafe {
+        let p = &*par.as_ptr();
+        (
+            p.codec_id as i32,
+            p.format,
+            p.profile,
+            p.level,
+            p.width,
+            p.height,
+        )
+            .hash(&mut h);
+        (
+            p.field_order as i32,
+            p.color_range as i32,
+            p.color_space as i32,
+        )
+            .hash(&mut h);
+        if !p.extradata.is_null() && p.extradata_size > 0 {
+            std::slice::from_raw_parts(p.extradata, p.extradata_size as usize).hash(&mut h);
+        }
+    }
+    let intra = intra_only(id);
+    let mut keyframes = Vec::new();
+    if !intra {
+        for (s, packet) in input.packets() {
+            if s.index() == index && packet.is_key() {
+                if let Some(pts) = packet.pts() {
+                    keyframes.push(tb * Rational::from_int(pts));
+                }
+            }
+        }
+        keyframes.sort();
+    }
+    Ok(StreamCopyInfo {
+        codec: id.name().to_string(),
+        intra_only: intra,
+        can_match: intra && ff::encoder::find(id).is_some(),
+        fingerprint: h.finish(),
+        keyframes,
+        duration,
+    })
+}
+
+/// The AAC audio stream for `settings.audio`, if any.
+fn open_audio(
+    output: &mut ff::format::context::Output,
+    settings: &EncodeSettings,
+    global_header: bool,
+) -> Result<Option<AudioEnc>> {
+    Ok(match &settings.audio {
+        Some(a) => {
+            let codec = ff::encoder::find(ff::codec::Id::AAC)
+                .ok_or_else(|| Error::Unsupported("no AAC encoder".into()))?;
+            let mut stream = output.add_stream(codec).map_err(err)?;
+            let ctx = ff::codec::context::Context::new_with_codec(codec);
+            let mut enc = ctx.encoder().audio().map_err(err)?;
+            let layout = ff::ChannelLayout::default(a.channels as i32);
+            enc.set_rate(a.sample_rate as i32);
+            enc.set_channel_layout(layout);
+            enc.set_format(ff::format::Sample::F32(ff::format::sample::Type::Planar));
+            enc.set_bit_rate(a.bitrate);
+            let time_base = ff::Rational::new(1, a.sample_rate as i32);
+            enc.set_time_base(time_base);
+            if global_header {
+                enc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
+            }
+            let encoder = enc.open().map_err(err)?;
+            stream.set_parameters(&encoder);
+            stream.set_time_base(time_base);
+            let resampler = ff::software::resampling::Context::get(
+                ff::format::Sample::F32(ff::format::sample::Type::Packed),
+                layout,
+                a.sample_rate,
+                ff::format::Sample::F32(ff::format::sample::Type::Planar),
+                layout,
+                a.sample_rate,
+            )
+            .map_err(err)?;
+            let frame_size = encoder.frame_size() as usize;
+            Some(AudioEnc {
+                stream_index: stream.index(),
+                encoder,
+                resampler,
+                time_base,
+                frame_size: if frame_size == 0 { 1024 } else { frame_size },
+                channels: a.channels,
+                pending: Vec::new(),
+                next_pts: 0,
+            })
+        }
+        None => None,
+    })
+}
+
 struct VideoEnc {
     stream_index: usize,
-    encoder: ff::encoder::Video,
-    scaler: ff::software::scaling::Context,
+    /// `None` for a smart-render stream whose codec cannot be re-encoded to
+    /// match: it only takes copied packets.
+    encoder: Option<ff::encoder::Video>,
+    scaler: Option<ff::software::scaling::Context>,
     time_base: ff::Rational,
+    /// Frames written so far, in `time_base` units (one per frame).
     next_pts: i64,
+    /// Smart render (EXP-05): open sources and the last timestamp written.
+    copy: Option<CopyState>,
+}
+
+struct CopyState {
+    inputs: std::collections::HashMap<String, ff::format::context::Input>,
+    /// Last DTS written, in the output stream's time base; copied B-frame
+    /// streams are kept strictly increasing across cuts.
+    last_dts: Option<i64>,
+    /// Frames sent to the encoder whose packets have not come out yet.
+    pending: i64,
 }
 
 struct AudioEnc {
@@ -726,6 +879,9 @@ unsafe impl Send for FfmpegEncoder {}
 
 impl FfmpegEncoder {
     pub fn create(path: impl AsRef<Path>, settings: EncodeSettings) -> Result<Self> {
+        if let Some(template) = settings.smart.clone() {
+            return Self::create_smart(path.as_ref(), settings, &template);
+        }
         init();
         let mut output = ff::format::output(&path).map_err(err)?;
         let global_header = output
@@ -823,56 +979,15 @@ impl FfmpegEncoder {
             set_matrix(&mut scaler, settings.hdr.is_some());
             VideoEnc {
                 stream_index: stream.index(),
-                encoder,
-                scaler,
+                encoder: Some(encoder),
+                scaler: Some(scaler),
                 time_base,
                 next_pts: 0,
+                copy: None,
             }
         };
 
-        let audio = match &settings.audio {
-            Some(a) => {
-                let codec = ff::encoder::find(ff::codec::Id::AAC)
-                    .ok_or_else(|| Error::Unsupported("no AAC encoder".into()))?;
-                let mut stream = output.add_stream(codec).map_err(err)?;
-                let ctx = ff::codec::context::Context::new_with_codec(codec);
-                let mut enc = ctx.encoder().audio().map_err(err)?;
-                let layout = ff::ChannelLayout::default(a.channels as i32);
-                enc.set_rate(a.sample_rate as i32);
-                enc.set_channel_layout(layout);
-                enc.set_format(ff::format::Sample::F32(ff::format::sample::Type::Planar));
-                enc.set_bit_rate(a.bitrate);
-                let time_base = ff::Rational::new(1, a.sample_rate as i32);
-                enc.set_time_base(time_base);
-                if global_header {
-                    enc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
-                }
-                let encoder = enc.open().map_err(err)?;
-                stream.set_parameters(&encoder);
-                stream.set_time_base(time_base);
-                let resampler = ff::software::resampling::Context::get(
-                    ff::format::Sample::F32(ff::format::sample::Type::Packed),
-                    layout,
-                    a.sample_rate,
-                    ff::format::Sample::F32(ff::format::sample::Type::Planar),
-                    layout,
-                    a.sample_rate,
-                )
-                .map_err(err)?;
-                let frame_size = encoder.frame_size() as usize;
-                Some(AudioEnc {
-                    stream_index: stream.index(),
-                    encoder,
-                    resampler,
-                    time_base,
-                    frame_size: if frame_size == 0 { 1024 } else { frame_size },
-                    channels: a.channels,
-                    pending: Vec::new(),
-                    next_pts: 0,
-                })
-            }
-            None => None,
-        };
+        let audio = open_audio(&mut output, &settings, global_header)?;
 
         output.write_header().map_err(err)?;
         Ok(Self {
@@ -885,8 +1000,11 @@ impl FfmpegEncoder {
     }
 
     fn write_video_packets(&mut self) -> Result<()> {
+        let Some(encoder) = self.video.encoder.as_mut() else {
+            return Ok(());
+        };
         let mut packet = ff::Packet::empty();
-        while self.video.encoder.receive_packet(&mut packet).is_ok() {
+        while encoder.receive_packet(&mut packet).is_ok() {
             packet.set_stream(self.video.stream_index);
             let out_tb = self
                 .output
@@ -894,9 +1012,193 @@ impl FfmpegEncoder {
                 .unwrap()
                 .time_base();
             packet.rescale_ts(self.video.time_base, out_tb);
+            if let Some(copy) = self.video.copy.as_mut() {
+                copy.pending -= 1;
+                monotonic(&mut packet, &mut copy.last_dts);
+            }
             packet.write_interleaved(&mut self.output).map_err(err)?;
         }
         Ok(())
+    }
+
+    /// Smart render: open an encoder whose stream takes `template`'s video
+    /// codec and parameters. Intra-only codecs with an encoder here also
+    /// encode rendered frames to match; others only take copied packets.
+    fn create_smart(path: &Path, settings: EncodeSettings, template: &str) -> Result<Self> {
+        init();
+        let mut output = ff::format::output(&path).map_err(err)?;
+        let global_header = output
+            .format()
+            .flags()
+            .contains(ff::format::Flags::GLOBAL_HEADER);
+        let fr = settings.frame_rate.0;
+        let input = ff::format::input(&template).map_err(err)?;
+        let src = input
+            .streams()
+            .best(ff::media::Type::Video)
+            .ok_or_else(|| Error::InvalidArgument(format!("{template} has no video")))?;
+        let par = src.parameters();
+        let id = par.id();
+        // SAFETY: plain reads of the source stream's codec parameters.
+        let (format, profile, width, height) = unsafe {
+            let p = &*par.as_ptr();
+            (
+                ff::format::Pixel::from(std::mem::transmute::<i32, ff::ffi::AVPixelFormat>(
+                    p.format,
+                )),
+                p.profile,
+                p.width as u32,
+                p.height as u32,
+            )
+        };
+        if (width, height) != (settings.width, settings.height) {
+            return Err(Error::InvalidArgument(format!(
+                "{template} is {width}x{height}, the export {}x{}",
+                settings.width, settings.height
+            )));
+        }
+        let time_base = ff::Rational::new(fr.den as i32, fr.num as i32);
+        let mut encoder = None;
+        let mut scaler = None;
+        let mut encoder_name = format!("{} (copy)", id.name());
+        if intra_only(id) {
+            if let Some(codec) = ff::encoder::find(id) {
+                let ctx = ff::codec::context::Context::new_with_codec(codec);
+                let mut enc = ctx.encoder().video().map_err(err)?;
+                enc.set_width(width);
+                enc.set_height(height);
+                enc.set_format(format);
+                enc.set_time_base(time_base);
+                enc.set_frame_rate(Some(ff::Rational::new(fr.num as i32, fr.den as i32)));
+                // One thread: every packet comes out before the next copy.
+                enc.set_threading(ff::threading::Config {
+                    kind: ff::threading::Type::None,
+                    count: 1,
+                });
+                if global_header {
+                    enc.set_flags(ff::codec::Flags::GLOBAL_HEADER);
+                }
+                // SAFETY: a plain field of the unopened context.
+                unsafe { (*enc.as_mut_ptr()).profile = profile };
+                let opened = enc.open_with(ff::Dictionary::new()).map_err(err)?;
+                let mut sws = ff::software::scaling::Context::get(
+                    ff::format::Pixel::RGBA,
+                    width,
+                    height,
+                    format,
+                    width,
+                    height,
+                    ff::software::scaling::Flags::BILINEAR,
+                )
+                .map_err(err)?;
+                set_matrix(&mut sws, false);
+                encoder_name = format!("{} (copy + {})", id.name(), codec.name());
+                encoder = Some(opened);
+                scaler = Some(sws);
+            }
+        }
+        let video = {
+            let mut stream = output.add_stream(None::<ff::Codec>).map_err(err)?;
+            stream.set_parameters(par);
+            // SAFETY: let the muxer pick its own tag for the codec.
+            unsafe { (*(*stream.as_mut_ptr()).codecpar).codec_tag = 0 };
+            stream.set_time_base(time_base);
+            stream.set_rate(ff::Rational::new(fr.num as i32, fr.den as i32));
+            stream.set_avg_frame_rate(ff::Rational::new(fr.num as i32, fr.den as i32));
+            let mut inputs = std::collections::HashMap::new();
+            inputs.insert(template.to_string(), input);
+            VideoEnc {
+                stream_index: stream.index(),
+                encoder,
+                scaler,
+                time_base,
+                next_pts: 0,
+                copy: Some(CopyState {
+                    inputs,
+                    last_dts: None,
+                    pending: 0,
+                }),
+            }
+        };
+        let audio = open_audio(&mut output, &settings, global_header)?;
+        output.write_header().map_err(err)?;
+        Ok(Self {
+            output,
+            video,
+            audio,
+            settings,
+            encoder_name,
+        })
+    }
+
+    fn copy_packets(&mut self, path: &str, from: Rational, to: Rational) -> Result<u64> {
+        let out_tb = self
+            .output
+            .stream(self.video.stream_index)
+            .unwrap()
+            .time_base();
+        let Some(copy) = self.video.copy.as_mut() else {
+            return Err(Error::Unsupported("not a smart-render encoder".into()));
+        };
+        if copy.pending > 0 {
+            return Err(Error::Unsupported(
+                "the encoder still holds rendered frames".into(),
+            ));
+        }
+        if !copy.inputs.contains_key(path) {
+            let input = ff::format::input(&path).map_err(err)?;
+            copy.inputs.insert(path.to_string(), input);
+        }
+        let input = copy.inputs.get_mut(path).expect("just opened");
+        let stream = input
+            .streams()
+            .best(ff::media::Type::Video)
+            .ok_or_else(|| Error::InvalidArgument(format!("{path} has no video")))?;
+        let (index, src_tb) = (stream.index(), stream.time_base());
+        let src_tb = Rational::new(src_tb.numerator() as i64, src_tb.denominator() as i64);
+        // Back to the keyframe at or before `from`.
+        let ts = (from * Rational::from_int(ff::ffi::AV_TIME_BASE as i64)).floor();
+        input.seek(ts, ..ts + 1).map_err(err)?;
+        let base = self.video.next_pts;
+        let frame = Rational::new(
+            self.video.time_base.numerator() as i64,
+            self.video.time_base.denominator() as i64,
+        );
+        // Source time -> output ticks, relative to `from`, after what is written.
+        let per_tick = Rational::new(out_tb.denominator() as i64, out_tb.numerator() as i64);
+        let to_out = |t: Rational| -> i64 {
+            (((t - from) + frame * Rational::from_int(base)) * per_tick).round()
+        };
+        let mut copied = 0u64;
+        let mut packets = Vec::new();
+        for (s, packet) in input.packets() {
+            if s.index() != index {
+                continue;
+            }
+            let Some(pts) = packet.pts() else { continue };
+            let t = src_tb * Rational::from_int(pts);
+            let dts_t = packet.dts().map_or(t, |d| src_tb * Rational::from_int(d));
+            if dts_t >= to && t >= to {
+                break;
+            }
+            if t < from || t >= to {
+                continue;
+            }
+            let mut p = packet.clone();
+            p.set_stream(self.video.stream_index);
+            p.set_pts(Some(to_out(t)));
+            p.set_dts(Some(to_out(dts_t)));
+            p.set_duration(to_out(t + frame) - to_out(t));
+            p.set_position(-1);
+            packets.push(p);
+            copied += 1;
+        }
+        for mut p in packets {
+            monotonic(&mut p, &mut copy.last_dts);
+            p.write_interleaved(&mut self.output).map_err(err)?;
+        }
+        self.video.next_pts += copied as i64;
+        Ok(copied)
     }
 
     fn write_audio_packets(&mut self) -> Result<()> {
@@ -995,11 +1297,22 @@ impl debut_platform::Encoder for FfmpegEncoder {
             }
             rgba
         };
+        let (Some(scaler), Some(encoder)) =
+            (self.video.scaler.as_mut(), self.video.encoder.as_mut())
+        else {
+            return Err(Error::Unsupported(format!(
+                "{} cannot be encoded to match here; this stream only takes copied frames",
+                self.encoder_name
+            )));
+        };
         let mut yuv = ff::frame::Video::empty();
-        self.video.scaler.run(&rgba, &mut yuv).map_err(err)?;
+        scaler.run(&rgba, &mut yuv).map_err(err)?;
         yuv.set_pts(Some(self.video.next_pts));
         self.video.next_pts += 1;
-        self.video.encoder.send_frame(&yuv).map_err(err)?;
+        encoder.send_frame(&yuv).map_err(err)?;
+        if let Some(copy) = self.video.copy.as_mut() {
+            copy.pending += 1;
+        }
         self.write_video_packets()
     }
 
@@ -1025,9 +1338,15 @@ impl debut_platform::Encoder for FfmpegEncoder {
         FfmpegEncoder::used_fallback(self)
     }
 
+    fn copy_video(&mut self, path: &str, from: Rational, to: Rational) -> Result<u64> {
+        self.copy_packets(path, from, to)
+    }
+
     fn finish(mut self: Box<Self>) -> Result<()> {
         self.encode_audio_frame(true)?;
-        self.video.encoder.send_eof().map_err(err)?;
+        if let Some(encoder) = self.video.encoder.as_mut() {
+            encoder.send_eof().map_err(err)?;
+        }
         self.write_video_packets()?;
         if let Some(a) = self.audio.as_mut() {
             a.encoder.send_eof().map_err(err)?;
@@ -1256,6 +1575,7 @@ mod tests {
             }),
             encoder: None,
             hdr: None,
+            smart: None,
         };
         let mut enc = Box::new(FfmpegEncoder::create(&path, settings).unwrap());
         // 30 frames: left half red, right half ramps from black to white.
@@ -1367,6 +1687,7 @@ mod tests {
             audio: None,
             encoder: Some("h264_nvenc".into()),
             hdr: Some(HdrSettings::hdr10()),
+            smart: None,
         };
         let mut enc = Box::new(FfmpegEncoder::create(&path, settings).unwrap());
         assert_eq!(enc.encoder_name(), "libx265");
@@ -1476,6 +1797,7 @@ mod tests {
             audio: None,
             encoder: None,
             hdr: Some(HdrSettings::hlg()),
+            smart: None,
         };
         let mut enc = Box::new(FfmpegEncoder::create(&path, settings).unwrap());
         for n in 0..3 {
@@ -1504,6 +1826,162 @@ mod tests {
         std::fs::remove_file(path).ok();
     }
 
+    fn fixture(name: &str) -> String {
+        format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))
+    }
+
+    /// Packets of the video stream as (pts seconds, bytes).
+    fn video_packets(path: &str) -> Vec<(f64, Vec<u8>)> {
+        let mut input = ff::format::input(&path).unwrap();
+        let stream = input.streams().best(ff::media::Type::Video).unwrap();
+        let (index, tb) = (stream.index(), stream.time_base());
+        let mut out: Vec<(f64, Vec<u8>)> = input
+            .packets()
+            .filter(|(s, _)| s.index() == index)
+            .map(|(_, p)| {
+                (
+                    p.pts().unwrap() as f64 * tb.numerator() as f64 / tb.denominator() as f64,
+                    p.data().unwrap().to_vec(),
+                )
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.total_cmp(&b.0));
+        out
+    }
+
+    #[test]
+    fn stream_copy_info_tells_intra_from_long_gop() {
+        let prores = stream_copy_info(&fixture("prores_64x36_2s.mov")).unwrap();
+        assert_eq!(prores.codec, "prores");
+        assert!(prores.intra_only && prores.can_match);
+        assert!(prores.keyframes.is_empty());
+        assert_eq!(prores.duration, Rational::from_int(2));
+        let h264 = stream_copy_info(&fixture("gop10_64x36_2s.mp4")).unwrap();
+        assert_eq!(h264.codec, "h264");
+        assert!(!h264.intra_only && !h264.can_match);
+        let keys: Vec<f64> = h264.keyframes.iter().map(|k| k.as_f64()).collect();
+        assert_eq!(keys, vec![0.0, 0.4, 0.8, 1.2, 1.6]);
+        assert_ne!(prores.fingerprint, h264.fingerprint);
+        let again = stream_copy_info(&fixture("prores_64x36_2s.mov")).unwrap();
+        assert_eq!(again.fingerprint, prores.fingerprint);
+    }
+
+    #[test]
+    fn smart_prores_mixes_copied_and_encoded_frames() {
+        use debut_platform::Encoder;
+        let src = fixture("prores_64x36_2s.mov");
+        let path = std::env::temp_dir().join(format!("debut-smart-{}.mov", std::process::id()));
+        let settings = EncodeSettings {
+            width: 64,
+            height: 36,
+            frame_rate: FrameRate::FPS_25,
+            crf: 20,
+            audio: None,
+            encoder: None,
+            hdr: None,
+            smart: Some(src.clone()),
+        };
+        let mut enc = Box::new(FfmpegEncoder::create(&path, settings).unwrap());
+        assert!(
+            enc.encoder_name().contains("prores"),
+            "{}",
+            enc.encoder_name()
+        );
+        let t = |f: i64| FrameRate::FPS_25.frame_to_time(f);
+        // Source frames 10..20, five rendered grey frames, then 30..40.
+        assert_eq!(enc.copy_video(&src, t(10), t(20)).unwrap(), 10);
+        for n in 0..5 {
+            enc.push_video(&VideoFrame {
+                pts: t(10 + n),
+                width: 64,
+                height: 36,
+                rgba8: vec![128; 64 * 36 * 4],
+                ..Default::default()
+            })
+            .unwrap();
+        }
+        assert_eq!(enc.copy_video(&src, t(30), t(40)).unwrap(), 10);
+        enc.finish().unwrap();
+
+        let source = video_packets(&src);
+        let out = video_packets(path.to_str().unwrap());
+        assert_eq!(out.len(), 25);
+        // Copied frames are the source's packets, byte for byte.
+        for i in 0..10 {
+            assert_eq!(out[i].1, source[10 + i].1, "frame {i}");
+            assert_eq!(out[15 + i].1, source[30 + i].1, "frame {}", 15 + i);
+        }
+        for (i, (pts, _)) in out.iter().enumerate() {
+            assert!((pts - i as f64 * 0.04).abs() < 1e-3, "frame {i} at {pts}");
+        }
+        // The whole file decodes: grey in the middle, picture around it.
+        let mut dec = FfmpegDecoder::open(&path).unwrap();
+        let mut n = 0;
+        while let Some(f) = dec.next_video().unwrap() {
+            let p = &f.rgba8[(18 * 64 + 32) * 4..][..3];
+            let grey = p.iter().all(|c| (*c as i32 - 128).abs() < 6);
+            assert_eq!(grey, (10..15).contains(&n), "frame {n}: {p:?}");
+            n += 1;
+        }
+        assert_eq!(n, 25);
+        std::fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn smart_h264_copies_whole_gops_only() {
+        use debut_platform::Encoder;
+        let src = fixture("gop10_64x36_2s.mp4");
+        let path = std::env::temp_dir().join(format!("debut-smart-{}.mp4", std::process::id()));
+        let settings = EncodeSettings {
+            width: 64,
+            height: 36,
+            frame_rate: FrameRate::FPS_25,
+            crf: 20,
+            audio: None,
+            encoder: None,
+            hdr: None,
+            smart: Some(src.clone()),
+        };
+        let mut enc = Box::new(FfmpegEncoder::create(&path, settings).unwrap());
+        let t = |f: i64| FrameRate::FPS_25.frame_to_time(f);
+        // Long-GOP: rendered frames cannot be matched.
+        assert!(enc
+            .push_video(&VideoFrame {
+                width: 64,
+                height: 36,
+                rgba8: vec![0; 64 * 36 * 4],
+                ..Default::default()
+            })
+            .is_err());
+        // GOP 3 then GOP 1 (B-frames reorder inside each).
+        assert_eq!(enc.copy_video(&src, t(30), t(40)).unwrap(), 10);
+        assert_eq!(enc.copy_video(&src, t(10), t(20)).unwrap(), 10);
+        enc.finish().unwrap();
+
+        let source = video_packets(&src);
+        let out = video_packets(path.to_str().unwrap());
+        assert_eq!(out.len(), 20);
+        for i in 0..10 {
+            assert_eq!(out[i].1, source[30 + i].1, "frame {i}");
+            assert_eq!(out[10 + i].1, source[10 + i].1, "frame {}", 10 + i);
+        }
+        // It decodes to the same pictures as the source frames.
+        let mut want = Vec::new();
+        let mut dec = FfmpegDecoder::open(&src).unwrap();
+        while let Some(f) = dec.next_video().unwrap() {
+            want.push(f.rgba8);
+        }
+        let mut dec = FfmpegDecoder::open(&path).unwrap();
+        let mut n = 0usize;
+        while let Some(f) = dec.next_video().unwrap() {
+            let from = if n < 10 { 30 + n } else { n };
+            assert_eq!(f.rgba8, want[from], "frame {n}");
+            n += 1;
+        }
+        assert_eq!(n, 20);
+        std::fs::remove_file(path).ok();
+    }
+
     #[test]
     fn hardware_encoder_detection_and_software_fallback() {
         // Whatever this machine has, the probe must not panic and every entry
@@ -1527,6 +2005,7 @@ mod tests {
                 audio: None,
                 encoder: Some("h264_definitely_not_an_encoder".into()),
                 hdr: None,
+                smart: None,
             },
         )
         .unwrap();

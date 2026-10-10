@@ -19,7 +19,7 @@ pub use ai::{Transcriber, TranscriptSegment};
 pub use audio_out::AudioOut;
 pub use codec::{
     AudioBlock, AudioEncodeSettings, AudioInfo, DecodePath, Decoder, EncodeSettings, Encoder,
-    HdrSettings, HdrTransfer, HwEncoder, SourceTags, VideoFrame, VideoInfo,
+    HdrSettings, HdrTransfer, HwEncoder, SourceTags, StreamCopyInfo, VideoFrame, VideoInfo,
 };
 pub use display::Display;
 pub use file_store::FileStore;
@@ -55,6 +55,13 @@ pub trait Platform: Send + Sync + 'static {
         path: &str,
         settings: EncodeSettings,
     ) -> debut_core::Result<Box<dyn Encoder>>;
+
+    /// What a file's video stream allows for packet copying (EXP-05).
+    fn stream_copy_info(&self, path: &str) -> debut_core::Result<StreamCopyInfo> {
+        Err(debut_core::Error::Unsupported(format!(
+            "packet copying is not available here ({path})"
+        )))
+    }
 
     /// The playback device; a silent stand-in when none is available, so the
     /// transport still runs (the audio clock is the master clock).

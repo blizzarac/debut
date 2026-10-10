@@ -137,6 +137,33 @@ pub trait Encoder: Send {
     fn used_fallback(&self) -> bool {
         false
     }
+    /// Smart render (EXP-05): copy the compressed video frames of `path`
+    /// whose presentation time lies in `[from, to)` into the output, after
+    /// the frames written so far. Needs an encoder created with
+    /// `EncodeSettings::smart`; returns the number of frames copied.
+    fn copy_video(&mut self, path: &str, from: Rational, to: Rational) -> Result<u64> {
+        let _ = (path, from, to);
+        Err(debut_core::Error::Unsupported(
+            "this encoder cannot copy packets".into(),
+        ))
+    }
+}
+
+/// What a file's video stream allows for smart render (EXP-05).
+#[derive(Clone, Debug, PartialEq)]
+pub struct StreamCopyInfo {
+    /// Codec name, e.g. "prores" or "h264".
+    pub codec: String,
+    /// Every frame is a keyframe (ProRes, DNxHD, MJPEG and the like).
+    pub intra_only: bool,
+    /// Rendered frames can be encoded to fit into this stream (intra-only
+    /// codecs with an encoder here), so copied and rendered stretches mix.
+    pub can_match: bool,
+    /// Streams with the same fingerprint can share one output stream.
+    pub fingerprint: u64,
+    /// Presentation times of the keyframes (empty when intra-only).
+    pub keyframes: Vec<Rational>,
+    pub duration: Rational,
 }
 
 /// Encode settings for one output file (EXP-01): H.264 video plus optional AAC
@@ -154,6 +181,10 @@ pub struct EncodeSettings {
     /// High dynamic range output (EXP-06): 10-bit HEVC, Rec.2020, PQ or HLG,
     /// fed 16-bit frames. `None` is 8-bit Rec.709.
     pub hdr: Option<HdrSettings>,
+    /// Smart render (EXP-05): the video stream takes this file's codec and
+    /// parameters, so its packets can be copied (`Encoder::copy_video`);
+    /// rendered frames are encoded to match where the codec allows.
+    pub smart: Option<String>,
 }
 
 /// The HDR signal an export writes.

@@ -2438,3 +2438,83 @@ fn shape_clips_render_edit_and_undo() {
         tracks
     );
 }
+
+/// Smart render (EXP-05): untouched ProRes is copied, the graded copy of it
+/// rendered and encoded to match, in one .mov.
+#[test]
+fn smart_render_copies_untouched_prores() {
+    let dir = std::env::temp_dir().join(format!("debut-smart_render-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = TempDir(dir);
+    let mut s = native();
+    let id = s.ids.fresh();
+    s.start(
+        Project::new(id, "t"),
+        dir.join("t.debut").to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    let src = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../debut-platform-native/tests/fixtures/prores_64x36_2s.mov"
+    );
+    let m = s.import_media(src.to_string()).unwrap();
+    let seq = s.ensure_sequence().unwrap();
+    assert_eq!((seq.width, seq.height, seq.frame_rate), (64, 36, [25, 1]));
+    let v = seq.tracks[0].id.clone();
+    s.add_clip(&v, &m.id, 0.0).unwrap();
+    s.add_clip(&v, &m.id, 2.0).unwrap();
+    let graded = sequence_dto(s.first_sequence().unwrap()).tracks[0].clips[1]
+        .id
+        .clone();
+    s.add_effect(&v, &graded, "grade").unwrap();
+
+    let wait = |s: &mut Session, job: u64| {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            let e = s.export_status().into_iter().find(|e| e.id == job).unwrap();
+            if e.state == "done" || e.state == "failed" || std::time::Instant::now() > deadline {
+                break e;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    };
+    let out = dir.join("smart.mov").to_string_lossy().into_owned();
+    let job = s
+        .export_start_with(out.clone(), "YouTube 1080p", None, false, false, true)
+        .unwrap();
+    let e = wait(&mut s, job);
+    assert_eq!(e.state, "done", "{:?}", e.error);
+    assert!(e.name.contains("smart: 50% copied"), "{}", e.name);
+    assert_eq!((e.frames_copied, e.frames_done), (50, 100));
+
+    // The copied half decodes to the source's own frames.
+    let mut want = Vec::new();
+    let mut dec = s.platform.open_decoder(src).unwrap();
+    while let Some(f) = dec.next_video().unwrap() {
+        want.push(f.rgba8);
+    }
+    let mut dec = s.platform.open_decoder(&out).unwrap();
+    assert_eq!(dec.video_info().unwrap().codec, "prores");
+    let mut n = 0;
+    while let Some(f) = dec.next_video().unwrap() {
+        if n < 50 {
+            assert_eq!(f.rgba8, want[n], "frame {n}");
+        }
+        n += 1;
+    }
+    assert_eq!(n, 100);
+
+    // ProRes cannot go into .mp4: the job renders normally and says why.
+    let out = dir.join("smart.mp4").to_string_lossy().into_owned();
+    let job = s
+        .export_start_with(out, "YouTube 1080p", None, false, false, true)
+        .unwrap();
+    let e = wait(&mut s, job);
+    assert_eq!(e.state, "done", "{:?}", e.error);
+    assert!(
+        e.name.contains("smart off: prores copies into .mov"),
+        "{}",
+        e.name
+    );
+    assert_eq!(e.frames_copied, 0);
+}
