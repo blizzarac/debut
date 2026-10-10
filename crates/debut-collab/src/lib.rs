@@ -4,6 +4,7 @@
 //! them over everyone else's, so nobody waits on the network to edit.
 
 pub mod access; // COL-08 roles; COL-03/04 reviewers comment through markers
+pub mod auth; // NFR-13 invite codes, challenge-response
 pub mod locks; // COL-01 track locks
 pub mod presence; // COL-02 who is where
 pub mod protocol; // wire messages (JSON lines)

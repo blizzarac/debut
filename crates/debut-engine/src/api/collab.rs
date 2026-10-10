@@ -17,6 +17,9 @@ pub(crate) struct Collab {
     client: Client,
     address: String,
     name: String,
+    /// Invite code: answers the server's challenge (never sent itself).
+    code: String,
+    /// Assigned by the server on Welcome; reviewer (the narrower) until then.
     role: Role,
     joined: bool,
     peers: std::collections::HashMap<u64, Presence>,
@@ -77,26 +80,17 @@ fn role_name(r: Role) -> String {
 }
 
 impl Session {
-    /// Join (or rejoin) the session at `addr` as `name` with `role`
-    /// ("editor" or "reviewer"). The shared project replaces the open one
-    /// once the server answers (`collab_poll`); edits made while away are
-    /// replayed on it.
-    pub fn collab_join(&mut self, addr: &str, name: String, role: &str) -> Result<(), String> {
-        let role = match role {
-            "editor" => Role::Editor,
-            "reviewer" => Role::Reviewer,
-            other => return Err(format!("unknown role {other}")),
-        };
+    /// Join (or rejoin) the session at `addr` as `name` with an invite code
+    /// (NFR-13). The server answers with a challenge, which `collab_poll`
+    /// answers with HMAC(code, nonce); the role (editor or reviewer) comes
+    /// from which code it is. The shared project replaces the open one once
+    /// the server welcomes us; edits made while away are replayed on it.
+    pub fn collab_join(&mut self, addr: &str, name: String, code: &str) -> Result<(), String> {
+        if code.trim().is_empty() {
+            return Err("an invite code is needed to join".into());
+        }
         self.project().ok_or("no project open")?;
-        let mut conn = self.platform.connect(addr).map_err(|e| e.to_string())?;
-        conn.send(
-            &Message::Hello {
-                name: name.clone(),
-                role,
-            }
-            .to_line(),
-        )
-        .map_err(|e| e.to_string())?;
+        let conn = self.platform.connect(addr).map_err(|e| e.to_string())?;
         // Keep the client (and its pending edits) across reconnects.
         let client = self.collab.take().map(|c| c.client).unwrap_or_default();
         self.collab = Some(Collab {
@@ -104,7 +98,8 @@ impl Session {
             client,
             address: addr.to_string(),
             name,
-            role,
+            code: code.trim().to_string(),
+            role: Role::Reviewer,
             joined: false,
             peers: Default::default(),
             locks: Vec::new(),
@@ -166,8 +161,17 @@ impl Session {
                 continue;
             };
             match msg {
+                Message::Challenge { nonce } => {
+                    let proof = debut_collab::auth::proof(&c.code, &nonce);
+                    let name = c.name.clone();
+                    c.send(&Message::Hello { name, proof });
+                }
+                Message::Denied { reason } => {
+                    c.notes.push(format!("could not join: {reason}"));
+                }
                 Message::Welcome {
                     client,
+                    role,
                     version,
                     project,
                     locks,
@@ -180,6 +184,7 @@ impl Session {
                     ws.replace_project(p);
                     note(&mut c, events);
                     c.joined = true;
+                    c.role = role;
                     c.locks = locks;
                     c.peers = peers.into_iter().map(|p| (p.client, p)).collect();
                     for (id, cmd) in c.client.outgoing() {

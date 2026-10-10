@@ -4,11 +4,17 @@
 //!
 //! Each connection gets a reader thread and a writer fed by a channel, so a
 //! slow client never holds up the others.
+//!
+//! Joining takes an invite code (NFR-13): the server sends a random nonce,
+//! the client answers with HMAC(code, nonce), and the role is the one whose
+//! code matches. Lines from clients are capped, so a peer cannot make the
+//! server buffer without limit.
 
+use debut_collab::auth::Invite;
 use debut_collab::{access, Locks, Message, Presence, Role, Server};
 use debut_project::Project;
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{channel, Sender};
 use std::sync::{Arc, Mutex};
@@ -23,6 +29,7 @@ struct Peer {
 }
 
 struct Hub {
+    invite: Invite,
     server: Server,
     locks: Locks,
     peers: HashMap<u64, Peer>,
@@ -137,18 +144,73 @@ impl Handle {
     }
 }
 
+/// Longest line a client may send (an edit is far smaller).
+pub const MAX_LINE: usize = 1 << 20;
+
+/// Random bytes from the OS.
+pub fn random<const N: usize>() -> [u8; N] {
+    let mut b = [0u8; N];
+    getrandom::getrandom(&mut b).expect("OS random numbers");
+    b
+}
+
+/// Fresh invite codes for a session.
+pub fn new_invite() -> Invite {
+    Invite::from_random(random(), random())
+}
+
+/// One line of at most `max` bytes (without the newline); `None` at end of
+/// stream, on an error or when the line is longer.
+fn read_line(reader: &mut impl BufRead, max: usize) -> Option<String> {
+    let mut buf = Vec::new();
+    let n = reader
+        .by_ref()
+        .take(max as u64 + 1)
+        .read_until(b'\n', &mut buf)
+        .ok()?;
+    if n == 0 || (buf.last() != Some(&b'\n') && buf.len() > max) {
+        return None;
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+    }
+    String::from_utf8(buf).ok()
+}
+
 fn serve_client(hub: Arc<Mutex<Hub>>, stream: TcpStream) {
     let Ok(mut write) = stream.try_clone() else {
         return;
     };
-    let mut lines = BufReader::new(stream).lines();
-    // The first message must be Hello.
-    let Some(Ok(first)) = lines.next() else {
+    let mut reader = BufReader::new(stream);
+    // Challenge, then the first message must be a Hello that answers it.
+    let nonce: String = random::<16>().iter().map(|b| format!("{b:02x}")).collect();
+    if write
+        .write_all(
+            Message::Challenge {
+                nonce: nonce.clone(),
+            }
+            .to_line()
+            .as_bytes(),
+        )
+        .is_err()
+    {
+        return;
+    }
+    let Some(first) = read_line(&mut reader, MAX_LINE) else {
         return;
     };
-    let Some(Message::Hello { name, role }) = Message::from_line(&first) else {
+    let Some(Message::Hello { name, proof }) = Message::from_line(&first) else {
         return;
     };
+    let role = hub.lock().unwrap().invite.role_for(&nonce, &proof);
+    let Some(role) = role else {
+        let denied = Message::Denied {
+            reason: "the invite code is not valid for this session".into(),
+        };
+        let _ = write.write_all(denied.to_line().as_bytes());
+        return;
+    };
+    let name: String = name.chars().take(64).collect();
     let (tx, rx) = channel::<String>();
     std::thread::spawn(move || {
         for line in rx {
@@ -171,6 +233,7 @@ fn serve_client(hub: Arc<Mutex<Hub>>, stream: TcpStream) {
         };
         let welcome = Message::Welcome {
             client: id,
+            role,
             version: h.server.version(),
             project: debut_project::schema::to_json(&h.server.project).unwrap_or_default(),
             locks: h.locks.all(),
@@ -181,8 +244,7 @@ fn serve_client(hub: Arc<Mutex<Hub>>, stream: TcpStream) {
         h.peers.insert(id, Peer { tx, role, presence });
         id
     };
-    for line in lines {
-        let Ok(line) = line else { break };
+    while let Some(line) = read_line(&mut reader, MAX_LINE) {
         if let Some(msg) = Message::from_line(&line) {
             hub.lock().unwrap().handle(id, msg);
         }
@@ -190,15 +252,18 @@ fn serve_client(hub: Arc<Mutex<Hub>>, stream: TcpStream) {
     hub.lock().unwrap().leave(id);
 }
 
-/// Serve `project` on `listener` in the background. `on_change` is called
-/// with the project after every accepted edit (to save it).
+/// Serve `project` on `listener` in the background to holders of `invite`'s
+/// codes. `on_change` is called with the project after every accepted edit
+/// (to save it).
 pub fn serve(
     listener: TcpListener,
     project: Project,
     on_change: Option<OnChange>,
+    invite: Invite,
 ) -> std::io::Result<Handle> {
     let addr = listener.local_addr()?;
     let hub = Arc::new(Mutex::new(Hub {
+        invite,
         server: Server::new(project),
         locks: Locks::default(),
         peers: HashMap::new(),

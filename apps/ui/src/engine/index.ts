@@ -223,6 +223,8 @@ export interface PluginsInfo {
   plugins: PluginInfo[];
   /** Binaries that could not be used: [path, why]. */
   problems: [string, string][];
+  /** Binaries approved to run (NFR-13). */
+  approved?: string[];
 }
 
 export interface PluginsApi {
@@ -232,6 +234,9 @@ export interface PluginsApi {
   list(): Promise<PluginsInfo>;
   /** The last error a plugin effect reported while rendering. */
   lastError(): Promise<string | null>;
+  /** Let a plugin binary run, pinned to its current contents; projects from others need this first. */
+  approve?(path: string): Promise<void>;
+  revoke?(path: string): Promise<void>;
 }
 
 export interface ExportPreset {
@@ -723,10 +728,18 @@ export interface CollabStatus {
   notes: string[];
 }
 
+export interface HostInfo {
+  address: string;
+  port: number;
+  editor_code: string;
+  reviewer_code: string | null;
+}
+
 export interface CollabApi {
-  /** Serve the open project on `port` and join it; returns the local address. */
-  host(port: number, name: string): Promise<string>;
-  join(addr: string, name: string, role: "editor" | "reviewer"): Promise<void>;
+  /** Serve the open project on `port` and join it; returns where to connect and the invite codes. */
+  host(port: number, name: string): Promise<HostInfo>;
+  /** Join with an invite code; the code decides the role. */
+  join(addr: string, name: string, code: string): Promise<void>;
   leave(): Promise<void>;
   /** Read the network; [project changed, session state]. */
   poll(clip: string | null): Promise<[boolean, CollabStatus | null]>;

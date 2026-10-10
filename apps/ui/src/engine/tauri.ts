@@ -7,6 +7,7 @@ import type {
   PluginsApi,
   PluginsInfo,
   TitleInfo,
+  HostInfo,
   ScriptApi,
   ScriptOutput,
   ShapeInfo,
@@ -276,6 +277,12 @@ class TauriPlugins implements PluginsApi {
   lastError() {
     return invoke<string | null>("plugin_error");
   }
+  approve(path: string) {
+    return invoke<void>("approve_plugin", { path });
+  }
+  revoke(path: string) {
+    return invoke<void>("revoke_plugin", { path });
+  }
 }
 
 class TauriMixer implements MixerApi {
@@ -328,10 +335,10 @@ class TauriExport implements ExportApi {
 
 class TauriCollab implements CollabApi {
   host(port: number, name: string) {
-    return invoke<string>("collab_host", { port, name });
+    return invoke<HostInfo>("collab_host", { port, name });
   }
-  join(addr: string, name: string, role: "editor" | "reviewer") {
-    return invoke<void>("collab_join", { addr, name, role });
+  join(addr: string, name: string, code: string) {
+    return invoke<void>("collab_join", { addr, name, code });
   }
   leave() {
     return invoke<void>("collab_leave");

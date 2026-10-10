@@ -233,6 +233,17 @@ pub fn plugin_error(state: State<'_, Shared>) -> Option<String> {
     lock(&state).plugin_error()
 }
 
+/// Let a plugin binary run, pinned to its current contents (NFR-13).
+#[tauri::command]
+pub fn approve_plugin(state: State<'_, Shared>, path: String) -> Result<(), String> {
+    lock(&state).approve_plugin(&path)
+}
+
+#[tauri::command]
+pub fn revoke_plugin(state: State<'_, Shared>, path: String) -> Result<(), String> {
+    lock(&state).revoke_plugin(&path)
+}
+
 #[tauri::command]
 pub fn set_track_duck(
     state: State<'_, Shared>,
@@ -802,28 +813,47 @@ pub fn snap_points(
 /// The collaboration server this app hosts, if any.
 static HOSTED: Mutex<Option<debut_collab_server::Handle>> = Mutex::new(None);
 
-/// Host a shared session on `port` with the open project and join it.
+/// What a host hands out: where to connect and the invite codes (NFR-13).
+#[derive(serde::Serialize)]
+pub struct HostDto {
+    pub address: String,
+    pub port: u16,
+    pub editor_code: String,
+    pub reviewer_code: Option<String>,
+}
+
+/// Host a shared session on `port` with the open project and join it as an
+/// editor. Others join with one of the returned codes.
 #[tauri::command]
-pub fn collab_host(state: State<'_, Shared>, port: u16, name: String) -> Result<String, String> {
+pub fn collab_host(state: State<'_, Shared>, port: u16, name: String) -> Result<HostDto, String> {
     let mut s = lock(&state);
     let project = s.project_snapshot().ok_or("no project open")?;
     let listener = std::net::TcpListener::bind(("0.0.0.0", port))
         .map_err(|e| format!("cannot listen on port {port}: {e}"))?;
-    let handle = debut_collab_server::serve(listener, project, None).map_err(|e| e.to_string())?;
-    let local = format!("127.0.0.1:{}", handle.addr.port());
+    let invite = debut_collab_server::new_invite();
+    let handle = debut_collab_server::serve(listener, project, None, invite.clone())
+        .map_err(|e| e.to_string())?;
+    let port = handle.addr.port();
+    let local = format!("127.0.0.1:{port}");
     *HOSTED.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
-    s.collab_join(&local, name, "editor")?;
-    Ok(local)
+    s.collab_join(&local, name, &invite.editor)?;
+    Ok(HostDto {
+        address: local,
+        port,
+        editor_code: invite.editor,
+        reviewer_code: invite.reviewer,
+    })
 }
 
+/// Join a session with an invite code; the code decides the role.
 #[tauri::command]
 pub fn collab_join(
     state: State<'_, Shared>,
     addr: String,
     name: String,
-    role: String,
+    code: String,
 ) -> Result<(), String> {
-    lock(&state).collab_join(&addr, name, &role)
+    lock(&state).collab_join(&addr, name, &code)
 }
 
 #[tauri::command]

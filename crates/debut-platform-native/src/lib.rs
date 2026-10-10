@@ -31,6 +31,27 @@ pub struct NativePlatform {
     hw_decode: std::sync::atomic::AtomicBool,
     /// Local speech-to-text (GFX-04), from the environment or the settings.
     transcriber: Mutex<Option<Arc<ai::WhisperCli>>>,
+    /// Per-user settings folder (plugin approvals, telemetry consent).
+    settings_dir: Option<String>,
+}
+
+/// `DEBUT_SETTINGS_DIR`, else the OS's per-user config folder + `debut`.
+fn default_settings_dir() -> Option<String> {
+    use std::path::PathBuf;
+    if let Some(d) = std::env::var_os("DEBUT_SETTINGS_DIR") {
+        return Some(PathBuf::from(d).to_string_lossy().into_owned());
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let base = if cfg!(target_os = "macos") {
+        home.map(|h| h.join("Library/Application Support"))
+    } else if cfg!(windows) {
+        std::env::var_os("APPDATA").map(PathBuf::from)
+    } else {
+        std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| home.map(|h| h.join(".config")))
+    }?;
+    Some(base.join("debut").to_string_lossy().into_owned())
 }
 
 impl NativePlatform {
@@ -43,7 +64,14 @@ impl NativePlatform {
             plugins: plugin_host::NativePluginHost::from_environment().map(Arc::new),
             hw_decode: std::sync::atomic::AtomicBool::new(false),
             transcriber: Mutex::new(ai::WhisperCli::from_environment().map(Arc::new)),
+            settings_dir: default_settings_dir(),
         }
+    }
+
+    /// Keep per-user settings in `dir` (tests use a scratch folder).
+    pub fn with_settings_dir(mut self, dir: impl Into<String>) -> Self {
+        self.settings_dir = Some(dir.into());
+        self
     }
 
     /// With a given plugin host (tests point it at their own helper and plugins).
@@ -75,6 +103,10 @@ impl Platform for NativePlatform {
 
     fn file_store(&self) -> Arc<dyn FileStore> {
         self.store.clone()
+    }
+
+    fn settings_dir(&self) -> Option<String> {
+        self.settings_dir.clone()
     }
 
     fn open_decoder(&self, path: &str) -> debut_core::Result<Box<dyn Decoder>> {

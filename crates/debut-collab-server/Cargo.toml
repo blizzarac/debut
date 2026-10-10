@@ -11,3 +11,4 @@ debut-core.workspace = true
 debut-project.workspace = true
 debut-command.workspace = true
 debut-collab.workspace = true
+getrandom.workspace = true

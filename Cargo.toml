@@ -53,6 +53,10 @@ serde = { version = "1", features = ["derive"] }
 thiserror = "2"
 serde_json = "1"
 fontdue = "0.9"
+# Authentication and integrity (NFR-13): HMAC-SHA256, plugin pins.
+sha2 = "0.10"
+hmac = "0.12"
+getrandom = "0.2"
 # Embedded scripting (NFR-11); no_time keeps it free of Instant (wasm32).
 rhai = { version = "1.26", default-features = false, features = ["std", "serde", "no_time", "metadata"] }
 

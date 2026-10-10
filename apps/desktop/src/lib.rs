@@ -112,6 +112,8 @@ pub fn run() {
             ipc::add_plugin_insert,
             ipc::set_insert_param,
             ipc::plugin_error,
+            ipc::approve_plugin,
+            ipc::revoke_plugin,
             ipc::set_track_duck,
             ipc::export_presets,
             ipc::export_interchange,

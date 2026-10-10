@@ -92,6 +92,12 @@ pub struct Session {
     program_error: Option<String>,
     /// The last plugin scan (FX-15, AUD-09).
     plugin_scan: Option<debut_platform::plugin_host::ScanResult>,
+    /// Per-user settings (plugin approvals, telemetry consent).
+    settings: crate::settings::Settings,
+    /// Approved plugin binaries, shared with `plugin_host` (NFR-13).
+    trusted: crate::trust::Trusted,
+    /// The platform's plugin host behind the approval check.
+    plugin_host: Option<Arc<crate::trust::TrustedHost>>,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -138,7 +144,20 @@ pub struct FileStatus {
 
 impl Session {
     pub fn new(platform: Arc<dyn Platform>) -> Self {
+        let settings = crate::settings::Settings::load(platform.as_ref());
+        let trusted: crate::trust::Trusted =
+            Arc::new(std::sync::RwLock::new(settings.trusted_plugins.clone()));
+        let plugin_host = platform.plugins().map(|inner| {
+            Arc::new(crate::trust::TrustedHost::new(
+                inner,
+                platform.file_store(),
+                Arc::clone(&trusted),
+            ))
+        });
         Self {
+            settings,
+            trusted,
+            plugin_host,
             store: platform.file_store(),
             platform,
             workspace: None,
@@ -420,7 +439,8 @@ impl Session {
         if self.player.is_none() {
             let (mut player, sink) = Player::new(seq.clone());
             player.frames.set_platform(Arc::clone(&self.platform));
-            player.samples.set_plugins(self.platform.plugins());
+            player.frames.set_plugins(self.plugin_host());
+            player.samples.set_plugins(self.plugin_host());
             let mut out: Box<dyn AudioOut> = self.platform.open_audio_out();
             out.start(Box::new(sink)).map_err(|e| e.to_string())?;
             self.audio_out = Some(out);

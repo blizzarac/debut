@@ -1,15 +1,20 @@
-//! `debut-collab-server [--port 7878] [project.debut]`: serve a project for
-//! collaborative editing; accepted edits are saved back to the file.
+//! `debut-collab-server [--port 7878] [--editor-code C] [--reviewer-code C]
+//! [project.debut]`: serve a project for collaborative editing; accepted
+//! edits are saved back to the file. Codes not given are generated and
+//! printed; share them with the people who should join.
 
 use std::net::TcpListener;
 
 fn main() {
     let mut port = 7878u16;
     let mut path: Option<String> = None;
+    let mut invite = debut_collab_server::new_invite();
     let mut args = std::env::args().skip(1);
     while let Some(a) = args.next() {
         match a.as_str() {
             "--port" => port = args.next().and_then(|p| p.parse().ok()).unwrap_or(port),
+            "--editor-code" => invite.editor = args.next().unwrap_or(invite.editor),
+            "--reviewer-code" => invite.reviewer = args.next().or(invite.reviewer),
             _ => path = Some(a),
         }
     }
@@ -37,8 +42,13 @@ fn main() {
         eprintln!("cannot listen on {port}: {e}");
         std::process::exit(1);
     });
-    let handle = debut_collab_server::serve(listener, project, save).expect("serve");
+    let handle =
+        debut_collab_server::serve(listener, project, save, invite.clone()).expect("serve");
     println!("debut collaboration server on {}", handle.addr);
+    println!("editor code:   {}", invite.editor);
+    if let Some(code) = &invite.reviewer {
+        println!("reviewer code: {code}");
+    }
     loop {
         std::thread::park();
     }

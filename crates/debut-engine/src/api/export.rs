@@ -233,6 +233,7 @@ impl Session {
         let queue = Arc::clone(&self.exports);
         let running = Arc::clone(&self.export_worker);
         let platform = Arc::clone(&self.platform);
+        let plugins = self.plugin_host();
         let specs = std::mem::take(&mut self.export_specs);
         let specs = Arc::new(Mutex::new(specs));
         self.export_specs_shared = Some(Arc::clone(&specs));
@@ -251,8 +252,9 @@ impl Session {
                             spec.ok_or("missing export spec")?;
                         let mut frames = crate::FrameSource::new(4);
                         frames.set_platform(Arc::clone(&platform));
+                        frames.set_plugins(plugins.clone());
                         let mut samples = crate::SampleCache::new(48_000);
-                        samples.set_plugins(platform.plugins());
+                        samples.set_plugins(plugins.clone());
                         frames.set_sequences(&sequences);
                         samples.set_sequences(&sequences);
                         for (mid, path) in &media {

@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { CollabApi, CollabStatus } from "./engine";
+import type { CollabApi, CollabStatus, HostInfo } from "./engine";
 import { timecode } from "./Transport";
 
 /** Shared editing (COL): host the open project or join someone's session,
@@ -7,7 +7,8 @@ import { timecode } from "./Transport";
 export function Collab({ api, status, fps, onStatus }: { api: CollabApi; status: CollabStatus | null; fps: number; onStatus: (s: string) => void }) {
   const [name, setName] = useState("Editor");
   const [addr, setAddr] = useState("127.0.0.1:7878");
-  const [role, setRole] = useState<"editor" | "reviewer">("editor");
+  const [code, setCode] = useState("");
+  const [hosted, setHosted] = useState<HostInfo | null>(null);
   const fail = (e: unknown) => onStatus(String(e));
   const port = Number(addr.split(":").pop()) || 7878;
 
@@ -19,14 +20,23 @@ export function Collab({ api, status, fps, onStatus }: { api: CollabApi; status:
           <input value={addr} onChange={(e) => setAddr(e.target.value)} placeholder="host:port" style={{ flex: 1, minWidth: 0 }} />
         </div>
         <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-          <select value={role} onChange={(e) => setRole(e.target.value as "editor" | "reviewer")} title="Reviewers can only leave comments (markers)">
-            <option value="editor">editor</option>
-            <option value="reviewer">reviewer</option>
-          </select>
-          <button onClick={() => api.join(addr, name, role).catch(fail)} title="Join a shared session; its project replaces the open one">
+          <input value={code} onChange={(e) => setCode(e.target.value)} placeholder="invite code" title="The host's editor or reviewer code; it decides your role" style={{ flex: 1, minWidth: 0 }} />
+          <button disabled={!code.trim()} onClick={() => api.join(addr, name, code).catch(fail)} title="Join a shared session; its project replaces the open one">
             Join
           </button>
-          <button onClick={() => api.host(port, name).then((a) => onStatus(`hosting on port ${port} (${a})`)).catch(fail)} title={`Share the open project on port ${port}`}>
+          <button
+            onClick={() =>
+              api
+                .host(port, name)
+                .then((h) => {
+                  setHosted(h);
+                  setCode(h.editor_code);
+                  onStatus(`hosting on port ${h.port}`);
+                })
+                .catch(fail)
+            }
+            title={`Share the open project on port ${port}; you get invite codes to hand out`}
+          >
             Host
           </button>
         </div>
@@ -39,18 +49,38 @@ export function Collab({ api, status, fps, onStatus }: { api: CollabApi; status:
         <span>
           <strong style={{ color: status.joined ? "#16a34a" : "#d97706" }}>{status.joined ? "●" : "○"}</strong> {status.name} ({status.role}) · {status.address}
         </span>
-        <button onClick={() => api.leave().catch(fail)}>Leave</button>
+        <button
+          onClick={() => {
+            setHosted(null);
+            api.leave().catch(fail);
+          }}
+        >
+          Leave
+        </button>
       </div>
       <div style={{ color: "#666" }}>
         v{status.version}
         {status.pending ? ` · ${status.pending} edit(s) not confirmed yet` : ""}
         {!status.joined && " · "}
         {!status.joined && (
-          <button style={{ fontSize: 10 }} onClick={() => api.join(status.address, status.name, status.role).catch(fail)}>
+          <button style={{ fontSize: 10 }} disabled={!code.trim()} onClick={() => api.join(status.address, status.name, code).catch(fail)}>
             Rejoin
           </button>
         )}
       </div>
+      {hosted && (
+        <div style={{ background: "#f6f6f6", padding: 4, margin: "4px 0" }} title="Share these with the people who should join; anyone without one is turned away">
+          <div>
+            editors: <code style={{ userSelect: "all" }}>{hosted.editor_code}</code>
+          </div>
+          {hosted.reviewer_code && (
+            <div>
+              reviewers: <code style={{ userSelect: "all" }}>{hosted.reviewer_code}</code>
+            </div>
+          )}
+          <div style={{ color: "#888" }}>port {hosted.port} · traffic is not encrypted: use it on a trusted network or through a VPN/SSH tunnel</div>
+        </div>
+      )}
       <ul style={{ listStyle: "none", padding: 0, margin: "4px 0" }}>
         {status.peers.map((p) => (
           <li key={p.client}>

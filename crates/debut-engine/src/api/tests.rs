@@ -1595,8 +1595,12 @@ fn collaborators_share_edits_presence_and_locks() {
     } = fixture("collaborators_share_edits_presence_and_locks");
     // Host: serve the open project; everyone (the host too) joins over TCP.
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let server = debut_collab_server::serve(listener, s.project().unwrap().clone(), None).unwrap();
+    let invite = debut_collab_server::new_invite();
+    let server =
+        debut_collab_server::serve(listener, s.project().unwrap().clone(), None, invite.clone())
+            .unwrap();
     let addr = server.addr.to_string();
+    let reviewer_code = invite.reviewer.clone().unwrap();
     let mut b = native();
     let id = b.ids.fresh();
     b.start(
@@ -1617,9 +1621,23 @@ fn collaborators_share_edits_presence_and_locks() {
             .into_owned(),
     )
     .unwrap();
-    s.collab_join(&addr, "Ana".into(), "editor").unwrap();
-    b.collab_join(&addr, "Ben".into(), "editor").unwrap();
-    r.collab_join(&addr, "Rae".into(), "reviewer").unwrap();
+    s.collab_join(&addr, "Ana".into(), &invite.editor).unwrap();
+    b.collab_join(&addr, "Ben".into(), &invite.editor).unwrap();
+    r.collab_join(&addr, "Rae".into(), &reviewer_code).unwrap();
+    // Someone without a valid code is turned away (NFR-13).
+    let mut x = native();
+    let id = x.ids.fresh();
+    x.start(
+        Project::new(id, "x"),
+        std::env::temp_dir()
+            .join("debut-collab-x.debut")
+            .to_string_lossy()
+            .into_owned(),
+    )
+    .unwrap();
+    x.collab_join(&addr, "Eve".into(), "edit-0000-0000-0000-0000")
+        .unwrap();
+    assert!(x.collab_join(&addr, "Eve".into(), " ").is_err());
     // Poll everyone until a condition holds (or fail after ~5 s).
     let settle = |sessions: &mut [&mut Session], done: &dyn Fn(&[&mut Session]) -> bool| {
         for _ in 0..250 {
@@ -1652,6 +1670,20 @@ fn collaborators_share_edits_presence_and_locks() {
     });
     // Ben now has Ana's project.
     assert_eq!(clips(&b), clips(&s));
+    // Roles come from the codes: Rae is a reviewer whatever she asks for.
+    assert_eq!(r.collab_status().unwrap().role, "reviewer");
+    assert_eq!(b.collab_status().unwrap().role, "editor");
+    // Eve was refused and never saw the project.
+    settle(&mut [&mut x], &|xs| {
+        xs[0]
+            .collab_status()
+            .unwrap()
+            .notes
+            .iter()
+            .any(|n| n.contains("could not join"))
+    });
+    assert!(!x.collab_status().unwrap().joined);
+    assert!(clips(&x).is_empty());
 
     // Ana trims; Ben sees it.
     s.edit(EditOp::RippleTail {

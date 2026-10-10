@@ -118,9 +118,20 @@ fn a_bad_binary_is_a_problem_not_a_failure() {
     assert!(scan.problems[0].path.ends_with("broken.clap"));
 }
 
+/// A platform with the test helper and its own settings folder (approvals
+/// must not land in the user's real settings).
+fn platform(name: &str) -> NativePlatform {
+    let dir = std::env::temp_dir().join(format!(
+        "debut-plugin-settings-{name}-{}",
+        std::process::id()
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    NativePlatform::with_plugins(host()).with_settings_dir(dir.to_string_lossy())
+}
+
 #[test]
 fn engine_runs_an_openfx_effect_and_a_clap_insert() {
-    let mut s = Session::new(Arc::new(NativePlatform::with_plugins(host())));
+    let mut s = Session::new(Arc::new(platform("engine")));
     s.new_project("p".into()).unwrap();
     let m = s.import_media(FIXTURE.to_string()).unwrap();
     let seq = s.ensure_sequence().unwrap();
@@ -278,4 +289,75 @@ fn audio_inserts_run_in_the_helper() {
         bus[10],
         plain[10]
     );
+}
+
+/// A project naming a plugin does not get to run it (NFR-13): someone who
+/// opens it must approve the binary first.
+#[test]
+fn plugins_in_an_opened_project_need_approval() {
+    let mut author = Session::new(Arc::new(platform("author")));
+    author.new_project("approval-author".into()).unwrap();
+    let m = author.import_media(FIXTURE.to_string()).unwrap();
+    let seq = author.ensure_sequence().unwrap();
+    let v = seq.tracks[0].id.clone();
+    author.add_clip(&v, &m.id, 0.0).unwrap();
+    let clip = author.sequence().unwrap().tracks[0].clips[0].id.clone();
+    let found = author.scan_plugins().unwrap();
+    assert!(
+        found.approved.is_empty(),
+        "nothing approved before it is used"
+    );
+    let ofx = found
+        .plugins
+        .iter()
+        .find(|p| p.kind == "openfx")
+        .unwrap()
+        .clone();
+    author
+        .add_plugin_effect(&v, &clip, &ofx.path, ofx.index)
+        .unwrap();
+    author
+        .set_plugin_param(&v, &clip, 0, "gain", 0.5, false)
+        .unwrap();
+    assert_eq!(
+        author.plugins().approved,
+        vec![ofx.path.clone()],
+        "adding it approved it"
+    );
+    let json = author.project_json().unwrap();
+
+    // Someone else opens the project: the effect does not run.
+    let mut reader = Session::new(Arc::new(platform("reader")));
+    reader.open_project_json(&json).unwrap();
+    reader.set_preview_quality(PreviewQuality::Full);
+    reader.transport(TransportAction::Seek { t: 0.4 }).unwrap();
+    let (_, _, blocked) = reader.frame_pixels().unwrap();
+    let err = reader.plugin_error().unwrap_or_default();
+    assert!(err.contains("not approved"), "{err}");
+
+    // Once approved it runs, and the approval is remembered.
+    reader.approve_plugin(&ofx.path).unwrap();
+    reader.transport(TransportAction::Seek { t: 0.44 }).unwrap();
+    reader.transport(TransportAction::Seek { t: 0.4 }).unwrap();
+    let (_, _, ran) = reader.frame_pixels().unwrap();
+    assert!(
+        reader.plugin_error().is_none(),
+        "{:?}",
+        reader.plugin_error()
+    );
+    assert_ne!(ran, blocked);
+    let again = Session::new(Arc::new(platform_keep("reader")));
+    assert_eq!(again.plugin_approvals().len(), 1);
+
+    reader.revoke_plugin(&ofx.path).unwrap();
+    assert!(reader.plugins().approved.is_empty());
+}
+
+/// The same settings folder as `platform(name)`, without clearing it.
+fn platform_keep(name: &str) -> NativePlatform {
+    let dir = std::env::temp_dir().join(format!(
+        "debut-plugin-settings-{name}-{}",
+        std::process::id()
+    ));
+    NativePlatform::with_plugins(host()).with_settings_dir(dir.to_string_lossy())
 }

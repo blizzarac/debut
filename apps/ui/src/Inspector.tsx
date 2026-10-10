@@ -168,6 +168,14 @@ export function Inspector({ effects, plugins, selected, position, refreshKey, on
             <>
               <PluginParams params={fx.options.plugin.params} onSet={(name, value) => act(effects.setPluginParam!(selected.track, selected.clip, fx.index, name, value, keyframe))} />
               {pluginError && <p style={{ color: "#b91c1c", margin: "4px 0 0" }}>Plugin failed, showing the clip without it: {pluginError}</p>}
+              {pluginError && /not approved|changed since/.test(pluginError) && plugins?.approve && (
+                <button
+                  title={`Run ${fx.options.plugin.path}: plugins named by a project only run once you approve the binary (it is pinned by its SHA-256)`}
+                  onClick={() => act(plugins.approve!(fx.options.plugin!.path))}
+                >
+                  Approve this plugin
+                </button>
+              )}
             </>
           )}
           {fx.params.map((p) => {

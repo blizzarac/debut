@@ -10,12 +10,19 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Message {
-    /// Client → server: join with a name and role.
-    Hello { name: String, role: Role },
-    /// Server → client: your id, the project at `version` (JSON) and the
-    /// current locks and peers.
+    /// Server → client, first: answer with HMAC(invite code, nonce).
+    Challenge { nonce: String },
+    /// Client → server: join with a name and the answer to the challenge;
+    /// the role follows from which invite code produced it (NFR-13).
+    Hello { name: String, proof: String },
+    /// Server → client: the answer matched no invite code; the connection
+    /// closes.
+    Denied { reason: String },
+    /// Server → client: your id and role, the project at `version` (JSON)
+    /// and the current locks and peers.
     Welcome {
         client: u64,
+        role: Role,
         version: u64,
         project: String,
         locks: Vec<(String, u64)>,
@@ -79,8 +86,9 @@ mod tests {
             }),
             Message::Hello {
                 name: "Ana".into(),
-                role: Role::Reviewer,
+                proof: "ab".repeat(32),
             },
+            Message::Challenge { nonce: "n".into() },
         ] {
             let line = msg.to_line();
             assert!(line.ends_with('\n') && !line[..line.len() - 1].contains('\n'));

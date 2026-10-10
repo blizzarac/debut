@@ -34,6 +34,8 @@ pub struct PluginsDto {
     pub plugins: Vec<PluginDto>,
     /// Binaries that could not be used: (path, why).
     pub problems: Vec<(String, String)>,
+    /// Binaries the user approved to run (NFR-13).
+    pub approved: Vec<String>,
 }
 
 fn kind_str(k: PluginKind) -> &'static str {
@@ -138,11 +140,65 @@ impl Session {
         Ok(self.plugins())
     }
 
+    /// The plugin host behind the approval check (NFR-13).
+    pub(crate) fn plugin_host(&self) -> Option<Arc<dyn debut_platform::PluginHost>> {
+        self.plugin_host
+            .as_ref()
+            .map(|h| Arc::clone(h) as Arc<dyn debut_platform::PluginHost>)
+    }
+
+    /// Approve the plugin binary at `path` as it is now (NFR-13): pinned by
+    /// its SHA-256, so a changed file needs approving again. Saved in the
+    /// user's settings.
+    pub fn approve_plugin(&mut self, path: &str) -> Result<(), String> {
+        let hash = crate::trust::sha256(self.store.as_ref(), path).map_err(|e| e.to_string())?;
+        self.set_trusted(|t| {
+            t.insert(path.to_string(), hash);
+        })
+    }
+
+    /// Withdraw approval: the binary no longer runs.
+    pub fn revoke_plugin(&mut self, path: &str) -> Result<(), String> {
+        self.set_trusted(|t| {
+            t.remove(path);
+        })
+    }
+
+    fn set_trusted(
+        &mut self,
+        f: impl FnOnce(&mut std::collections::BTreeMap<String, String>),
+    ) -> Result<(), String> {
+        {
+            let mut t = self.trusted.write().unwrap_or_else(|e| e.into_inner());
+            f(&mut t);
+            self.settings.trusted_plugins = t.clone();
+        }
+        if let Some(h) = &self.plugin_host {
+            h.rehash();
+        }
+        self.settings.save(self.platform.as_ref())
+    }
+
+    /// Approved binaries and their pinned SHA-256.
+    pub fn plugin_approvals(&self) -> Vec<(String, String)> {
+        self.trusted
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .map(|(p, h)| (p.clone(), h.clone()))
+            .collect()
+    }
+
     /// The last scan's result (empty before the first).
     pub fn plugins(&self) -> PluginsDto {
         let scan = self.plugin_scan.clone().unwrap_or_default();
         PluginsDto {
             available: self.platform.plugins().is_some(),
+            approved: self
+                .plugin_approvals()
+                .into_iter()
+                .map(|(p, _)| p)
+                .collect(),
             plugins: scan.plugins.iter().map(plugin_dto).collect(),
             problems: scan
                 .problems
@@ -174,6 +230,8 @@ impl Session {
     ) -> Result<(), String> {
         let info = self.scanned(PluginKind::OpenFx, path, index)?;
         let (target, clip_id, _) = self.clip_ref(track, clip)?;
+        // Picking it from the scan list is the approval.
+        self.approve_plugin(path)?;
         let effect = Effect::Plugin(PluginFx {
             path: path.into(),
             index,
@@ -234,6 +292,7 @@ impl Session {
     pub fn add_plugin_insert(&mut self, track: &str, path: &str, index: u32) -> Result<(), String> {
         let info = self.scanned(PluginKind::Clap, path, index)?;
         let (target, mut effects) = self.track_inserts(track)?;
+        self.approve_plugin(path)?;
         effects.push(AudioEffect::Plugin {
             path: path.into(),
             index,

@@ -43,6 +43,12 @@ pub struct Capabilities {
 pub trait Platform: Send + Sync + 'static {
     fn capabilities(&self) -> Capabilities;
 
+    /// A folder for per-user settings (plugin approvals, telemetry
+    /// consent), through `file_store`. `None` keeps them in memory only.
+    fn settings_dir(&self) -> Option<String> {
+        None
+    }
+
     /// Where project files, sidecars and exports are read and written.
     fn file_store(&self) -> std::sync::Arc<dyn FileStore>;
 

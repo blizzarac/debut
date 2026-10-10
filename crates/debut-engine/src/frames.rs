@@ -44,6 +44,8 @@ pub struct FrameSource {
     fonts: Mutex<HashMap<String, Option<debut_graphics::Font>>>,
     /// The last error a plugin effect reported; the layer rendered without it.
     plugin_error: Option<String>,
+    /// Where plugin effects run (the session's approval-checking host).
+    plugins: Option<Arc<dyn debut_platform::PluginHost>>,
 }
 
 impl FrameSource {
@@ -56,7 +58,13 @@ impl FrameSource {
             platform: None,
             fonts: Mutex::new(HashMap::new()),
             plugin_error: None,
+            plugins: None,
         }
+    }
+
+    /// Where plugin effects run; without one they are left out.
+    pub fn set_plugins(&mut self, host: Option<Arc<dyn debut_platform::PluginHost>>) {
+        self.plugins = host;
     }
 
     /// The platform title fonts are requested from.
@@ -211,7 +219,7 @@ impl FrameProvider for FrameSource {
         h: u32,
         px: &mut [debut_render::Rgba],
     ) -> Result<bool> {
-        let Some(host) = self.platform.as_ref().and_then(|p| p.plugins()) else {
+        let Some(host) = self.plugins.clone() else {
             return Ok(false);
         };
         let job = debut_platform::plugin_host::VideoJob {
