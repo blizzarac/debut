@@ -11,8 +11,10 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+/// The cpal stream lives on its own thread: on macOS it is not `Send`, and
+/// `AudioOut` is. Dropping the sender ends that thread and closes the stream.
 pub struct CpalAudioOut {
-    stream: Option<cpal::Stream>,
+    stream: Option<(std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>)>,
     position: Arc<AtomicU64>,
     sample_rate: u32,
     channels: u16,
@@ -46,34 +48,76 @@ impl CpalAudioOut {
 
 impl AudioOut for CpalAudioOut {
     fn start(&mut self, mut callback: Box<dyn AudioCallback>) -> Result<()> {
-        let device = cpal::default_host()
-            .default_output_device()
-            .ok_or_else(|| Error::Unsupported("no audio output device".into()))?;
-        let config = cpal::StreamConfig {
-            channels: self.channels,
-            sample_rate: cpal::SampleRate(self.sample_rate),
-            buffer_size: cpal::BufferSize::Default,
-        };
+        self.stop()?;
         let position = Arc::clone(&self.position);
         let (channels, rate) = (self.channels, self.sample_rate);
-        let stream = device
-            .build_output_stream(
-                &config,
-                move |data: &mut [f32], _| {
-                    callback.fill(data, channels, rate);
-                    position.fetch_add((data.len() / channels as usize) as u64, Ordering::AcqRel);
-                },
-                |e| eprintln!("audio stream error: {e}"),
-                None,
-            )
+        let (ready_tx, ready_rx) = std::sync::mpsc::channel::<Result<()>>();
+        let (stop_tx, stop_rx) = std::sync::mpsc::channel::<()>();
+        let handle = std::thread::Builder::new()
+            .name("debut-audio-out".into())
+            .spawn(move || {
+                let open = || -> Result<cpal::Stream> {
+                    let device = cpal::default_host()
+                        .default_output_device()
+                        .ok_or_else(|| Error::Unsupported("no audio output device".into()))?;
+                    let config = cpal::StreamConfig {
+                        channels,
+                        sample_rate: cpal::SampleRate(rate),
+                        buffer_size: cpal::BufferSize::Default,
+                    };
+                    let stream = device
+                        .build_output_stream(
+                            &config,
+                            move |data: &mut [f32], _| {
+                                callback.fill(data, channels, rate);
+                                position.fetch_add(
+                                    (data.len() / channels as usize) as u64,
+                                    Ordering::AcqRel,
+                                );
+                            },
+                            |e| eprintln!("audio stream error: {e}"),
+                            None,
+                        )
+                        .map_err(|e| Error::Other(e.to_string()))?;
+                    stream.play().map_err(|e| Error::Other(e.to_string()))?;
+                    Ok(stream)
+                };
+                match open() {
+                    Ok(stream) => {
+                        let _ = ready_tx.send(Ok(()));
+                        // Hold the stream until stop() drops the sender.
+                        let _ = stop_rx.recv();
+                        drop(stream);
+                    }
+                    Err(e) => {
+                        let _ = ready_tx.send(Err(e));
+                    }
+                }
+            })
             .map_err(|e| Error::Other(e.to_string()))?;
-        stream.play().map_err(|e| Error::Other(e.to_string()))?;
-        self.stream = Some(stream);
-        Ok(())
+        match ready_rx.recv() {
+            Ok(Ok(())) => {
+                self.stream = Some((stop_tx, handle));
+                Ok(())
+            }
+            Ok(Err(e)) => {
+                let _ = handle.join();
+                Err(e)
+            }
+            Err(_) => {
+                let _ = handle.join();
+                Err(Error::Other(
+                    "the audio thread ended before the stream opened".into(),
+                ))
+            }
+        }
     }
 
     fn stop(&mut self) -> Result<()> {
-        self.stream = None;
+        if let Some((stop, handle)) = self.stream.take() {
+            drop(stop);
+            let _ = handle.join();
+        }
         Ok(())
     }
 
