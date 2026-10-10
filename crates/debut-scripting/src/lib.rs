@@ -64,6 +64,8 @@ pub const API: &[(&str, &str)] = &[
     ("save([path])", "Save the project"),
     ("start_export(path, preset [, #{normalize, sidecar, hardware, smart}])", "Queue an export; returns the job id"),
     ("exports()", "Export jobs and their progress"),
+    ("upload(file, #{kind: \"folder\", dir: ..})", "Upload a file (folder, http_put, youtube, vimeo); returns the job id"),
+    ("uploads()", "Upload jobs and their progress"),
     ("print(x)", "Write a line to the output (built in)"),
 ];
 
@@ -389,6 +391,16 @@ fn engine(h: &Handle, log: &Rc<RefCell<Vec<String>>>) -> Engine {
         })
         .map(|id| Dynamic::from(id as INT))
     };
+    let s = h.clone();
+    e.register_fn("upload", move |file: ImmutableString, dest: Map| -> Res {
+        let dest: debut_engine::api::UploadDestination = read(&Dynamic::from_map(dest))?;
+        s.with(|s| s.upload_start(file.to_string(), dest))
+            .map(|id| Dynamic::from(id as INT))
+    });
+    let s = h.clone();
+    e.register_fn("uploads", move || -> Res {
+        s.with(|s| Ok(s.upload_status())).and_then(dynamic)
+    });
     let plain = export.clone();
     e.register_fn(
         "start_export",

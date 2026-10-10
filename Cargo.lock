@@ -822,9 +822,11 @@ dependencies = [
  "debut-audio",
  "debut-core",
  "debut-platform",
+ "debut-platform-native",
  "debut-project",
  "debut-render",
  "serde",
+ "serde_json",
  "thiserror 2.0.21",
 ]
 

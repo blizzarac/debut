@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import type { CodecCapabilities, ExportApi, ExportPreset, ExportStatus, InterchangeFormat } from "./engine";
+import { UploadForm, Uploads } from "./Upload";
 
 /** Queue exports with a delivery preset and optional loudness normalization; shows
  * progress, integrated LUFS and true peak per job (EXP-02, EXP-03, AUD-06). */
@@ -15,6 +16,7 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
   const [jobs, setJobs] = useState<ExportStatus[]>([]);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [uploading, setUploading] = useState<number | null>(null);
 
   useEffect(() => {
     exporter.presets().then((p) => {
@@ -120,6 +122,11 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
                 {j.state === "running" && <button onClick={() => exporter.pause(j.id)}>⏸</button>}
                 {j.state === "paused" && <button onClick={() => exporter.resume(j.id)}>▶</button>}
                 {(j.state === "running" || j.state === "paused" || j.state === "queued") && <button onClick={() => exporter.cancel(j.id)}>✕</button>}
+                {j.state === "done" && exporter.upload && (
+                  <button onClick={() => setUploading(uploading === j.id ? null : j.id)} title="Upload this file to a folder, a pre-signed URL, YouTube or Vimeo">
+                    Upload…
+                  </button>
+                )}
               </span>
             </div>
             <progress value={j.frames_done} max={Math.max(1, j.frames_total)} style={{ width: "100%" }} />
@@ -129,9 +136,11 @@ export function ExportPanel({ exporter }: { exporter: ExportApi }) {
               {j.frames_copied ? ` · ${j.frames_copied} copied` : ""}
               {j.max_cll != null ? ` · MaxCLL ${Math.round(j.max_cll)} · MaxFALL ${Math.round(j.max_fall ?? 0)} nits` : ""}
             </div>
+            {uploading === j.id && <UploadForm exporter={exporter} file={j.output} onClose={() => setUploading(null)} />}
           </li>
         ))}
       </ul>
+      <Uploads exporter={exporter} />
     </div>
   );
 }

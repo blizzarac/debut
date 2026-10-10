@@ -159,4 +159,11 @@ The native platform links the system FFmpeg through `ffmpeg-next` 9, which build
     - **HTTP.** This added `Platform::http` (native: ureq with rustls, proxy from the environment, loopback and `NO_PROXY` hosts going direct), which upload uses too.
     - **Tested:** off by default, counts present but no file names or marker text, crash scrubbing, the posted body equal to the report (against a local HTTP server), plain-http endpoints refused, and erasure on opt-out.
     - **Not done:** a collection server (none exists; anyone can point Send at their own).
-61. Still open: Display-trait output to SDI/HDMI cards (PB-09), VST3/AU plugins, the browser platform (item 45).
+61. ~~Upload~~ Done (EXP-09). `debut_export::upload` sends a finished file to one of four destinations:
+    - **Folder:** a copy, verified by checksum.
+    - **Pre-signed URL:** a PUT (S3, GCS, Azure SAS; the signature is kept out of the reported location).
+    - **YouTube:** the resumable upload protocol (session POST with metadata, 8 MiB `Content-Range` chunks, `308` answers giving the confirmed range).
+    - **Vimeo:** create the video with the tus approach, then `PATCH` chunks at `Upload-Offset`.
+
+    After a failed chunk it asks the server how much arrived (`bytes */total`, or tus `HEAD`) and goes on from there, with retries and backoff. It goes through `Platform::http` (streaming file ranges, 3xx treated as answers) and the file store's new `size`. `Session::upload_start` runs uploads in the background with progress and cancel; status never echoes tokens. The Export panel has "Upload…" on finished jobs, and scripts have `upload(file, #{..})`. Tokens are used for one upload and not stored. Getting one (an OAuth app for YouTube, a Vimeo app token) is up to the user. Tested against local mock servers that implement the YouTube and tus protocols and drop a chunk halfway (the file arrives whole and in order), plus PUT, folder copy and a refused upload. Not tested against the real YouTube or Vimeo APIs (not reachable from here). Not done: OAuth sign-in in the app, captions or thumbnails with the upload, and resuming an upload after the app restarts.
+62. Still open: Display-trait output to SDI/HDMI cards (PB-09), VST3/AU plugins, the browser platform (item 45).

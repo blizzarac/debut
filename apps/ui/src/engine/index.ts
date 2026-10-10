@@ -270,6 +270,24 @@ export interface ExportStatus {
 
 export type InterchangeFormat = "edl" | "otio" | "fcpxml" | "aaf";
 
+/** Where a finished export goes (EXP-09). Tokens are used for this upload only. */
+export type UploadDestination =
+  | { kind: "folder"; dir: string }
+  | { kind: "http_put"; url: string; headers: [string, string][] }
+  | { kind: "youtube"; token: string; title: string; description: string; privacy: string }
+  | { kind: "vimeo"; token: string; title: string; description: string; privacy: string };
+
+export interface UploadStatus {
+  id: number;
+  file: string;
+  destination: string;
+  sent: number;
+  total: number;
+  state: "running" | "done" | "failed" | "cancelled";
+  location: string | null;
+  error: string | null;
+}
+
 export interface ExportApi {
   presets(): Promise<ExportPreset[]>;
   /** Queue an export of the whole sequence; `normalize` is a LUFS target or null. */
@@ -283,6 +301,10 @@ export interface ExportApi {
   pause(id: number): Promise<void>;
   resume(id: number): Promise<void>;
   cancel(id: number): Promise<void>;
+  /** Upload a finished file in the background; returns the job id. */
+  upload?(file: string, destination: UploadDestination): Promise<number>;
+  uploads?(): Promise<UploadStatus[]>;
+  cancelUpload?(id: number): Promise<void>;
 }
 
 export interface SequenceListItem {

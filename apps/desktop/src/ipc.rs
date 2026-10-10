@@ -28,6 +28,26 @@ pub struct AboutInfo {
     pub notices: &'static str,
 }
 
+/// Upload a finished file (EXP-09); the destination carries any token.
+#[tauri::command]
+pub fn upload_start(
+    state: State<'_, Shared>,
+    file: String,
+    destination: UploadDestination,
+) -> Result<u64, String> {
+    lock(&state).upload_start(file, destination)
+}
+
+#[tauri::command]
+pub fn upload_status(state: State<'_, Shared>) -> Vec<UploadDto> {
+    lock(&state).upload_status()
+}
+
+#[tauri::command]
+pub fn upload_cancel(state: State<'_, Shared>, id: u64) {
+    lock(&state).upload_cancel(id)
+}
+
 #[tauri::command]
 pub fn telemetry_status(state: State<'_, Shared>) -> TelemetryDto {
     lock(&state).telemetry_status()

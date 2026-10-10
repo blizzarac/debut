@@ -2669,3 +2669,44 @@ fn telemetry_is_opt_in_anonymous_and_erasable() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Uploads (EXP-09) run in the background and report progress and where
+/// the file went; a missing file is refused up front.
+#[test]
+fn uploads_run_in_the_background() {
+    let Fx { mut s, dir, .. } = fixture("uploads");
+    let target = dir.join("delivered").to_string_lossy().into_owned();
+    assert!(s
+        .upload_start(
+            dir.join("nope.mp4").to_string_lossy().into_owned(),
+            UploadDestination::Folder {
+                dir: target.clone()
+            },
+        )
+        .is_err());
+    let id = s
+        .upload_start(
+            FIXTURE.to_string(),
+            UploadDestination::Folder {
+                dir: target.clone(),
+            },
+        )
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let job = loop {
+        let j = s.upload_status().into_iter().find(|j| j.id == id).unwrap();
+        if j.state != "running" || std::time::Instant::now() > deadline {
+            break j;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert_eq!(job.state, "done", "{:?}", job.error);
+    assert_eq!(job.destination, "folder");
+    assert_eq!(job.sent, job.total);
+    let loc = job.location.unwrap();
+    assert!(loc.starts_with(&target) && loc.ends_with("test_25fps_2s.mp4"));
+    assert_eq!(
+        std::fs::read(&loc).unwrap(),
+        std::fs::read(FIXTURE).unwrap()
+    );
+}

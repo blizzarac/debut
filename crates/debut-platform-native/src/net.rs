@@ -114,6 +114,9 @@ pub fn http(req: debut_platform::HttpRequest) -> Result<debut_platform::HttpResp
     let agent = ureq::AgentBuilder::new()
         .try_proxy_from_env(use_proxy(&req.url))
         .timeout_connect(std::time::Duration::from_secs(15))
+        // 3xx are answers: YouTube's resumable uploads reply 308 with no
+        // Location to say how much they have.
+        .redirects(0)
         .build();
     let mut r = agent.request(&req.method, &req.url);
     for (name, value) in &req.headers {

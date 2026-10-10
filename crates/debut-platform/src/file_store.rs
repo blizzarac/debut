@@ -22,6 +22,11 @@ pub trait FileStore: Send + Sync {
         Ok(data.len() as u64)
     }
 
+    /// Size in bytes. Stores override this to avoid reading the file.
+    fn size(&self, path: &str) -> Result<u64> {
+        Ok(self.read(path)?.len() as u64)
+    }
+
     /// A 64-bit content checksum (FNV-1a), to verify copies (MED-02).
     fn checksum(&self, path: &str) -> Result<u64> {
         let mut h = Fnv64::new();

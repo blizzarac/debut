@@ -7,6 +7,8 @@ import type {
   PluginsApi,
   PluginsInfo,
   TitleInfo,
+  UploadDestination,
+  UploadStatus,
   TelemetryApi,
   TelemetryStatus,
   AboutInfo,
@@ -333,6 +335,15 @@ class TauriExport implements ExportApi {
   }
   cancel(id: number) {
     return invoke<void>("export_cancel", { id });
+  }
+  upload(file: string, destination: UploadDestination) {
+    return invoke<number>("upload_start", { file, destination });
+  }
+  uploads() {
+    return invoke<UploadStatus[]>("upload_status");
+  }
+  cancelUpload(id: number) {
+    return invoke<void>("upload_cancel", { id });
   }
 }
 

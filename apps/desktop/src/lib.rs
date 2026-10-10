@@ -36,6 +36,9 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             ipc::version,
             ipc::about,
+            ipc::upload_start,
+            ipc::upload_status,
+            ipc::upload_cancel,
             ipc::telemetry_status,
             ipc::set_telemetry,
             ipc::set_telemetry_endpoint,

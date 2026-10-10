@@ -65,6 +65,12 @@ impl FileStore for NativeFileStore {
         std::fs::copy(self.resolve(from), dst).map_err(io)
     }
 
+    fn size(&self, path: &str) -> Result<u64> {
+        std::fs::metadata(self.resolve(path))
+            .map(|m| m.len())
+            .map_err(io)
+    }
+
     fn checksum(&self, path: &str) -> Result<u64> {
         use std::io::Read;
         let mut f = std::fs::File::open(self.resolve(path)).map_err(io)?;

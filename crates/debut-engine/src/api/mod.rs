@@ -44,6 +44,7 @@ mod targeting;
 mod telemetry;
 mod timeline;
 mod titles;
+mod upload;
 mod waveforms;
 
 pub use self::collab::{CollabDto, LockDto, PeerDto};
@@ -57,11 +58,13 @@ pub use self::shortcuts::{
 pub use self::snapshots::{ClipChangeDto, SnapshotDiffDto, SnapshotDto};
 pub use self::targeting::TargetingDto;
 pub use self::telemetry::TelemetryDto;
+pub use self::upload::UploadDto;
 use self::waveforms::WaveformCache;
 pub use self::{
     ai::*, captions::*, effects::*, export::*, ingest::*, markers::*, media::*, multicam::*,
     playback::*, plugins::*, timeline::*, titles::*,
 };
+pub use debut_export::upload::Destination as UploadDestination;
 
 pub struct Session {
     /// Codecs, audio output and files for this target.
@@ -103,6 +106,8 @@ pub struct Session {
     /// Usage counts and crash reports, when the user opted in (NFR-15).
     telemetry: Option<crate::telemetry::Report>,
     telemetry_saved: std::time::Duration,
+    /// Uploads of finished exports (EXP-09).
+    uploads: self::upload::Uploads,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -180,6 +185,7 @@ impl Session {
         Self {
             telemetry,
             telemetry_saved: std::time::Duration::ZERO,
+            uploads: Default::default(),
             settings,
             trusted,
             plugin_host,
