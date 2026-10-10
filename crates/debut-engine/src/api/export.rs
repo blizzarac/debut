@@ -132,6 +132,10 @@ impl Session {
             .into_iter()
             .find(|p| p.name == preset)
             .ok_or_else(|| format!("unknown preset {preset}"))?;
+        self.note_feature(&format!("export:{}", preset.name));
+        if smart {
+            self.note_feature("smart_render");
+        }
         // Pick a hardware encoder for the preset's codec family when asked and
         // one is available; the encoder falls back to software if it cannot open.
         let encoder: Option<String> = if hardware {

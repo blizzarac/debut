@@ -7,6 +7,8 @@ import type {
   PluginsApi,
   PluginsInfo,
   TitleInfo,
+  TelemetryApi,
+  TelemetryStatus,
   AboutInfo,
   HostInfo,
   ScriptApi,
@@ -412,6 +414,21 @@ class TauriScript implements ScriptApi {
   }
 }
 
+class TauriTelemetry implements TelemetryApi {
+  status() {
+    return invoke<TelemetryStatus>("telemetry_status");
+  }
+  set(on: boolean) {
+    return invoke<TelemetryStatus>("set_telemetry", { on });
+  }
+  setEndpoint(endpoint: string | null) {
+    return invoke<void>("set_telemetry_endpoint", { endpoint });
+  }
+  send() {
+    return invoke<number>("send_telemetry");
+  }
+}
+
 class TauriCaptions implements CaptionsApi {
   search(query: string) {
     return invoke<{ id: string; start: number; text: string }[]>("search_captions", { query });
@@ -455,6 +472,7 @@ export class TauriEngine implements Engine {
   plugins = new TauriPlugins();
   ai = new TauriAi();
   script = new TauriScript();
+  telemetry = new TauriTelemetry();
 
   version() {
     return invoke<string>("version");

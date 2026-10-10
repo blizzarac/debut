@@ -183,6 +183,13 @@ impl Platform for NativePlatform {
             .map(|p| p as Arc<dyn debut_platform::PluginHost>)
     }
 
+    fn http(
+        &self,
+        req: debut_platform::HttpRequest,
+    ) -> debut_core::Result<debut_platform::HttpResponse> {
+        net::http(req)
+    }
+
     fn connect(&self, addr: &str) -> debut_core::Result<Box<dyn debut_platform::Connection>> {
         Ok(Box::new(net::TcpConnection::connect(addr)?))
     }

@@ -249,6 +249,60 @@ pub enum Command {
     Noop,
 }
 
+impl Command {
+    /// The command's kind as a stable snake_case name, for counting what
+    /// gets used (telemetry, NFR-15) without its contents.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Replace { .. } => "replace",
+            Self::Shift { .. } => "shift",
+            Self::Blade { .. } => "blade",
+            Self::Join { .. } => "join",
+            Self::TrimHead { .. } => "trim_head",
+            Self::TrimTail { .. } => "trim_tail",
+            Self::Slip { .. } => "slip",
+            Self::Move { .. } => "move",
+            Self::AddEffect { .. } => "add_effect",
+            Self::ReplaceEffect { .. } => "replace_effect",
+            Self::RemoveEffect { .. } => "remove_effect",
+            Self::SetParam { .. } => "set_param",
+            Self::SetCurve { .. } => "set_curve",
+            Self::SetTrackAudio { .. } => "set_track_audio",
+            Self::SetTrackMix { .. } => "set_track_mix",
+            Self::SetTrackDuck { .. } => "set_track_duck",
+            Self::SetClipSource { .. } => "set_clip_source",
+            Self::SetTiming { .. } => "set_timing",
+            Self::AddMarker { .. } => "add_marker",
+            Self::RemoveMarker { .. } => "remove_marker",
+            Self::UpdateMarker { .. } => "update_marker",
+            Self::AddCaption { .. } => "add_caption",
+            Self::RemoveCaption { .. } => "remove_caption",
+            Self::UpdateCaption { .. } => "update_caption",
+            Self::SetCaptionSettings { .. } => "set_caption_settings",
+            Self::SetTransition { .. } => "set_transition",
+            Self::AddTitleTemplate(..) => "add_title_template",
+            Self::RemoveTitleTemplate(..) => "remove_title_template",
+            Self::AddBin(..) => "add_bin",
+            Self::RemoveBin(..) => "remove_bin",
+            Self::RenameBin { .. } => "rename_bin",
+            Self::AssignMedia { .. } => "assign_media",
+            Self::SetMediaPath { .. } => "set_media_path",
+            Self::SetMediaTags { .. } => "set_media_tags",
+            Self::AddMedia(..) => "add_media",
+            Self::RemoveMedia(..) => "remove_media",
+            Self::AddSequence(..) => "add_sequence",
+            Self::RemoveSequence(..) => "remove_sequence",
+            Self::ReplaceSequence(..) => "replace_sequence",
+            Self::AddSnapshot(..) => "add_snapshot",
+            Self::RemoveSnapshot(..) => "remove_snapshot",
+            Self::AddTrack { .. } => "add_track",
+            Self::RemoveTrack { .. } => "remove_track",
+            Self::Group(..) => "group",
+            Self::Noop => "noop",
+        }
+    }
+}
+
 fn captions_mut(project: &mut Project, s: SequenceId) -> Result<&mut Vec<Caption>> {
     Ok(&mut project
         .sequence_mut(s)

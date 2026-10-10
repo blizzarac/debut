@@ -29,6 +29,29 @@ pub struct AboutInfo {
 }
 
 #[tauri::command]
+pub fn telemetry_status(state: State<'_, Shared>) -> TelemetryDto {
+    lock(&state).telemetry_status()
+}
+
+#[tauri::command]
+pub fn set_telemetry(state: State<'_, Shared>, on: bool) -> Result<TelemetryDto, String> {
+    lock(&state).set_telemetry(on)
+}
+
+#[tauri::command]
+pub fn set_telemetry_endpoint(
+    state: State<'_, Shared>,
+    endpoint: Option<String>,
+) -> Result<(), String> {
+    lock(&state).set_telemetry_endpoint(endpoint)
+}
+
+#[tauri::command]
+pub fn send_telemetry(state: State<'_, Shared>) -> Result<u16, String> {
+    lock(&state).send_telemetry()
+}
+
+#[tauri::command]
 pub fn about(state: State<'_, Shared>) -> AboutInfo {
     AboutInfo {
         about: lock(&state).about(),

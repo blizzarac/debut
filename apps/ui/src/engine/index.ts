@@ -757,8 +757,26 @@ export interface AboutInfo {
   notices: string;
 }
 
+/** Opt-in usage statistics (NFR-15). */
+export interface TelemetryStatus {
+  enabled: boolean;
+  endpoint: string | null;
+  /** Exactly what Send posts (JSON). */
+  report: string | null;
+}
+
+export interface TelemetryApi {
+  status(): Promise<TelemetryStatus>;
+  /** Off also erases what was collected. */
+  set(on: boolean): Promise<TelemetryStatus>;
+  setEndpoint(endpoint: string | null): Promise<void>;
+  /** Post the report to the endpoint; returns the HTTP status. */
+  send(): Promise<number>;
+}
+
 export interface Engine extends ProjectApi {
   about?(): Promise<AboutInfo>;
+  telemetry?: TelemetryApi;
   collab?: CollabApi;
   /** Keyboard shortcut presets (debut, Premiere Pro, Final Cut Pro, Avid). */
   shortcuts?(): Promise<Shortcuts>;

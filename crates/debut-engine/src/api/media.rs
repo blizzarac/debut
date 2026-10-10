@@ -72,6 +72,7 @@ pub(crate) fn media_info(dec: &dyn debut_platform::Decoder) -> Option<(u32, u32,
 impl Session {
     pub fn import_media(&mut self, path: String) -> Result<MediaDto, String> {
         let media = self.probe_media(&path)?;
+        self.note_feature("import");
         let id = media.id;
         let start_timecode = media.metadata.start_timecode;
         let reel = media.metadata.reel.clone();

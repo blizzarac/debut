@@ -288,7 +288,7 @@ export default function App() {
               </button>
             </>
           )}
-          {engine?.about && <About load={() => engine.about!()} />}
+          {engine?.about && <About load={() => engine.about!()} telemetry={engine.telemetry} />}
         </div>
         {showKeys && shortcuts && activeMap && (
           <div style={{ fontSize: 11 }}>

@@ -90,6 +90,7 @@ impl Session {
             return Err("an invite code is needed to join".into());
         }
         self.project().ok_or("no project open")?;
+        self.note_feature("collab");
         let conn = self.platform.connect(addr).map_err(|e| e.to_string())?;
         // Keep the client (and its pending edits) across reconnects.
         let client = self.collab.take().map(|c| c.client).unwrap_or_default();

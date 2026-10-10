@@ -2572,3 +2572,100 @@ fn smart_render_copies_untouched_prores() {
     );
     assert_eq!(e.frames_copied, 0);
 }
+
+/// Telemetry (NFR-15): off until opted in, anonymous counts, sent only on
+/// request, erased when turned off.
+#[test]
+fn telemetry_is_opt_in_anonymous_and_erasable() {
+    let dir = std::env::temp_dir().join(format!("debut-telemetry-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let settings = dir.join("settings").to_string_lossy().into_owned();
+    let platform = || Arc::new(NativePlatform::new().with_settings_dir(settings.clone()));
+    let mut s = Session::new(platform());
+    let id = s.ids.fresh();
+    s.start(
+        Project::new(id, "t"),
+        dir.join("t.debut").to_string_lossy().into_owned(),
+    )
+    .unwrap();
+    assert!(!s.telemetry_status().enabled, "off by default");
+    s.import_media(FIXTURE.to_string()).unwrap();
+    assert_eq!(s.telemetry_status().report, None);
+    assert!(s.send_telemetry().is_err());
+
+    s.set_telemetry(true).unwrap();
+    let m = s.import_media(FIXTURE.to_string()).unwrap();
+    let seq = s.ensure_sequence().unwrap();
+    s.add_clip(&seq.tracks[0].id, &m.id, 0.0).unwrap();
+    s.add_marker(1.0, "private note about the client".into(), None)
+        .unwrap();
+    let report = s.telemetry_status().report.unwrap();
+    let r: serde_json::Value = serde_json::from_str(&report).unwrap();
+    assert_eq!(r["features"]["import"], 1, "{report}");
+    assert!(r["edits"]["add_marker"].as_u64().unwrap() >= 1, "{report}");
+    assert!(!report.contains("test_25fps"), "no file names: {report}");
+    assert!(!report.contains("private note"), "no content: {report}");
+
+    // A crash recorded by the panic hook shows up, scrubbed.
+    crate::telemetry::record_crash(
+        &*platform(),
+        "cannot read /home/ana/secret.mov",
+        "/src/player.rs:9",
+    );
+    s.flush_telemetry(true);
+    let report = s.telemetry_status().report.unwrap();
+    assert!(
+        report.contains("player.rs:9") && !report.contains("ana"),
+        "{report}"
+    );
+
+    // Send posts exactly the report to the configured endpoint.
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!(
+        "http://127.0.0.1:{}/collect",
+        listener.local_addr().unwrap().port()
+    );
+    let server = std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let (mut sock, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(sock.try_clone().unwrap());
+        let mut len = 0usize;
+        let mut line = String::new();
+        loop {
+            line.clear();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                len = v.trim().parse().unwrap();
+            }
+        }
+        let mut body = vec![0; len];
+        reader.read_exact(&mut body).unwrap();
+        sock.write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        String::from_utf8(body).unwrap()
+    });
+    s.set_telemetry_endpoint(Some(url)).unwrap();
+    assert_eq!(s.send_telemetry().unwrap(), 204);
+    let posted = server.join().unwrap();
+    assert_eq!(posted, s.telemetry_status().report.unwrap());
+    // Plain http elsewhere is refused.
+    s.set_telemetry_endpoint(Some("http://example.com/x".into()))
+        .unwrap();
+    assert!(s.send_telemetry().is_err());
+
+    // Off erases it, also for the next session.
+    s.flush_telemetry(true);
+    s.set_telemetry(false).unwrap();
+    let mut again = Session::new(platform());
+    again.set_telemetry(true).unwrap();
+    let report = again.telemetry_status().report.unwrap();
+    assert!(
+        !report.contains("add_marker") && !report.contains("player.rs"),
+        "{report}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

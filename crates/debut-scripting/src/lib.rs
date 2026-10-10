@@ -127,6 +127,7 @@ fn merged<T: Serialize + serde::de::DeserializeOwned>(
 
 /// Run `source` against `session`.
 pub fn run(session: &mut Session, source: &str) -> ScriptOutput {
+    session.note_feature("script");
     let mark = session.undo_mark();
     let log = Rc::new(RefCell::new(Vec::new()));
     let handle = Handle(Rc::new(Cell::new(session as *mut Session)));

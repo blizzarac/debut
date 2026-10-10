@@ -13,11 +13,33 @@ use std::sync::{Arc, Mutex};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let platform: Arc<NativePlatform> = Arc::new(NativePlatform::new());
+    // Crash reports (NFR-15): recorded only if the user opted in.
+    let hook_platform = Arc::clone(&platform);
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let message = info
+            .payload()
+            .downcast_ref::<&str>()
+            .map(|s| s.to_string())
+            .or_else(|| info.payload().downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "panic".into());
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_default();
+        debut_engine::telemetry::record_crash(hook_platform.as_ref(), &message, &location);
+        default_hook(info);
+    }));
     tauri::Builder::default()
-        .manage(Mutex::new(Session::new(Arc::new(NativePlatform::new()))))
+        .manage(Mutex::new(Session::new(platform)))
         .invoke_handler(tauri::generate_handler![
             ipc::version,
             ipc::about,
+            ipc::telemetry_status,
+            ipc::set_telemetry,
+            ipc::set_telemetry_endpoint,
+            ipc::send_telemetry,
             ipc::new_project,
             ipc::open_project,
             ipc::project_json,

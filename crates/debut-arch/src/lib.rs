@@ -88,6 +88,7 @@ const PLACED_EXTERNALS: &[(&str, &[&str])] = &[
     ("pollster", &["debut-render"]),
     ("fontdue", &["debut-graphics"]),
     ("rhai", &["debut-scripting"]),
+    ("ureq", &["debut-platform-native"]),
 ];
 
 /// The only external crates the foundation (`debut-core`, `debut-platform`)

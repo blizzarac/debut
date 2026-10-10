@@ -15,6 +15,8 @@ pub struct Settings {
     /// Usage counts and crash reports are collected (NFR-15). Off unless
     /// the user turns it on.
     pub telemetry: bool,
+    /// Where Send posts the report; nothing is sent without one.
+    pub telemetry_endpoint: Option<String>,
 }
 
 const FILE: &str = "settings.json";

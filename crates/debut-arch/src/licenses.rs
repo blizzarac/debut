@@ -40,6 +40,9 @@ pub const ALLOWED: &[&str] = &[
     "WTFPL",
     "MPL-2.0",
     "MPL-2.0+",
+    // Permissive data licence of Mozilla's CA list (webpki-roots): keep
+    // the licence text with it, which the notices file does.
+    "CDLA-Permissive-2.0",
 ];
 
 /// Whether an SPDX expression is satisfiable with `ALLOWED` licenses

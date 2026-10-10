@@ -23,7 +23,7 @@ pub use codec::{
 };
 pub use display::Display;
 pub use file_store::FileStore;
-pub use net::Connection;
+pub use net::{Connection, HttpBody, HttpRequest, HttpResponse};
 pub use plugin_host::{PluginHost, PluginInfo, PluginKind, PluginRef};
 pub use threads::Threads;
 
@@ -127,6 +127,15 @@ pub trait Platform: Send + Sync + 'static {
     /// The out-of-process plugin host (FX-15, AUD-09), where the target has one.
     fn plugins(&self) -> Option<std::sync::Arc<dyn PluginHost>> {
         None
+    }
+
+    /// Make an HTTP(S) request and wait for the answer (uploads, telemetry).
+    /// Transport failures are errors; any status code is a response.
+    fn http(&self, req: net::HttpRequest) -> debut_core::Result<net::HttpResponse> {
+        Err(debut_core::Error::Unsupported(format!(
+            "HTTP is not available here ({})",
+            req.url
+        )))
     }
 
     /// Open a line connection to `addr` ("host:port"), for collaboration.

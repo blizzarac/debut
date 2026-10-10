@@ -41,6 +41,7 @@ mod shapes;
 mod shortcuts;
 mod snapshots;
 mod targeting;
+mod telemetry;
 mod timeline;
 mod titles;
 mod waveforms;
@@ -55,6 +56,7 @@ pub use self::shortcuts::{
 };
 pub use self::snapshots::{ClipChangeDto, SnapshotDiffDto, SnapshotDto};
 pub use self::targeting::TargetingDto;
+pub use self::telemetry::TelemetryDto;
 use self::waveforms::WaveformCache;
 pub use self::{
     ai::*, captions::*, effects::*, export::*, ingest::*, markers::*, media::*, multicam::*,
@@ -98,6 +100,9 @@ pub struct Session {
     trusted: crate::trust::Trusted,
     /// The platform's plugin host behind the approval check.
     plugin_host: Option<Arc<crate::trust::TrustedHost>>,
+    /// Usage counts and crash reports, when the user opted in (NFR-15).
+    telemetry: Option<crate::telemetry::Report>,
+    telemetry_saved: std::time::Duration,
     player: Option<Player>,
     audio_out: Option<Box<dyn AudioOut>>,
     backend: AnyBackend,
@@ -167,7 +172,14 @@ impl Session {
                 Arc::clone(&trusted),
             ))
         });
+        let telemetry = settings.telemetry.then(|| {
+            let mut r = crate::telemetry::Report::load(platform.as_ref());
+            r.sessions += 1;
+            r
+        });
         Self {
+            telemetry,
+            telemetry_saved: std::time::Duration::ZERO,
             settings,
             trusted,
             plugin_host,
@@ -392,6 +404,9 @@ impl Session {
     }
 
     pub(crate) fn exec(&mut self, cmd: Command) -> Result<(), String> {
+        if let Some(t) = self.telemetry.as_mut() {
+            t.edit(&cmd);
+        }
         let inverse = self.collab_before(&cmd)?;
         let sent = inverse.as_ref().map(|_| cmd.clone());
         self.workspace_mut()?

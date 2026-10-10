@@ -84,6 +84,7 @@ impl Session {
     }
 
     pub fn tick(&mut self) -> Result<TickDto, String> {
+        self.flush_telemetry(false);
         if let Some(ws) = self.workspace.as_mut() {
             ws.maybe_autosave(self.platform.now())
                 .map_err(|e| e.to_string())?;

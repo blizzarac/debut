@@ -232,6 +232,7 @@ impl Session {
         let (target, clip_id, _) = self.clip_ref(track, clip)?;
         // Picking it from the scan list is the approval.
         self.approve_plugin(path)?;
+        self.note_feature("plugin:openfx");
         let effect = Effect::Plugin(PluginFx {
             path: path.into(),
             index,
@@ -293,6 +294,7 @@ impl Session {
         let info = self.scanned(PluginKind::Clap, path, index)?;
         let (target, mut effects) = self.track_inserts(track)?;
         self.approve_plugin(path)?;
+        self.note_feature("plugin:clap");
         effects.push(AudioEffect::Plugin {
             path: path.into(),
             index,
