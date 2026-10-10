@@ -82,6 +82,40 @@ pub struct Keymap {
 }
 
 impl Keymap {
+    /// This keymap with the user's own keys (TL-12): each overridden action
+    /// gets exactly the given chords (none unbinds it), and a chord taken by an
+    /// override is removed from whatever action the preset gave it to. Later
+    /// overrides win over earlier ones for the same chord.
+    pub fn with_overrides(&self, overrides: &[(String, Vec<Chord>)]) -> Keymap {
+        let mut own: Vec<(&str, Chord)> = Vec::new();
+        for (action, chords) in overrides {
+            let Some(action) = ACTIONS.iter().map(|a| a.0).find(|a| a == action) else {
+                continue;
+            };
+            own.retain(|(a, c)| *a != action && !chords.contains(c));
+            own.extend(chords.iter().map(|c| (action, c.clone())));
+        }
+        let overridden: Vec<&str> = overrides
+            .iter()
+            .filter_map(|(a, _)| ACTIONS.iter().map(|x| x.0).find(|x| x == a))
+            .collect();
+        let mut bindings: Vec<Binding> = self
+            .bindings
+            .iter()
+            .filter(|b| !overridden.contains(&b.action) && !own.iter().any(|(_, c)| *c == b.chord))
+            .cloned()
+            .collect();
+        bindings.extend(
+            own.into_iter()
+                .map(|(action, chord)| Binding { action, chord }),
+        );
+        Keymap {
+            id: self.id,
+            name: self.name,
+            bindings,
+        }
+    }
+
     /// The action bound to `chord`, if any.
     pub fn action(&self, chord: &Chord) -> Option<&'static str> {
         self.bindings
@@ -205,6 +239,41 @@ mod tests {
             // Every preset covers every action.
             assert_eq!(actions.len(), known.len(), "{} misses actions", map.id);
         }
+    }
+
+    #[test]
+    fn overrides_rebind_and_steal_chords() {
+        let base = presets().remove(0);
+        let ch = |s: &str| Chord::parse(s).unwrap();
+        let mine = base.with_overrides(&[
+            // Blade on C (Premiere's razor key); S, snapping's key, becomes save.
+            ("blade".into(), vec![ch("c")]),
+            ("save".into(), vec![ch("s")]),
+            // Unknown actions are ignored.
+            ("fly".into(), vec![ch("f")]),
+        ]);
+        assert_eq!(mine.action(&ch("c")), Some("blade"));
+        assert_eq!(mine.action(&ch("b")), None, "the old blade key is free");
+        assert_eq!(mine.action(&ch("s")), Some("save"));
+        assert_eq!(mine.action(&ch("cmd+s")), None, "save has only its new key");
+        assert!(!mine
+            .bindings
+            .iter()
+            .any(|b| b.action == "toggle_snap" && b.chord == ch("s")));
+        // An empty list unbinds; a later override takes a chord from an earlier one.
+        let none = base.with_overrides(&[
+            ("add_marker".into(), vec![]),
+            ("blade".into(), vec![ch("x")]),
+            ("lift".into(), vec![ch("x")]),
+        ]);
+        assert!(!none.bindings.iter().any(|b| b.action == "add_marker"));
+        assert_eq!(none.action(&ch("x")), Some("lift"));
+        assert!(!none.bindings.iter().any(|b| b.action == "blade"));
+        let mut chords = HashSet::new();
+        assert!(
+            mine.bindings.iter().all(|b| chords.insert(b.chord.clone())),
+            "no duplicates"
+        );
     }
 
     #[test]

@@ -1442,6 +1442,31 @@ fn shortcut_presets() {
         .iter()
         .any(|b| b.action == "blade" && b.key == "b" && b.cmd && !b.shift));
     assert!(sc.actions.iter().any(|a| a.id == "toggle_linked"));
+    // Own keys on top of a preset.
+    let mine = s
+        .resolve_keymap(
+            "premiere",
+            vec![KeyOverrideDto {
+                action: "blade".into(),
+                keys: vec![ChordDto {
+                    key: "C".into(),
+                    cmd: false,
+                    shift: false,
+                    alt: false,
+                }],
+            }],
+        )
+        .unwrap();
+    let blade: Vec<_> = mine
+        .bindings
+        .iter()
+        .filter(|b| b.action == "blade")
+        .collect();
+    assert_eq!(
+        (blade.len(), blade[0].key.as_str(), blade[0].cmd),
+        (1, "c", false)
+    );
+    assert!(s.resolve_keymap("emacs", vec![]).is_err());
 }
 
 /// Snapshots: save, change, compare, restore (TL-14).

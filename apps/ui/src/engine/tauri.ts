@@ -23,6 +23,8 @@ import type {
   InterchangeFormat,
   ProxyStatus,
   Shortcuts,
+  KeyOverride,
+  Keymap,
   SnapshotDiff,
   SnapshotInfo,
   SnapshotsApi,
@@ -311,6 +313,9 @@ export class TauriEngine implements Engine {
   }
   shortcuts() {
     return invoke<Shortcuts>("shortcuts");
+  }
+  resolveKeymap(id: string, overrides: KeyOverride[]) {
+    return invoke<Keymap>("resolve_keymap", { id, overrides });
   }
   newProject(name: string) {
     return invoke<void>("new_project", { name });

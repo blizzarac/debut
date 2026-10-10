@@ -19,6 +19,43 @@ pub struct BindingDto {
     pub alt: bool,
 }
 
+/// A key chord as the UI sends it.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct ChordDto {
+    pub key: String,
+    #[serde(default)]
+    pub cmd: bool,
+    #[serde(default)]
+    pub shift: bool,
+    #[serde(default)]
+    pub alt: bool,
+}
+
+/// The user's own keys for one action; empty unbinds it.
+#[derive(Deserialize, Debug, Clone, PartialEq)]
+pub struct KeyOverrideDto {
+    pub action: String,
+    pub keys: Vec<ChordDto>,
+}
+
+fn keymap_dto(m: debut_timeline::shortcuts::Keymap) -> KeymapDto {
+    KeymapDto {
+        id: m.id.into(),
+        name: m.name.into(),
+        bindings: m
+            .bindings
+            .into_iter()
+            .map(|b| BindingDto {
+                action: b.action.into(),
+                key: b.chord.key,
+                cmd: b.chord.cmd,
+                shift: b.chord.shift,
+                alt: b.chord.alt,
+            })
+            .collect(),
+    }
+}
+
 #[derive(Serialize, Debug, Clone, PartialEq)]
 pub struct KeymapDto {
     pub id: String,
@@ -46,24 +83,39 @@ impl Session {
                     label: (*label).into(),
                 })
                 .collect(),
-            keymaps: presets()
-                .into_iter()
-                .map(|m| KeymapDto {
-                    id: m.id.into(),
-                    name: m.name.into(),
-                    bindings: m
-                        .bindings
-                        .into_iter()
-                        .map(|b| BindingDto {
-                            action: b.action.into(),
-                            key: b.chord.key,
-                            cmd: b.chord.cmd,
-                            shift: b.chord.shift,
-                            alt: b.chord.alt,
-                        })
-                        .collect(),
-                })
-                .collect(),
+            keymaps: presets().into_iter().map(keymap_dto).collect(),
         }
+    }
+
+    /// Preset `id` with the user's own keys on top (TL-12): overridden actions
+    /// get exactly their keys, which are taken away from any other action.
+    pub fn resolve_keymap(
+        &self,
+        id: &str,
+        overrides: Vec<KeyOverrideDto>,
+    ) -> Result<KeymapDto, String> {
+        use debut_timeline::shortcuts::{presets, Chord};
+        let base = presets()
+            .into_iter()
+            .find(|m| m.id == id)
+            .ok_or_else(|| format!("no keymap {id}"))?;
+        let overrides: Vec<(String, Vec<Chord>)> = overrides
+            .into_iter()
+            .map(|o| {
+                let keys = o
+                    .keys
+                    .into_iter()
+                    .filter(|k| !k.key.is_empty())
+                    .map(|k| Chord {
+                        key: k.key.to_lowercase(),
+                        cmd: k.cmd,
+                        shift: k.shift,
+                        alt: k.alt,
+                    })
+                    .collect();
+                (o.action, keys)
+            })
+            .collect();
+        Ok(keymap_dto(base.with_overrides(&overrides)))
     }
 }

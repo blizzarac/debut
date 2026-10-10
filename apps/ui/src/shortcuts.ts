@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { Binding, Keymap } from "./engine";
+import type { Binding, Chord, Keymap } from "./engine";
 
 /** Keyboard shortcuts (TL-12). One window listener looks the pressed chord up in
  * the active keymap and runs whatever component registered that action, so keys
@@ -7,6 +7,13 @@ import type { Binding, Keymap } from "./engine";
 
 const handlers = new Map<string, Array<() => void>>();
 let bindings: Binding[] = [];
+let capture: ((c: Chord | null) => void) | null = null;
+
+/** Hand the next key chord to `cb` instead of running a shortcut (for
+ * rebinding); Escape gives null. */
+export function captureNextChord(cb: (c: Chord | null) => void) {
+  capture = cb;
+}
 
 /** The keymap to dispatch with (an engine preset). */
 export function setKeymap(map: Keymap | null) {
@@ -51,6 +58,14 @@ export function actionFor(e: KeyboardEvent): string | null {
  * triggers shortcuts. */
 export function installShortcuts(): () => void {
   const onKey = (e: KeyboardEvent) => {
+    if (capture) {
+      if (["Shift", "Control", "Meta", "Alt"].includes(e.key)) return;
+      e.preventDefault();
+      const cb = capture;
+      capture = null;
+      cb(e.key === "Escape" ? null : chordOf(e));
+      return;
+    }
     const tag = (e.target as HTMLElement)?.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     const action = actionFor(e);
@@ -64,7 +79,7 @@ export function installShortcuts(): () => void {
 }
 
 /** "⌘⇧Z"-style label for a binding. */
-export function chordLabel(b: Binding): string {
+export function chordLabel(b: Chord): string {
   const mac = typeof navigator !== "undefined" && /Mac/.test(navigator.platform);
   const names: Record<string, string> = { " ": "Space", arrowleft: "←", arrowright: "→", delete: mac ? "⌫" : "Del", home: "Home" };
   const key = names[b.key] ?? b.key.toUpperCase();

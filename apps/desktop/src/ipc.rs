@@ -564,6 +564,15 @@ pub fn shortcuts(state: State<'_, Shared>) -> ShortcutsDto {
 }
 
 #[tauri::command]
+pub fn resolve_keymap(
+    state: State<'_, Shared>,
+    id: String,
+    overrides: Vec<KeyOverrideDto>,
+) -> Result<KeymapDto, String> {
+    lock(&state).resolve_keymap(&id, overrides)
+}
+
+#[tauri::command]
 pub fn linked_selection(state: State<'_, Shared>) -> bool {
     lock(&state).linked_selection()
 }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { chordLabel, installShortcuts, setKeymap, useShortcut } from "./shortcuts";
-import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type Shortcuts, type SyncBy, type Tick } from "./engine";
+import { captureNextChord, chordLabel, installShortcuts, setKeymap, useShortcut } from "./shortcuts";
+import { detectTarget, loadEngine, type BinInfo, type CaptionInfo, type Engine, type FileStatus, type MarkerInfo, type MediaInfo, type SequenceInfo, type SequenceListItem, type Shortcuts, type Chord, type Keymap, type SyncBy, type Tick } from "./engine";
 import { Captions } from "./Captions";
 import { MediaPanel } from "./MediaPanel";
 import { ExportPanel } from "./ExportPanel";
@@ -39,16 +39,58 @@ export default function App() {
     }
   });
   const [showKeys, setShowKeys] = useState(false);
+  // The user's own keys per preset, kept in this browser (TL-12).
+  const [overrides, setOverrides] = useState<Record<string, Chord[]>>({});
+  const [activeMap, setActiveMap] = useState<Keymap | null>(null);
+  const [capturing, setCapturing] = useState<string | null>(null);
   useEffect(() => installShortcuts(), []);
   useEffect(() => {
-    const maps = shortcuts?.keymaps ?? [];
-    setKeymap(maps.find((m) => m.id === keymapId) ?? maps[0] ?? null);
+    try {
+      setOverrides(JSON.parse(localStorage.getItem(`debut.keys.${keymapId}`) ?? "{}"));
+    } catch {
+      setOverrides({});
+    }
     try {
       localStorage.setItem("debut.keymap", keymapId);
     } catch {
       // Private window: the choice lasts for this session only.
     }
-  }, [shortcuts, keymapId]);
+  }, [keymapId]);
+  useEffect(() => {
+    const maps = shortcuts?.keymaps ?? [];
+    const base = maps.find((m) => m.id === keymapId) ?? maps[0] ?? null;
+    const list = Object.entries(overrides).map(([action, keys]) => ({ action, keys }));
+    if (!base || list.length === 0 || !engine?.resolveKeymap) {
+      setActiveMap(base);
+      setKeymap(base);
+      return;
+    }
+    engine
+      .resolveKeymap(base.id, list)
+      .then((m) => {
+        setActiveMap(m);
+        setKeymap(m);
+      })
+      .catch(() => {
+        setActiveMap(base);
+        setKeymap(base);
+      });
+  }, [shortcuts, keymapId, overrides, engine]);
+  const saveOverrides = (next: Record<string, Chord[]>) => {
+    setOverrides(next);
+    try {
+      localStorage.setItem(`debut.keys.${keymapId}`, JSON.stringify(next));
+    } catch {
+      // Not persisted in a private window.
+    }
+  };
+  const rebind = (action: string) => {
+    setCapturing(action);
+    captureNextChord((c) => {
+      setCapturing(null);
+      if (c) saveOverrides({ ...overrides, [action]: [c] });
+    });
+  };
 
   const refresh = useCallback(async (e: Engine) => {
     if (e.media) {
@@ -202,25 +244,43 @@ export default function App() {
             </>
           )}
         </div>
-        {showKeys && shortcuts && (
-          <table style={{ fontSize: 11, borderCollapse: "collapse" }}>
-            <tbody>
-              {shortcuts.actions
-                .filter((a) => !a.id.startsWith("angle_") || a.id === "angle_1")
-                .map((a) => {
-                  const map = shortcuts.keymaps.find((m) => m.id === keymapId) ?? shortcuts.keymaps[0];
-                  const keys = map.bindings.filter((b) => b.action === a.id).map(chordLabel).join(", ");
+        {showKeys && shortcuts && activeMap && (
+          <div style={{ fontSize: 11 }}>
+            <table style={{ borderCollapse: "collapse" }}>
+              <tbody>
+                {shortcuts.actions.map((a) => {
+                  const keys = activeMap.bindings.filter((b) => b.action === a.id).map(chordLabel).join(", ");
                   return (
                     <tr key={a.id}>
-                      <td style={{ padding: "1px 6px 1px 0", color: "#555" }}>{a.id === "angle_1" ? "Multicam angle 1–9" : a.label}</td>
+                      <td style={{ padding: "1px 6px 1px 0", color: "#555" }}>{a.label}</td>
                       <td>
-                        <code>{a.id === "angle_1" ? "1 … 9" : keys}</code>
+                        <code style={{ color: overrides[a.id] ? "#2563eb" : undefined }}>{capturing === a.id ? "press a key… (Esc cancels)" : keys || "—"}</code>
+                      </td>
+                      <td>
+                        <button style={{ fontSize: 10 }} onClick={() => rebind(a.id)} title="Press the new key for this action">
+                          set
+                        </button>
+                        {overrides[a.id] && (
+                          <button
+                            style={{ fontSize: 10 }}
+                            title="Back to the preset's key"
+                            onClick={() => {
+                              const next = { ...overrides };
+                              delete next[a.id];
+                              saveOverrides(next);
+                            }}
+                          >
+                            ↺
+                          </button>
+                        )}
                       </td>
                     </tr>
                   );
                 })}
-            </tbody>
-          </table>
+              </tbody>
+            </table>
+            {Object.keys(overrides).length > 0 && <button onClick={() => saveOverrides({})}>Reset all keys</button>}
+          </div>
         )}
         {engine?.saveProject && (
           <div style={{ display: "flex", flexDirection: "column", gap: 4, fontSize: 12 }}>

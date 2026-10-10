@@ -33,6 +33,7 @@ pub fn run() {
             ipc::snap_points,
             ipc::linked_selection,
             ipc::shortcuts,
+            ipc::resolve_keymap,
             ipc::snapshots,
             ipc::take_snapshot,
             ipc::restore_snapshot,

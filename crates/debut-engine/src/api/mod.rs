@@ -43,7 +43,9 @@ pub use self::mixer::DuckDto;
 use self::mixer::*;
 use self::proxies::ProxyJobs;
 pub use self::proxies::ProxyStatusDto;
-pub use self::shortcuts::{BindingDto, KeymapDto, ShortcutActionDto, ShortcutsDto};
+pub use self::shortcuts::{
+    BindingDto, ChordDto, KeyOverrideDto, KeymapDto, ShortcutActionDto, ShortcutsDto,
+};
 pub use self::snapshots::{ClipChangeDto, SnapshotDiffDto, SnapshotDto};
 use self::waveforms::WaveformCache;
 pub use self::{

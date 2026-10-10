@@ -506,6 +506,14 @@ export interface Keymap {
   bindings: Binding[];
 }
 
+export type Chord = Omit<Binding, "action">;
+
+export interface KeyOverride {
+  action: string;
+  /** Empty unbinds the action. */
+  keys: Chord[];
+}
+
 export interface Shortcuts {
   actions: { id: string; label: string }[];
   /** Presets, the default first. */
@@ -515,6 +523,8 @@ export interface Shortcuts {
 export interface Engine extends ProjectApi {
   /** Keyboard shortcut presets (debut, Premiere Pro, Final Cut Pro, Avid). */
   shortcuts?(): Promise<Shortcuts>;
+  /** A preset with the user's own keys on top: each overridden action gets exactly its keys. */
+  resolveKeymap?(id: string, overrides: KeyOverride[]): Promise<Keymap>;
   media?: MediaApi;
   player?: PlayerApi;
   effects?: EffectsApi;
